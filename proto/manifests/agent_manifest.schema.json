@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon.dev/manifests/agent_manifest.schema.json",
+  "title": "AgentManifest",
+  "description": "Config-as-code definition of an agent (FND-001/FND-003). Lives in Git; the UI reads, never the sole source of truth. Never names a concrete model — only a capability profile (see model_profile.schema.json).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "harness.ai/v1" },
+    "kind": { "const": "Agent" },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "owner": { "type": "string" },
+        "lifecycle": { "type": "string", "enum": ["Draft", "Candidate", "Released", "Retired"], "default": "Draft" }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": ["modelPolicy", "tools", "runtime", "contextPolicy"],
+      "properties": {
+        "modelPolicy": {
+          "type": "object",
+          "required": ["profile"],
+          "properties": {
+            "profile": { "type": "string" },
+            "fallbacks": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "tools": {
+          "type": "object",
+          "properties": {
+            "allow": { "type": "array", "items": { "type": "string" } },
+            "deny": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "maxTurns": { "type": "integer", "minimum": 1 },
+            "maxDepth": { "type": "integer", "minimum": 1 },
+            "deadlineSeconds": { "type": "integer", "minimum": 1 },
+            "budgets": {
+              "type": "object",
+              "properties": {
+                "modelCalls": { "type": "integer" },
+                "toolCalls": { "type": "integer" },
+                "costUsd": { "type": "number" }
+              }
+            }
+          }
+        },
+        "contextPolicy": {
+          "type": "object",
+          "properties": {
+            "lanes": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": { "fidelity": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "memoryPolicy": {
+          "type": "object",
+          "properties": {
+            "readScopes": { "type": "array", "items": { "type": "string" } },
+            "writeMode": { "const": "candidate_only", "description": "The only write mode exposed to an agent; direct ACTIVE writes are impossible by API design (see MEM-002)." },
+            "promotionGate": { "type": "string" }
+          }
+        },
+        "evalGates": { "type": "array", "items": { "type": "string" } },
+        "frameworkAdapter": {
+          "type": ["object", "null"],
+          "description": "Present only for Mode B agents (an external framework's loop running inside an Activity).",
+          "properties": {
+            "framework": { "type": "string", "enum": ["langgraph", "crewai", "openai_agents", "microsoft_agent_framework", "claude_agent_sdk"] },
+            "entrypoint": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

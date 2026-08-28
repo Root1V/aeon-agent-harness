@@ -1,0 +1,38 @@
+apiVersion: harness.ai/v1
+kind: ModelPolicyBundle
+profiles:
+  - profile: reasoning-high
+    candidates:
+      - provider: anthropic
+        model: claude-opus-5
+        priority: 0
+        tool_calling: native
+        caching_capability: explicit_breakpoints
+        cost_model: token_based
+        max_context_tokens: 200000
+      - provider: openai
+        model: gpt-5.1
+        priority: 1
+        tool_calling: native
+        caching_capability: automatic_prefix
+        cost_model: token_based
+        max_context_tokens: 200000
+  - profile: reasoning-balanced
+    candidates:
+      - provider: gemini
+        model: gemini-2.5-pro
+        priority: 0
+        tool_calling: native
+        caching_capability: explicit_breakpoints
+        cost_model: token_based
+        max_context_tokens: 1000000
+  - profile: reasoning-local
+    candidates:
+      - provider: prometheus_inference
+        model: local-default
+        priority: 0
+        tool_calling: emulated
+        caching_capability: none
+        cost_model: compute_based
+    routing_constraints:
+      data_sensitivity: restricted

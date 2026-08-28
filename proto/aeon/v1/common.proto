@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package aeon.v1;
+
+option go_package = "github.com/aeon-ai/aeon/go/internal/gen/aeonv1;aeonv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// Mirrors proto/schemas/run_state.schema.json — RunState is the JSON Schema source of truth;
+// this message is the wire-format projection used between control plane, gateways and workers.
+message RunState {
+  string run_id = 1;
+  string tenant_id = 2;
+  string agent_manifest_ref = 3;
+  RunStatus status = 4;
+  google.protobuf.Struct graph_cursor = 5;
+  BudgetsConsumed budgets_consumed = 6;
+  PendingApproval pending_approval = 7;
+  int32 no_progress_counter = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+enum RunStatus {
+  RUN_STATUS_UNSPECIFIED = 0;
+  RUN_STATUS_PENDING = 1;
+  RUN_STATUS_RUNNING = 2;
+  RUN_STATUS_PAUSED_FOR_APPROVAL = 3;
+  RUN_STATUS_SUCCEEDED = 4;
+  RUN_STATUS_FAILED = 5;
+  RUN_STATUS_CANCELLED = 6;
+}
+
+message BudgetsConsumed {
+  int64 model_calls = 1;
+  int64 tool_calls = 2;
+  int64 tokens = 3;
+  double cost_usd = 4;
+  int32 depth = 5;
+}
+
+message PendingApproval {
+  string approval_id = 1;
+  string tool_call_hash = 2;
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+// Mirrors proto/schemas/decision.schema.json.
+message Decision {
+  string decision_id = 1;
+  DecisionAction action = 2;
+  string tool_name = 3;
+  google.protobuf.Struct args = 4;
+  string recall_id = 5;
+  string message = 6;
+  string rationale_ref = 7;
+  string model_profile_used = 8;
+  string provider_used = 9;
+  ToolCallingMode tool_calling_mode = 10;
+}
+
+enum DecisionAction {
+  DECISION_ACTION_UNSPECIFIED = 0;
+  DECISION_ACTION_CALL_TOOL = 1;
+  DECISION_ACTION_RECALL_OBSERVATION = 2;
+  DECISION_ACTION_EMIT_MESSAGE = 3;
+  DECISION_ACTION_REQUEST_REPLAN = 4;
+  DECISION_ACTION_FINISH = 5;
+}
+
+enum ToolCallingMode {
+  TOOL_CALLING_MODE_UNSPECIFIED = 0;
+  TOOL_CALLING_MODE_NATIVE = 1;
+  TOOL_CALLING_MODE_EMULATED = 2;
+}

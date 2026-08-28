@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon.dev/manifests/eval_suite.schema.json",
+  "title": "EvalSuite",
+  "description": "Registered eval suite (EVAL-001). Release Gates (EVAL-003) block promotion Candidate->Released on regression against thresholds defined here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "const": "harness.ai/v1" },
+    "kind": { "const": "EvalSuite" },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": { "name": { "type": "string" }, "version": { "type": "string" }, "owner": { "type": "string" } }
+    },
+    "spec": {
+      "type": "object",
+      "required": ["dataset", "graders", "thresholds"],
+      "properties": {
+        "dataset": { "type": "string" },
+        "graders": { "type": "array", "items": { "type": "string" } },
+        "thresholds": { "type": "object", "additionalProperties": { "type": "number" } },
+        "gateOn": { "type": "array", "items": { "type": "string", "enum": ["release", "provider_change", "nightly"] } }
+      }
+    }
+  }
+}

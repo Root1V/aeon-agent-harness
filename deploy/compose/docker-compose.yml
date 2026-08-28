@@ -1,0 +1,227 @@
+# Aeon development/reference stack. All components run in containers — no local toolchain needed.
+#
+# Profiles:
+#   core       minimum to run a workflow: Temporal + its DB + Postgres/pgvector + MinIO
+#   obs        adds OTel Collector + Tempo + Prometheus (metrics) + Grafana
+#   local-llm  adds vLLM (OpenAI-compatible) for development without a dedicated GPU cloud account
+#   full       core + obs + local-llm
+#
+# Usage: docker compose --profile full up -d   (or `make dev`)
+
+name: aeon
+
+x-common-env: &common-env
+  AEON_TENANT_ID: "default"
+
+services:
+  # ---- Durable execution -----------------------------------------------------------------
+  temporal:
+    image: temporalio/auto-setup:1.24
+    profiles: ["core", "obs", "local-llm", "full"]
+    depends_on:
+      temporal-db:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-db
+    ports:
+      - "7233:7233"
+    healthcheck:
+      test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    profiles: ["core", "obs", "local-llm", "full"]
+    depends_on: [temporal]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: "http://localhost:3000"
+    ports:
+      - "8080:8080"
+
+  temporal-db:
+    image: postgres:17-alpine
+    profiles: ["core", "obs", "local-llm", "full"]
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+    volumes:
+      - temporal-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # ---- Application data: registries, evidence ledger, memory, runs, cost -----------------
+  postgres:
+    image: pgvector/pgvector:pg17
+    profiles: ["core", "obs", "local-llm", "full"]
+    environment:
+      POSTGRES_USER: aeon
+      POSTGRES_PASSWORD: aeon
+      POSTGRES_DB: aeon
+    ports:
+      # Host-side port intentionally non-default (5442, not 5432): 5432 is commonly already taken
+      # by another local project's Postgres. Container-internal port and AEON_PG_DSN (below) are
+      # unaffected — only the host-side mapping changes.
+      - "5442:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aeon"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # ---- Artifact / observation store (offload target, CTX-003) ---------------------------
+  minio:
+    image: minio/minio:latest
+    profiles: ["core", "obs", "local-llm", "full"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: aeon
+      MINIO_ROOT_PASSWORD: aeon-dev-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # ---- Observability (OBS-001, A4: OTel GenAI semantic conventions) ----------------------
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    profiles: ["obs", "full"]
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    ports:
+      - "4317:4317"  # OTLP gRPC
+      - "4318:4318"  # OTLP HTTP
+    depends_on: [tempo]
+
+  tempo:
+    image: grafana/tempo:latest
+    profiles: ["obs", "full"]
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo-config.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+
+  prometheus-metrics:
+    image: prom/prometheus:latest
+    profiles: ["obs", "full"]
+    volumes:
+      - ./prometheus-metrics-config.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-metrics-data:/prometheus
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: ["obs", "full"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+    depends_on: [tempo, prometheus-metrics]
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+  # ---- Local LLM inference (development without a dedicated GPU cloud account) ----------
+  # NOTE: the user's "Prometheus" inference platform is expected to be reachable separately
+  # (see ADR-004); this vllm service is the *generic* openai_compatible fallback used in dev/CI
+  # when no external local-inference endpoint is configured.
+  vllm:
+    image: vllm/vllm-openai:latest
+    profiles: ["local-llm", "full"]
+    command: ["--model", "${AEON_DEV_LOCAL_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - vllm-cache:/root/.cache/huggingface
+
+  # ---- Aeon control plane and gateways (built from this repo, see deploy root Dockerfiles) ---
+  controlplane:
+    build:
+      context: ../../go
+      dockerfile: ../deploy/compose/Dockerfile.go
+      args:
+        CMD_PATH: ./cmd/aeon-controlplane
+    profiles: ["core", "obs", "local-llm", "full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      AEON_PG_DSN: postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable
+    ports:
+      - "9401:9401"
+
+  modelgw:
+    build:
+      context: ../../go
+      dockerfile: ../deploy/compose/Dockerfile.go
+      args:
+        CMD_PATH: ./cmd/aeon-modelgw
+    profiles: ["core", "obs", "local-llm", "full"]
+    environment:
+      <<: *common-env
+    env_file:
+      - path: ../../.env
+        required: false
+    ports:
+      - "9402:9402"
+
+  toolgw:
+    build:
+      context: ../../go
+      dockerfile: ../deploy/compose/Dockerfile.go
+      args:
+        CMD_PATH: ./cmd/aeon-toolgw
+    profiles: ["core", "obs", "local-llm", "full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      AEON_PG_DSN: postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable
+    ports:
+      - "9403:9403"
+
+  worker:
+    build:
+      context: ../../python
+      dockerfile: ../deploy/compose/Dockerfile.python
+    profiles: ["core", "obs", "local-llm", "full"]
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      AEON_TEMPORAL_ADDRESS: temporal:7233
+      AEON_MODELGW_ADDR: modelgw:9402
+      AEON_TOOLGW_ADDR: toolgw:9403
+
+volumes:
+  temporal-db-data:
+  postgres-data:
+  minio-data:
+  tempo-data:
+  prometheus-metrics-data:
+  grafana-data:
+  vllm-cache:

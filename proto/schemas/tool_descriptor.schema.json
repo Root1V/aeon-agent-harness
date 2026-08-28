@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon.dev/schemas/tool_descriptor.schema.json",
+  "title": "ToolDescriptor",
+  "description": "Registered tool contract (TOOL-001). Risk classification and idempotency_key are mandatory for any tool with side effects; the Tool Gateway enforces policy after arguments are generated and before execution.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tool_id", "name", "version", "input_schema", "side_effect", "risk"],
+  "properties": {
+    "tool_id": { "type": "string" },
+    "name": { "type": "string", "pattern": "^[a-z0-9_.]+$" },
+    "version": { "type": "string" },
+    "description": { "type": "string" },
+    "input_schema": { "type": "object", "description": "JSON Schema for tool arguments." },
+    "output_schema": { "type": "object" },
+    "side_effect": { "type": "string", "enum": ["NONE", "READ_ONLY", "WRITE_REVERSIBLE", "WRITE_IRREVERSIBLE"] },
+    "risk": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+    "idempotent": { "type": "boolean", "default": false },
+    "idempotency_key_fields": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Argument field names used, together with run_id/node_id/step_seq, to derive the idempotency_key. Mandatory when side_effect != NONE|READ_ONLY."
+    },
+    "requires_approval": { "type": "boolean", "default": false },
+    "data_scopes": { "type": "array", "items": { "type": "string" }, "description": "Data scopes this tool can touch, checked by the Policy Engine (Cedar)." },
+    "mcp_origin": {
+      "type": ["object", "null"],
+      "properties": {
+        "server": { "type": "string" },
+        "spec_version": { "type": "string", "enum": ["2026-07-28", "2025-11-25"] }
+      }
+    }
+  }
+}

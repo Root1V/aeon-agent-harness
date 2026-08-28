@@ -1,0 +1,8 @@
+# syntax=docker/dockerfile:1
+FROM python:3.13-slim AS base
+RUN pip install --no-cache-dir uv
+WORKDIR /app
+COPY pyproject.toml uv.lock* ./
+RUN uv sync --frozen --no-dev || uv sync --no-dev
+COPY . .
+CMD ["uv", "run", "python", "-m", "aeon_worker"]

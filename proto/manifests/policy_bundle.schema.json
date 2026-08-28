@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon.dev/manifests/policy_bundle.schema.json",
+  "title": "PolicyBundle",
+  "description": "Cedar policy set (SEC-001) evaluated by the Policy Engine. Authorization happens outside the model: after the model generates tool arguments, before the Tool Gateway executes them.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "cedarVersion", "policies"],
+  "properties": {
+    "apiVersion": { "const": "harness.ai/v1" },
+    "kind": { "const": "PolicyBundle" },
+    "cedarVersion": { "type": "string" },
+    "policies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "effect", "cedarSource"],
+        "properties": {
+          "id": { "type": "string" },
+          "effect": { "type": "string", "enum": ["permit", "forbid"] },
+          "cedarSource": { "type": "string", "description": "Raw Cedar policy text." }
+        }
+      }
+    }
+  }
+}

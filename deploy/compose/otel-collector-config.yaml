@@ -1,0 +1,32 @@
+# Minimal OTel Collector pipeline: receive OTLP from Go/Python components, export traces to Tempo
+# and metrics to Prometheus-metrics. Spans are expected to follow the OTel GenAI semantic
+# conventions (invoke_agent / chat / execute_tool) — see proto/schemas/trace_event.schema.json.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]

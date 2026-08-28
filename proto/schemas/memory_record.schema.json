@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon.dev/schemas/memory_record.schema.json",
+  "title": "MemoryRecord",
+  "description": "Governed unit of long-term memory (MEM-001). Writable by agents only via the candidate pipeline (MEM-002); direct writes to ACTIVE status are rejected by the API by construction.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["memory_id", "type", "scope", "content", "status", "version", "hash"],
+  "properties": {
+    "memory_id": { "type": "string", "format": "uuid" },
+    "type": { "type": "string", "enum": ["EPISODIC", "SEMANTIC", "PROCEDURAL", "CONSTRAINT"] },
+    "scope": { "type": "string", "enum": ["session", "user", "project", "tenant", "org"] },
+    "tenant_id": { "type": "string" },
+    "content": { "type": "string", "minLength": 1 },
+    "source_run_ids": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+    "evidence_refs": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+    "trust_level": { "type": "string", "enum": ["UNTRUSTED", "CANDIDATE", "VALIDATED", "TRUSTED"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "utility_score": { "type": "number", "minimum": 0 },
+    "status": { "type": "string", "enum": ["CANDIDATE", "QUARANTINED", "VALIDATED", "ACTIVE", "SUPERSEDED", "REVOKED"] },
+    "expires_at": { "type": ["string", "null"], "format": "date-time" },
+    "version": { "type": "integer", "minimum": 1 },
+    "hash": { "type": "string", "description": "Content-addressed integrity hash; used to detect tampering (SEC-004)." },
+    "provenance_hmac": { "type": "string", "description": "HMAC computed at write time by the runtime, never by the model (see ADR referenced by SEC-004)." }
+  }
+}

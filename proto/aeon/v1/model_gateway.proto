@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package aeon.v1;
+
+option go_package = "github.com/aeon-ai/aeon/go/internal/gen/aeonv1;aeonv1";
+
+import "google/protobuf/struct.proto";
+import "aeon/v1/common.proto";
+
+// ModelGateway is the only component allowed to talk to a model provider directly.
+// It resolves a capability profile (never a concrete model name) to a provider/model pair via
+// the ModelPolicyBundle, applies budgets, and returns a typed Decision (never raw model text
+// interpreted as a command by anything downstream).
+service ModelGateway {
+  rpc Decide(DecideRequest) returns (Decision);
+}
+
+message DecideRequest {
+  string run_id = 1;
+  string tenant_id = 2;
+  string profile = 3; // e.g. "reasoning-high" — resolved against ModelPolicyBundle.
+  google.protobuf.Struct rendered_context = 4; // output of the pure ContextAssembler.
+  repeated string fallback_profiles = 5;
+}

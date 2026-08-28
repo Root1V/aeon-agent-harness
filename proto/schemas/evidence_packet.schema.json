@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon.dev/schemas/evidence_packet.schema.json",
+  "title": "EvidencePacket",
+  "description": "Atomic unit of evidence produced by the Evidence Extractor (RAG-002) and stored in the Evidence Ledger (RAG-003). Never hand-edited by a model; source_id/locator are runtime-generated.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["claim_id", "subtopic_id", "claim", "quote", "source_id", "retrieved_at", "source_quality", "confidence", "support"],
+  "properties": {
+    "claim_id": { "type": "string", "format": "uuid" },
+    "subtopic_id": { "type": "string", "format": "uuid" },
+    "tenant_id": { "type": "string", "description": "Present from day one even in mono-tenant deployments (see roadmap A6/GOV-001)." },
+    "claim": { "type": "string", "minLength": 1 },
+    "quote": { "type": "string", "minLength": 1, "description": "Verbatim excerpt supporting the claim. Never paraphrased by the model." },
+    "source_id": { "type": "string", "description": "Runtime-generated identifier, never produced by the LLM." },
+    "locator": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "page": { "type": "integer", "minimum": 0 },
+        "section": { "type": "string" },
+        "char_range": { "type": "array", "items": { "type": "integer" }, "minItems": 2, "maxItems": 2 }
+      }
+    },
+    "uri": { "type": "string", "format": "uri" },
+    "retrieved_at": { "type": "string", "format": "date-time" },
+    "source_quality": { "type": "number", "minimum": 0, "maximum": 1 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "support": { "type": "string", "enum": ["SUPPORTS", "CONTRADICTS", "CONTEXT"] },
+    "contradiction_group": { "type": ["string", "null"], "format": "uuid" },
+    "artifact_ref": { "type": "string", "pattern": "^obs://.+", "description": "Pointer into the observation store; large source documents are never inlined." }
+  }
+}

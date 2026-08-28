@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon.dev/schemas/context_lane.schema.json",
+  "title": "ContextLaneState",
+  "description": "State of one of the 7 typed context lanes (CTX-001), consumed by the pure ContextAssembler.assemble() function.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["lane", "fidelity", "entries"],
+  "properties": {
+    "lane": { "type": "string", "enum": ["L0_POLICY", "L1_STATE", "L2_EVIDENCE", "L3_EPISODIC", "L4_ARTIFACTS", "L5_MEMORY", "L6_SKILLS"] },
+    "fidelity": { "type": "string", "enum": ["PINNED_EXACT", "STRUCTURED", "EVIDENCE_ATOMIC", "ADDRESSABLE", "SUMMARIZABLE", "CANONICAL_EXTERNAL", "RETRIEVAL_ON_DEMAND", "PROGRESSIVE_DISCLOSURE"] },
+    "entries": { "type": "array", "items": { "type": "object" } },
+    "estimated_tokens": { "type": "integer", "minimum": 0 },
+    "cache_stable": { "type": "boolean", "description": "Whether this lane's serialization is stable across turns (affects prompt-cache hit rate, see roadmap A2)." }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon.dev/manifests/model_policy_bundle.schema.json",
+  "title": "ModelPolicyBundle",
+  "description": "Git-versioned binding of capability profiles (referenced by AgentManifest.spec.modelPolicy.profile) to concrete provider/model candidates. Editing this file is how you roll out a new model version; no code change required.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "profiles"],
+  "properties": {
+    "apiVersion": { "const": "harness.ai/v1" },
+    "kind": { "const": "ModelPolicyBundle" },
+    "profiles": {
+      "type": "array",
+      "items": { "$ref": "https://aeon.dev/schemas/model_profile.schema.json" }
+    }
+  }
+}

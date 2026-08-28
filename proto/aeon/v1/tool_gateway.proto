@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package aeon.v1;
+
+option go_package = "github.com/aeon-ai/aeon/go/internal/gen/aeonv1;aeonv1";
+
+import "google/protobuf/struct.proto";
+import "aeon/v1/common.proto";
+
+// ToolGateway executes a Decision's tool call after the Policy Engine has checked it.
+// Policy is checked AFTER arguments are generated and BEFORE execution (see roadmap §2.1, SEC-001).
+service ToolGateway {
+  rpc ExecuteTool(ExecuteToolRequest) returns (ExecuteToolResponse);
+  rpc CheckPolicy(CheckPolicyRequest) returns (CheckPolicyResponse);
+}
+
+message ExecuteToolRequest {
+  string run_id = 1;
+  string tenant_id = 2;
+  string tool_name = 3;
+  google.protobuf.Struct args = 4;
+  // idempotency_key = hash(run_id, node_id, step_seq, args_canonical); a retry with the same
+  // key returns the previously recorded result instead of re-executing (RUN-004).
+  string idempotency_key = 5;
+}
+
+message ExecuteToolResponse {
+  bool deduplicated = 1; // true if this result came from the dedupe table, not a fresh execution.
+  google.protobuf.Struct result = 2;
+  string observation_ref = 3; // obs:// pointer if the result was offloaded (CTX-003).
+  string error = 4;
+}
+
+message CheckPolicyRequest {
+  string run_id = 1;
+  string tenant_id = 2;
+  string agent_manifest_ref = 3;
+  string tool_name = 4;
+  google.protobuf.Struct args = 5;
+}
+
+message CheckPolicyResponse {
+  bool allowed = 1;
+  string reason = 2;
+  bool requires_approval = 3;
+}

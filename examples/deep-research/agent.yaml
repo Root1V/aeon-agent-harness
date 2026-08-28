@@ -1,0 +1,33 @@
+apiVersion: harness.ai/v1
+kind: Agent
+metadata:
+  name: deep-research-general
+  version: 0.1.0
+  owner: aeon-platform-team
+  lifecycle: Draft
+spec:
+  modelPolicy:
+    profile: reasoning-high
+    fallbacks: [reasoning-balanced, reasoning-local]
+  tools:
+    allow: [search.web, search.rag, repository.read, artifact.read]
+    deny: [shell.*, external.write.*]
+  runtime:
+    maxTurns: 24
+    maxDepth: 4
+    deadlineSeconds: 900
+    budgets:
+      modelCalls: 60
+      toolCalls: 120
+      costUsd: 5.0
+  contextPolicy:
+    lanes:
+      policy: { fidelity: PINNED_EXACT }
+      state: { fidelity: STRUCTURED }
+      evidence: { fidelity: EVIDENCE_ATOMIC }
+      episodic: { fidelity: ADDRESSABLE }
+  memoryPolicy:
+    readScopes: [project, tenant]
+    writeMode: candidate_only
+    promotionGate: eval_required
+  evalGates: [deep_research_core, citation_integrity, injection_suite, provider_conformance]

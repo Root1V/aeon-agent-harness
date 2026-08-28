@@ -1,0 +1,23 @@
+{
+  "name": "aeon-ai",
+  "dockerComposeFile": ["../deploy/compose/docker-compose.yml"],
+  "service": "worker",
+  "workspaceFolder": "/workspace",
+  "runServices": [],
+  "shutdownAction": "stopCompose",
+  "features": {
+    "ghcr.io/devcontainers/features/go:1": {},
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "postCreateCommand": "pip install --no-cache-dir uv && uv sync",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "zxh404.vscode-proto3"
+      ]
+    }
+  }
+}
