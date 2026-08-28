@@ -2,7 +2,7 @@
 COMPOSE := docker compose -f deploy/compose/docker-compose.yml
 PROFILE ?= full
 
-.PHONY: dev down logs ps build test test-go test-python lint roadmap-check clean
+.PHONY: dev down logs ps build test test-go test-go-integration test-python lint roadmap-check clean
 
 dev: ## Start the full reference stack (Temporal, Postgres, MinIO, OTel, Tempo, Grafana, gateways, worker)
 	$(COMPOSE) --profile $(PROFILE) up -d --build
@@ -19,10 +19,18 @@ ps: ## Show service status
 build: ## Build all images without starting them
 	$(COMPOSE) --profile $(PROFILE) build
 
-test: test-go test-python ## Run the full test suite, both languages, in containers
+test: test-go test-python ## Run the full test suite, both languages, in containers (Postgres-backed registry tests are skipped here — see test-go-integration)
 
-test-go: ## Run Go unit tests in a throwaway container
-	docker run --rm -v "$(PWD)/go:/src" -w /src golang:1.23-alpine go test ./...
+test-go: ## Run Go tests in a throwaway container (registry Postgres tests self-skip without AEON_TEST_PG_DSN)
+	docker run --rm -v "$(PWD)/go:/src" -w /src golang:1.25-alpine go test ./...
+
+test-go-integration: ## Run Go tests against a real Postgres (starts/stops it around the run)
+	$(COMPOSE) --profile core up -d postgres
+	docker run --rm --network aeon_default -v "$(PWD)/go:/src" -w /src \
+		-e AEON_TEST_PG_DSN="postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable" \
+		golang:1.25-alpine sh -c \
+		"apk add --no-cache postgresql-client >/dev/null && until pg_isready -h postgres -U aeon >/dev/null 2>&1; do sleep 1; done && go test ./... -v"
+	$(COMPOSE) --profile core stop postgres
 
 test-python: ## Run Python unit + integration tests in a throwaway container via uv
 	docker run --rm -v "$(PWD)/python:/app" -w /app python:3.13-slim sh -c \

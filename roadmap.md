@@ -6,13 +6,13 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-28 (scaffolding inicial + primer test de aceptación en verde).
+> Última actualización: 2026-08-28 (Agent/Tool Registry real sobre Postgres, verificado en vivo).
 
 ## Resumen ejecutivo
 
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
-| F0 | Foundation durable | ~6% (1/17) | `IN_PROGRESS` |
+| F0 | Foundation durable | ~18% (3/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 0% | `TODO` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
@@ -22,13 +22,25 @@
 Bloqueos abiertos: ninguno. Supuesto pendiente de confirmar: forma de la API de la plataforma de
 inferencia local "Prometheus" del usuario (asumimos OpenAI-compatible — ver ADR-004).
 
-**Progreso real verificado hoy:** `RUN-004` (Checkpoint & replay) está `DONE` —
-[test_crash_resume_no_duplicate_write](python/tests/integration/test_crash_resume.py) pasa contra
-un servidor Temporal efímero real y dos procesos worker separados (uno de los cuales se mata a sí
-mismo con `os._exit(1)` tras confirmar la escritura, simulando el crash). Esto valida el diseño de
-[ADR-001](docs/adr/0001-temporal-determinism-boundary.md) de punta a punta. El resto de F0
-(registries, gateways reales, Cedar) son stubs de scaffolding: compilan y sirven `/healthz`, pero
-no implementan lógica de negocio todavía — ver filas `TODO` abajo.
+**Progreso real verificado hoy:**
+- `RUN-004` (Checkpoint & replay) — [test_crash_resume_no_duplicate_write](python/tests/integration/test_crash_resume.py)
+  pasa contra un servidor Temporal efímero real y dos procesos worker separados (uno se mata a sí
+  mismo con `os._exit(1)` tras confirmar la escritura). Valida [ADR-001](docs/adr/0001-temporal-determinism-boundary.md)
+  de punta a punta.
+- `FND-001` (Agent Registry) y `TOOL-001` (Tool Registry, porción CRUD) —
+  [agent_registry_test.go](go/internal/store/agent_registry_test.go) y
+  [tool_registry_test.go](go/internal/store/tool_registry_test.go) pasan contra Postgres real
+  (`make test-go-integration`), y se verificó en vivo por HTTP contra `aeon-controlplane` real
+  corriendo en el compose stack: crear agente, transición de lifecycle válida e inválida (422),
+  creación duplicada (409), y rechazo de una tool con efectos sin `idempotency_key_fields` (400).
+  El lifecycle es estrictamente hacia adelante, un paso a la vez — no se puede saltar de `Draft`
+  a `Released` ni retroceder.
+
+El resto de F0 (Cedar policy engine, Model/Tool Gateway ejecutando de verdad, aprobaciones,
+budgets) siguen siendo stubs de scaffolding: compilan y sirven `/healthz`, pero no implementan
+lógica de negocio todavía — ver filas `TODO` abajo. En particular, `TOOL-001` está `DONE` sólo para
+su porción de registro/clasificación de riesgo; el Tool *Gateway* ejecutando llamadas reales con
+policy check llega con `SEC-001`.
 
 ---
 
@@ -36,7 +48,7 @@ no implementan lógica de negocio todavía — ver filas `TODO` abajo.
 
 | ID | Feature | Estado | Criterio de DONE | PR |
 |---|---|---|---|---|
-| FND-001 | Agent Registry (CRUD/versionado, lifecycle Draft→Candidate→Released→Retired) | `TODO` | `test_agent_registry_lifecycle` en verde | — |
+| FND-001 | Agent Registry (CRUD/versionado, lifecycle Draft→Candidate→Released→Retired) | `DONE` | `TestAgentRegistryLifecycle` en verde | go/internal/store/agent_registry_test.go |
 | FND-003 | Config-as-code (manifiestos en Git, UI no es source of truth) | `TODO` | `aeon validate` acepta/rechaza manifiestos de `examples/` | — |
 | RUN-001 | Run Controller (start/cancel/pause/resume/status/stream) | `TODO` | `test_run_controller_lifecycle` en verde | — |
 | RUN-002 | Graph Runtime (sequential/parallel/conditional/loop/subgraph/fan-in) | `TODO` | `test_graph_runtime_node_kinds` en verde | — |
@@ -49,7 +61,7 @@ no implementan lógica de negocio todavía — ver filas `TODO` abajo.
 | MDL-005 | Adaptador `gemini` | `TODO` | pasa `provider_conformance` | — |
 | MDL-006 | Adaptador `prometheus_inference` (LLM local) | `TODO` | pasa `provider_conformance`; ver ADR-004 | — |
 | MDL-007 | Adaptador `openai_compatible` (vLLM/Ollama/TGI genérico) | `TODO` | pasa `provider_conformance` | — |
-| TOOL-001 | Tool Registry/Gateway (typed schemas, risk classification, scopes) | `TODO` | `test_tool_policy_denies_out_of_manifest` en verde | — |
+| TOOL-001 | Tool Registry/Gateway (typed schemas, risk classification, scopes) | `DONE` | `TestToolRegistryCRUDAndRiskClassification` en verde (registry only — el Gateway ejecutor real vive junto a SEC-001) | go/internal/store/tool_registry_test.go |
 | SEC-001 | Policy Engine (Cedar, authz fuera del modelo) | `TODO` | `test_tool_policy_denies_out_of_manifest` en verde | — |
 | OBS-001 | Distributed tracing (OTel GenAI semantic conventions) | `TODO` | spans `invoke_agent`/`chat`/`execute_tool` visibles en Tempo | — |
 | — | `deploy/compose` completo (Temporal, Postgres+pgvector, MinIO, OTel, Tempo, Grafana) | `IN_PROGRESS` | `make dev` levanta todos los servicios sanos | — |

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Multi-stage build for any Go binary under go/cmd/<name>. Build arg CMD_PATH selects which one.
-FROM golang:1.23-alpine AS build
+FROM golang:1.25-alpine AS build
 ARG CMD_PATH
 WORKDIR /src
 COPY go.mod go.sum* ./
