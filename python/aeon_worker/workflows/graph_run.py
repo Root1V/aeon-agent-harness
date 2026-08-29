@@ -1,10 +1,16 @@
-"""GraphRunWorkflow: RUN-002's Graph Runtime entrypoint. Executes a GraphNode
-(proto/schemas/graph_spec.schema.json) to completion via aeon_worker.graph.execute_graph.
+"""GraphRunWorkflow: RUN-002's Graph Runtime entrypoint, and RUN-001's Run Controller target.
+Executes a GraphNode (proto/schemas/graph_spec.schema.json) to completion via
+aeon_worker.graph.execute_graph.
 
 Deterministic per docs/adr/0001-temporal-determinism-boundary.md: every non-deterministic
 operation happens inside execute_graph's Activity calls, never here. This supersedes
 AgentRunWorkflow (workflows/agent_run.py) as the general-purpose entrypoint; AgentRunWorkflow stays
 as-is because tests/integration/test_crash_resume.py pins its exact single-node shape.
+
+RUN-001 control surface: `pause`/`resume` signals and an `is_paused` query, driven by
+go/internal/runcontroller (aeon-runcontroller). start/cancel/status/stream need no workflow-side
+code at all — they're native Temporal client operations (StartWorkflow, CancelWorkflow,
+DescribeWorkflowExecution) the Run Controller calls directly.
 """
 from __future__ import annotations
 
@@ -28,8 +34,23 @@ _ = (ExecuteToolInput, ExecuteToolOutput, execute_tool_activity)  # imported for
 
 @workflow.defn
 class GraphRunWorkflow:
+    def __init__(self) -> None:
+        self._paused = False
+
+    @workflow.signal
+    async def pause(self) -> None:
+        self._paused = True
+
+    @workflow.signal
+    async def resume(self) -> None:
+        self._paused = False
+
+    @workflow.query
+    def is_paused(self) -> bool:
+        return self._paused
+
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        state = GraphExecutionState(run_id=request["run_id"])
+        state = GraphExecutionState(run_id=request["run_id"], is_paused=lambda: self._paused)
         result = await execute_graph(request["graph"], state)
         return {"run_id": request["run_id"], "result": result}

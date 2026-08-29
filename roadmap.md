@@ -6,13 +6,13 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-29 (Graph Runtime real, los 6 tipos de nodo verificados).
+> Última actualización: 2026-08-29 (Run Controller real: start/cancel/pause/resume/status/stream).
 
 ## Resumen ejecutivo
 
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
-| F0 | Foundation durable | ~29% (5/17) | `IN_PROGRESS` |
+| F0 | Foundation durable | ~35% (6/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 0% | `TODO` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
@@ -59,10 +59,22 @@ inferencia local "Prometheus" del usuario (asumimos OpenAI-compatible — ver AD
   ("`name 'Any' is not defined`") que Temporal reintenta para siempre con backoff, indistinguible de
   un cuelgue salvo leyendo el stderr del worker. Documentado en
   [ADR-001](docs/adr/0001-temporal-determinism-boundary.md).
+- `RUN-001` (Run Controller) — [run_controller_handlers_test.go](go/internal/api/run_controller_handlers_test.go)
+  ejercita `aeon-runcontroller` real contra un Temporal real y un worker real (`make
+  test-go-integration`, que ahora también levanta `temporal` y `worker`, no sólo `postgres`), a
+  través de su API HTTP: **pause** detiene un run antes de que ejecute su primer nodo (sin
+  condición de carrera — `graph.py` comprueba la puerta de pausa antes de cada nodo, así que por
+  rápida que sea la tool, no puede avanzar hasta el resume) y el status pasa a `PAUSED`; **resume**
+  lo deja terminar en `SUCCEEDED`; **cancel** sobre un run pausado llega de forma determinista a
+  `CANCELLED` (pausar primero evita la carrera de cancelar un run de un solo nodo que ya pudo haber
+  terminado); **stream** (Server-Sent Events) reporta la transición hasta el estado terminal. El
+  Run Controller no guarda estado propio — Temporal es la única fuente de verdad, así que el
+  servicio es stateless. Verificado también en vivo por HTTP contra `aeon-runcontroller` real
+  corriendo en el compose stack.
 
-El resto de F0 (Model Gateway con proveedores reales, aprobaciones, budgets, Run Controller, tabla
-de dedupe del Tool Gateway) siguen siendo stubs de scaffolding: compilan y sirven `/healthz`, pero
-no implementan lógica de negocio todavía — ver filas `TODO` abajo.
+El resto de F0 (Model Gateway con proveedores reales, aprobaciones, budgets, tabla de dedupe del
+Tool Gateway) siguen siendo stubs de scaffolding: compilan y sirven `/healthz`, pero no implementan
+lógica de negocio todavía — ver filas `TODO` abajo.
 
 ---
 
@@ -72,7 +84,7 @@ no implementan lógica de negocio todavía — ver filas `TODO` abajo.
 |---|---|---|---|---|
 | FND-001 | Agent Registry (CRUD/versionado, lifecycle Draft→Candidate→Released→Retired) | `DONE` | `TestAgentRegistryLifecycle` en verde | go/internal/store/agent_registry_test.go |
 | FND-003 | Config-as-code (manifiestos en Git, UI no es source of truth) | `TODO` | `aeon validate` acepta/rechaza manifiestos de `examples/` | — |
-| RUN-001 | Run Controller (start/cancel/pause/resume/status/stream) | `TODO` | `test_run_controller_lifecycle` en verde | — |
+| RUN-001 | Run Controller (start/cancel/pause/resume/status/stream) | `DONE` | `TestRunControllerLifecycle` en verde | go/internal/api/run_controller_handlers_test.go |
 | RUN-002 | Graph Runtime (sequential/parallel/conditional/loop/subgraph/fan-in) | `DONE` | `test_graph_runtime_node_kinds` en verde | python/tests/integration/test_graph_runtime.py |
 | RUN-003 | Budgets (tokens/calls/tools/cost/deadline/depth, hard stop) | `TODO` | `test_budget_hard_stop` en verde | — |
 | RUN-004 | Checkpoint & replay (resume sin duplicar tool effects) | `DONE` | `test_crash_resume_no_duplicate_write` en verde | python/tests/integration/test_crash_resume.py |
