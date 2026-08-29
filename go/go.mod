@@ -5,6 +5,7 @@ go 1.25.4
 require (
 	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.temporal.io/api v1.63.5
 	go.temporal.io/sdk v1.48.0
 	gopkg.in/yaml.v3 v3.0.1
