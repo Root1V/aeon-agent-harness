@@ -53,22 +53,33 @@ providers/prometheus_inference/):
   `client_id`/`client_secret` — that credential pair, not the token, is the durable thing. Our
   `TokenSource` caches the token and proactively re-requests within `tokenRefreshMargin` (15s) of
   expiry, and reactively via `Invalidate()` on any 401.
-- **`scope` gates model access.** A client's scope includes `inference:read`/`inference:stream`
-  plus one `model:<id>` entry per model it may use — assigned by whoever issues the credentials
-  (`POST /admin/clients`, admin-key-gated) and can change after the client is created. There is no
-  static allowlist in our config for this reason: `GET /v1/models/mine` (Bearer-authenticated) is
-  the live source of truth for what a given client can currently use, separate from
-  `GET /v1/models` (public, every active model on the gateway, regardless of who can use it).
+- **`scope` gates model access — and must be requested explicitly, every time.** A client's
+  *authorization* (what it's allowed to ever use) is assigned by whoever issues the credentials
+  (`POST /admin/clients`, admin-key-gated) and can change after the client is created. But a
+  client's *token* only carries the `model:<id>` scopes it explicitly asked for in the
+  `/oauth2/token` request — being authorized for a model does not make the auth-service include it
+  automatically. Confirmed live: a token requested with only `scope=inference:read
+  inference:stream` came back valid, but `GET /v1/models/mine` with it returned an empty list even
+  though the client was authorized for a real, registered model; re-requesting the token with
+  `scope=inference:read inference:stream model:<id>` explicitly named made `/v1/models/mine` show
+  it and a real `chat/completions` call against it succeed. `PROMETHEUS_SCOPE` in `.env` must
+  therefore list every `model:<id>` this adapter instance will ever request, not just the general
+  capability scopes. `GET /v1/models/mine` (Bearer-authenticated, reflects the CURRENT token's
+  scope) is the live way to check what a specific token actually got, separate from
+  `GET /v1/models` (public, every active model on the gateway, regardless of who's authorized).
 - **`POST /v1/chat/completions` is genuinely OpenAI-compatible** — same request shape (`model`,
   `messages[]`, `stream`, `max_tokens`, `temperature`, `tools`/`tool_choice`) and response shape
   (`choices[].message`, `usage`). No translation layer needed in `Adapter.Decide` beyond defaulting
   `model` when the caller didn't set one.
 - **Base URLs are operator-specific**, not fixed dev/staging domains — this is self-hosted
   infrastructure. The dev instance used to confirm this (`http://127.0.0.1:8020` gateway,
-  `http://127.0.0.1:9000` auth-service) had zero models registered at confirmation time; the
-  adapter's automated test therefore runs against a `httptest` fake server implementing this exact
-  contract (`prometheus_inference_test.go`), not the live instance — a live smoke test against a
-  real model is a follow-up once one is registered.
+  `http://127.0.0.1:9000` auth-service) initially had zero models registered; once the user
+  registered `gpt-oss-20b-mxfp4` and `qwen3vl-32B-Q4` and granted the `aeon-ai` client's
+  `model:gpt-oss-20b-mxfp4` scope, a full live round-trip succeeded through the real Go adapter:
+  token → `GET /v1/models/mine` → `POST /v1/chat/completions`, all real, no fake server. The
+  adapter's automated CI test still runs against a `httptest` fake server implementing this exact
+  contract (`prometheus_inference_test.go`) — the live instance isn't reachable from CI — but the
+  contract that fake replicates is now confirmed correct end to end, not just documented.
 
 Naming note unchanged: this project's inference platform is called `prometheus_inference`
 everywhere in code/config to avoid collision with Prometheus-the-metrics-system

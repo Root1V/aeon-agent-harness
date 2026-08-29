@@ -127,10 +127,18 @@ inferencia local "Prometheus" del usuario (asumimos OpenAI-compatible — ver AD
   que dos llamadas seguidas reusan el mismo token (no hay una petición redundante), y que un 401
   fuerza exactamente un token nuevo y reintenta con él. Se creó también una interfaz `Provider`
   única compartida (`go/internal/providers/provider.go`) — antes estaba duplicada idéntica en cada
-  uno de los 5 stubs. **Pendiente para pasar a `DONE`:** la suite `provider_conformance` (llega con
-  `EVAL-002`/F2) y una verificación en vivo con un modelo real registrado (la instancia de prueba
-  no tenía ninguno dado de alta en el momento de esta implementación). Ver
-  [ADR-004](docs/adr/0004-model-gateway-provider-abstraction.md), resuelto con los hechos reales.
+  uno de los 5 stubs.
+  **Verificado en vivo** contra la instancia real del usuario (`127.0.0.1:8020`/`9000`, cliente
+  `aeon-ai` creado vía `POST /admin/clients`): token OAuth2 real, `GET /v1/models/mine` real, y una
+  llamada real de `chat/completions` contra `gpt-oss-20b-mxfp4` que devolvió una respuesta válida —
+  las tres a través del cliente Go real (`go/internal/providers/prometheus_inference`), no `curl`.
+  En el camino se encontró (y no era un bug de Prometheus, sino una confusión propia sobre el
+  contrato) que **el scope `model:<id>` no se concede automáticamente** aunque el cliente esté
+  autorizado para ese modelo — hay que pedirlo explícitamente en el `scope` de la petición de
+  token, o `GET /v1/models/mine` devuelve una lista vacía aunque el modelo exista y el cliente
+  tenga acceso. Documentado en `.env.example` y en el ADR. **Pendiente para pasar a `DONE`:** solo
+  la suite `provider_conformance` (llega con `EVAL-002`/F2) — la verificación en vivo con un modelo
+  real ya no es un pendiente. Ver [ADR-004](docs/adr/0004-model-gateway-provider-abstraction.md).
 
 El resto de F0 (Model Gateway con el resto de proveedores, routing/fallback, tabla de dedupe del
 Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
