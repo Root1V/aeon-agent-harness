@@ -1,0 +1,34 @@
+apiVersion: harness.ai/v1
+kind: PolicyBundle
+cedarVersion: "4.0"
+policies:
+  - id: allow-deep-research-tools
+    effect: permit
+    cedarSource: |
+      permit(
+        principal == Agent::"deep-research-general@0.1.0",
+        action,
+        resource
+      ) when {
+        ["search.web", "search.rag", "repository.read", "artifact.read"].contains(resource.name)
+      };
+  - id: forbid-shell-for-everyone
+    effect: forbid
+    cedarSource: |
+      forbid(
+        principal,
+        action,
+        resource
+      ) when {
+        resource.name like "shell.*"
+      };
+  - id: forbid-external-write-for-everyone
+    effect: forbid
+    cedarSource: |
+      forbid(
+        principal,
+        action,
+        resource
+      ) when {
+        resource.name like "external.write.*"
+      };

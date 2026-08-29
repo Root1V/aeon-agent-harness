@@ -6,13 +6,13 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-28 (Agent/Tool Registry real sobre Postgres, verificado en vivo).
+> Última actualización: 2026-08-28 (Cedar Policy Engine real, verificado en vivo).
 
 ## Resumen ejecutivo
 
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
-| F0 | Foundation durable | ~18% (3/17) | `IN_PROGRESS` |
+| F0 | Foundation durable | ~24% (4/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 0% | `TODO` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
@@ -35,12 +35,18 @@ inferencia local "Prometheus" del usuario (asumimos OpenAI-compatible — ver AD
   creación duplicada (409), y rechazo de una tool con efectos sin `idempotency_key_fields` (400).
   El lifecycle es estrictamente hacia adelante, un paso a la vez — no se puede saltar de `Draft`
   a `Released` ni retroceder.
+- `SEC-001` (Cedar Policy Engine) y `TOOL-001` (Gateway, porción de ejecución) —
+  [tool_gateway_handlers_test.go](go/internal/api/tool_gateway_handlers_test.go) carga el
+  `policy_bundle.yaml` real del repo (no un string embebido) y prueba, contra los handlers HTTP
+  reales: una tool permitida se ejecuta de verdad; una tool con `forbid` explícito (`shell.*`) es
+  denegada con 403 y **nunca llega al executor**; una tool ausente de todo `permit` es denegada por
+  el default-deny de Cedar; y la política es por agente, no global (otro agente no hereda los
+  permisos de `deep-research-general`). Verificado también en vivo por HTTP contra
+  `aeon-toolgw` real corriendo en el compose stack.
 
-El resto de F0 (Cedar policy engine, Model/Tool Gateway ejecutando de verdad, aprobaciones,
-budgets) siguen siendo stubs de scaffolding: compilan y sirven `/healthz`, pero no implementan
-lógica de negocio todavía — ver filas `TODO` abajo. En particular, `TOOL-001` está `DONE` sólo para
-su porción de registro/clasificación de riesgo; el Tool *Gateway* ejecutando llamadas reales con
-policy check llega con `SEC-001`.
+El resto de F0 (Model Gateway con proveedores reales, aprobaciones, budgets, tabla de dedupe del
+Tool Gateway) siguen siendo stubs de scaffolding: compilan y sirven `/healthz`, pero no implementan
+lógica de negocio todavía — ver filas `TODO` abajo.
 
 ---
 
@@ -61,8 +67,8 @@ policy check llega con `SEC-001`.
 | MDL-005 | Adaptador `gemini` | `TODO` | pasa `provider_conformance` | — |
 | MDL-006 | Adaptador `prometheus_inference` (LLM local) | `TODO` | pasa `provider_conformance`; ver ADR-004 | — |
 | MDL-007 | Adaptador `openai_compatible` (vLLM/Ollama/TGI genérico) | `TODO` | pasa `provider_conformance` | — |
-| TOOL-001 | Tool Registry/Gateway (typed schemas, risk classification, scopes) | `DONE` | `TestToolRegistryCRUDAndRiskClassification` en verde (registry only — el Gateway ejecutor real vive junto a SEC-001) | go/internal/store/tool_registry_test.go |
-| SEC-001 | Policy Engine (Cedar, authz fuera del modelo) | `TODO` | `test_tool_policy_denies_out_of_manifest` en verde | — |
+| TOOL-001 | Tool Registry/Gateway (typed schemas, risk classification, scopes) | `DONE` | `TestToolRegistryCRUDAndRiskClassification` (registry) + `TestToolPolicyDeniesOutOfManifestToolCall` (gateway ejecuta con policy check real) | go/internal/store/tool_registry_test.go, go/internal/api/tool_gateway_handlers_test.go |
+| SEC-001 | Policy Engine (Cedar, authz fuera del modelo) | `DONE` | `TestToolPolicyDeniesOutOfManifestToolCall` en verde | go/internal/api/tool_gateway_handlers_test.go |
 | OBS-001 | Distributed tracing (OTel GenAI semantic conventions) | `TODO` | spans `invoke_agent`/`chat`/`execute_tool` visibles en Tempo | — |
 | — | `deploy/compose` completo (Temporal, Postgres+pgvector, MinIO, OTel, Tempo, Grafana) | `IN_PROGRESS` | `make dev` levanta todos los servicios sanos | — |
 

@@ -49,3 +49,13 @@ def test_deep_research_model_policy_bundle_matches_schema():
     registry = Registry().with_resource(profile_schema["$id"], Resource.from_contents(profile_schema))
     doc = yaml.safe_load((EXAMPLES_DIR / "model_policy_bundle.yaml").read_text())
     Draft202012Validator(schema, registry=registry).validate(doc)
+
+
+def test_deep_research_policy_bundle_matches_schema():
+    """Guards the same file go/internal/api/tool_gateway_handlers_test.go loads directly — if this
+    ever stops matching proto/manifests/policy_bundle.schema.json, that Go test would still pass
+    (it only cares that Cedar can parse the cedarSource strings), so this Python-side schema check
+    is the only thing that would catch a structural drift (e.g. a typo'd field name)."""
+    schema = json.loads((MANIFESTS_DIR / "policy_bundle.schema.json").read_text())
+    doc = yaml.safe_load((EXAMPLES_DIR / "policy_bundle.yaml").read_text())
+    Draft202012Validator(schema).validate(doc)

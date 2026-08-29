@@ -22,11 +22,13 @@ build: ## Build all images without starting them
 test: test-go test-python ## Run the full test suite, both languages, in containers (Postgres-backed registry tests are skipped here — see test-go-integration)
 
 test-go: ## Run Go tests in a throwaway container (registry Postgres tests self-skip without AEON_TEST_PG_DSN)
-	docker run --rm -v "$(PWD)/go:/src" -w /src golang:1.25-alpine go test ./...
+	# Mounts the whole repo, not just go/: some tests (e.g. the policy-engine acceptance test)
+	# load config-as-code files from examples/ to exercise the real checked-in manifests.
+	docker run --rm -v "$(PWD):/repo" -w /repo/go golang:1.25-alpine go test ./...
 
 test-go-integration: ## Run Go tests against a real Postgres (starts/stops it around the run)
 	$(COMPOSE) --profile core up -d postgres
-	docker run --rm --network aeon_default -v "$(PWD)/go:/src" -w /src \
+	docker run --rm --network aeon_default -v "$(PWD):/repo" -w /repo/go \
 		-e AEON_TEST_PG_DSN="postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable" \
 		golang:1.25-alpine sh -c \
 		"apk add --no-cache postgresql-client >/dev/null && until pg_isready -h postgres -U aeon >/dev/null 2>&1; do sleep 1; done && go test ./... -v"

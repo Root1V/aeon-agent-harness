@@ -200,6 +200,11 @@ services:
     environment:
       <<: *common-env
       AEON_PG_DSN: postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable
+      # Config-as-code (FND-003): the policy bundle is a file in Git, mounted read-only, not baked
+      # into the image. Point this at a different bundle to authorize a different set of agents.
+      AEON_POLICY_BUNDLE_PATH: /examples/deep-research/policy_bundle.yaml
+    volumes:
+      - ../../examples:/examples:ro
     ports:
       - "9403:9403"
 
