@@ -6,13 +6,13 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-29 (Approvals reales: interrupt durable, parameter binding, expiry).
+> Última actualización: 2026-08-29 (`aeon validate` real: JSON Schema + $ref multi-archivo).
 
 ## Resumen ejecutivo
 
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
-| F0 | Foundation durable | ~47% (8/17) | `IN_PROGRESS` |
+| F0 | Foundation durable | ~53% (9/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 0% | `TODO` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
@@ -109,6 +109,15 @@ inferencia local "Prometheus" del usuario (asumimos OpenAI-compatible — ver AD
   mismo síntoma silencioso de intentos anteriores (fallo de decode → reintento infinito). Se
   corrigió pasando un único payload estructurado (`{"approval_id":..., "tool_call_hash":...}`),
   que además es la práctica correcta para cualquier señal que deba ser interoperable entre SDKs.
+- `FND-003` (Config-as-code) — [main_test.go](go/cmd/aeon/main_test.go) prueba `aeon validate`
+  con JSON Schema real (no comparaciones superficiales de `apiVersion`/`kind`): acepta los tres
+  manifiestos reales de `examples/deep-research/` (incluido `model_policy_bundle.yaml`, cuyo
+  `$ref` cruzado a `model_profile.schema.json` se resuelve **offline** por `$id`, sin red), y
+  rechaza con mensajes accionables: un `kind` desconocido, un `Agent` al que le falta `spec`, y un
+  `ModelPolicyBundle` cuyo perfil viola de verdad el shape de `model_profile.schema.json` a través
+  del `$ref`. Los cuatro `kind` soportados (`Agent`, `EvalSuite`, `PolicyBundle`,
+  `ModelPolicyBundle`) se resuelven a su schema por convención de `$id`
+  (`https://aeon.dev/manifests/<archivo>`), no por lógica hardcodeada por tipo.
 
 El resto de F0 (Model Gateway con proveedores reales, tabla de dedupe del Tool Gateway) siguen
 siendo stubs de scaffolding: compilan y sirven `/healthz`, pero no implementan lógica de negocio
@@ -121,7 +130,7 @@ todavía — ver filas `TODO` abajo.
 | ID | Feature | Estado | Criterio de DONE | PR |
 |---|---|---|---|---|
 | FND-001 | Agent Registry (CRUD/versionado, lifecycle Draft→Candidate→Released→Retired) | `DONE` | `TestAgentRegistryLifecycle` en verde | go/internal/store/agent_registry_test.go |
-| FND-003 | Config-as-code (manifiestos en Git, UI no es source of truth) | `TODO` | `aeon validate` acepta/rechaza manifiestos de `examples/` | — |
+| FND-003 | Config-as-code (manifiestos en Git, UI no es source of truth) | `DONE` | `TestAeonValidateAcceptsAndRejectsExampleManifests` en verde | go/cmd/aeon/main_test.go |
 | RUN-001 | Run Controller (start/cancel/pause/resume/status/stream) | `DONE` | `TestRunControllerLifecycle` en verde | go/internal/api/run_controller_handlers_test.go |
 | RUN-002 | Graph Runtime (sequential/parallel/conditional/loop/subgraph/fan-in) | `DONE` | `test_graph_runtime_node_kinds` en verde | python/tests/integration/test_graph_runtime.py |
 | RUN-003 | Budgets (tokens/calls/tools/cost/deadline/depth, hard stop) | `DONE` | `test_budget_hard_stop` en verde (tool_calls/depth/deadline; model_calls/tokens/cost_usd declarados, no aplicados hasta MDL-001) | python/tests/integration/test_budget_hard_stop.py |
