@@ -11,9 +11,16 @@ RUN-001 control surface: `pause`/`resume` signals and an `is_paused` query, driv
 go/internal/runcontroller (aeon-runcontroller). start/cancel/status/stream need no workflow-side
 code at all — they're native Temporal client operations (StartWorkflow, CancelWorkflow,
 DescribeWorkflowExecution) the Run Controller calls directly.
+
+RUN-003 control surface: an optional `request["budgets"]` dict — `max_tool_calls`, `max_depth`,
+`deadline_seconds` — becomes a graph.BudgetPolicy enforced by execute_graph itself (hard stop: a
+limit crossed raises BudgetExceededError, which Temporal surfaces as a FAILED run). The
+`budgets_consumed` query exposes the running counts, including after a budget-triggered failure —
+Temporal can still answer queries against a closed workflow by replaying its history.
 """
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from temporalio import workflow
@@ -27,15 +34,29 @@ with workflow.unsafe.imports_passed_through():
     # with "name 'Any' is not defined" the first time execute_tool_activity's dataclass return type
     # is resolved (see graph.py's module docstring and docs/adr/0001).
     from aeon_worker.activities.tool_activities import ExecuteToolInput, ExecuteToolOutput, execute_tool_activity
-    from aeon_worker.graph import GraphExecutionState, execute_graph
+    from aeon_worker.graph import BudgetPolicy, GraphExecutionState, execute_graph
 
 _ = (ExecuteToolInput, ExecuteToolOutput, execute_tool_activity)  # imported for their passthrough side effect only
+
+
+def _budget_policy_from_request(budgets_req: dict[str, Any]) -> BudgetPolicy:
+    deadline = None
+    if budgets_req.get("deadline_seconds") is not None:
+        # workflow.now() is the deterministic, replay-safe wall clock — never datetime.now()
+        # (docs/adr/0001). Computed once, here, into an absolute point in time.
+        deadline = workflow.now() + timedelta(seconds=budgets_req["deadline_seconds"])
+    return BudgetPolicy(
+        max_tool_calls=budgets_req.get("max_tool_calls"),
+        max_depth=budgets_req.get("max_depth"),
+        deadline=deadline,
+    )
 
 
 @workflow.defn
 class GraphRunWorkflow:
     def __init__(self) -> None:
         self._paused = False
+        self._state: GraphExecutionState | None = None
 
     @workflow.signal
     async def pause(self) -> None:
@@ -49,8 +70,17 @@ class GraphRunWorkflow:
     def is_paused(self) -> bool:
         return self._paused
 
+    @workflow.query
+    def budgets_consumed(self) -> dict[str, Any]:
+        if self._state is None:
+            return {"tool_calls": 0, "depth": 0, "model_calls": 0, "tokens": 0, "cost_usd": 0.0}
+        c = self._state.consumed
+        return {"tool_calls": c.tool_calls, "depth": c.depth, "model_calls": c.model_calls, "tokens": c.tokens, "cost_usd": c.cost_usd}
+
     @workflow.run
     async def run(self, request: dict[str, Any]) -> dict[str, Any]:
-        state = GraphExecutionState(run_id=request["run_id"], is_paused=lambda: self._paused)
+        budgets = _budget_policy_from_request(request.get("budgets") or {})
+        state = GraphExecutionState(run_id=request["run_id"], is_paused=lambda: self._paused, budgets=budgets)
+        self._state = state
         result = await execute_graph(request["graph"], state)
         return {"run_id": request["run_id"], "result": result}

@@ -43,13 +43,19 @@ type RunInfo struct {
 }
 
 // Start begins a new GraphRunWorkflow. runID becomes both the graph's run_id (threaded into every
-// idempotency key, docs/adr/0001) and part of the Temporal workflow ID.
-func (c *Controller) Start(ctx context.Context, runID string, graph map[string]any) (*RunInfo, error) {
+// idempotency key, docs/adr/0001) and part of the Temporal workflow ID. budgets is optional
+// (RUN-003) — pass nil for no limits — and is shaped like {"max_tool_calls": int,
+// "max_depth": int, "deadline_seconds": int}; see graph_run.py's _budget_policy_from_request.
+func (c *Controller) Start(ctx context.Context, runID string, graph map[string]any, budgets map[string]any) (*RunInfo, error) {
 	workflowID := "graph-run-" + runID
+	input := map[string]any{"run_id": runID, "graph": graph}
+	if budgets != nil {
+		input["budgets"] = budgets
+	}
 	run, err := c.Client.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: c.TaskQueue,
-	}, WorkflowType, map[string]any{"run_id": runID, "graph": graph})
+	}, WorkflowType, input)
 	if err != nil {
 		return nil, fmt.Errorf("runcontroller: start: %w", err)
 	}
@@ -85,12 +91,15 @@ func (c *Controller) Resume(ctx context.Context, workflowID string) error {
 // Status is RunState's status field (proto/schemas/run_state.schema.json), derived from Temporal's
 // own execution status plus (while RUNNING) the workflow's own is_paused query.
 type Status struct {
-	WorkflowID string `json:"workflow_id"`
-	Status     string `json:"status"`
-	Paused     bool   `json:"paused"`
+	WorkflowID      string         `json:"workflow_id"`
+	Status          string         `json:"status"`
+	Paused          bool           `json:"paused"`
+	BudgetsConsumed map[string]any `json:"budgets_consumed,omitempty"`
 }
 
-// Status fetches a run's current status.
+// Status fetches a run's current status. budgets_consumed (RUN-003) is queried regardless of
+// terminal-ness — Temporal answers queries against a closed workflow by replaying its history, so
+// this still reports accurate counts after e.g. a budget-triggered failure.
 func (c *Controller) Status(ctx context.Context, workflowID string) (*Status, error) {
 	desc, err := c.Client.DescribeWorkflowExecution(ctx, workflowID, "")
 	if err != nil {
@@ -106,10 +115,16 @@ func (c *Controller) Status(ctx context.Context, workflowID string) (*Status, er
 		}
 	}
 
+	var budgetsConsumed map[string]any
+	if val, err := c.Client.QueryWorkflow(ctx, workflowID, "", "budgets_consumed"); err == nil {
+		_ = val.Get(&budgetsConsumed)
+	}
+
 	return &Status{
-		WorkflowID: workflowID,
-		Status:     mapStatus(temporalStatus, paused),
-		Paused:     paused,
+		WorkflowID:      workflowID,
+		Status:          mapStatus(temporalStatus, paused),
+		Paused:          paused,
+		BudgetsConsumed: budgetsConsumed,
 	}, nil
 }
 
