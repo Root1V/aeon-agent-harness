@@ -6,13 +6,13 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-29 (Run Controller real: start/cancel/pause/resume/status/stream).
+> Última actualización: 2026-08-29 (Budgets reales: tool_calls/depth/deadline con hard stop).
 
 ## Resumen ejecutivo
 
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
-| F0 | Foundation durable | ~35% (6/17) | `IN_PROGRESS` |
+| F0 | Foundation durable | ~41% (7/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 0% | `TODO` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
@@ -71,9 +71,29 @@ inferencia local "Prometheus" del usuario (asumimos OpenAI-compatible — ver AD
   Run Controller no guarda estado propio — Temporal es la única fuente de verdad, así que el
   servicio es stateless. Verificado también en vivo por HTTP contra `aeon-runcontroller` real
   corriendo en el compose stack.
+- `RUN-003` (Budgets) — [test_budget_hard_stop.py](python/tests/integration/test_budget_hard_stop.py)
+  prueba tres dimensiones contra un Temporal efímero real, cada una como **hard stop real**: la
+  acción que cruzaría el límite nunca se ejecuta, no es sólo que el run termine marcado como
+  fallido. `max_tool_calls`: un loop dispuesto a correr 10 iteraciones con límite de 3 se detiene
+  exactamente en 3 (`budgets_consumed` lo confirma). `max_depth`: dos niveles de `subgraph`
+  anidado con `max_depth=1` nunca ejecuta el nodo del segundo nivel. `deadline_seconds`: un
+  deadline de 0 (ya vencido al arrancar) impide que se ejecute cualquier nodo, incluso el primero.
+  `model_calls`/`tokens`/`cost_usd` quedan declarados en `BudgetsConsumed` pero sin aplicar —
+  no hay todavía un punto de llamada al Model Gateway en el Graph Runtime que los produzca
+  (`MDL-001`, sigue `TODO`); su forma no debería cambiar cuando lleguen.
+  **Nota de implementación real:** este feature expuso un segundo bug real de Temporal (distinto al
+  de `RUN-002`): una excepción Python normal (`Exception`) lanzada dentro del workflow no termina
+  el run — Temporal la trata como un fallo del *workflow task* y la reintenta para siempre con
+  backoff, indistinguible de un cuelgue. La excepción debe heredar de
+  `temporalio.exceptions.ApplicationError` para que Temporal la trate como un fallo *terminal* del
+  run. Corregido en la base (`GraphError`), no sólo en `BudgetExceededError` — cualquier error
+  estructural del grafo (kind desconocido, node sin id) tenía el mismo problema latente. Verificado
+  también en vivo por HTTP contra `aeon-runcontroller` real: `budgets_consumed` es consultable
+  incluso después de que el run termine en `FAILED`, porque Temporal responde queries sobre un
+  workflow cerrado reproduciendo su historial.
 
-El resto de F0 (Model Gateway con proveedores reales, aprobaciones, budgets, tabla de dedupe del
-Tool Gateway) siguen siendo stubs de scaffolding: compilan y sirven `/healthz`, pero no implementan
+El resto de F0 (Model Gateway con proveedores reales, aprobaciones, tabla de dedupe del Tool
+Gateway) siguen siendo stubs de scaffolding: compilan y sirven `/healthz`, pero no implementan
 lógica de negocio todavía — ver filas `TODO` abajo.
 
 ---
@@ -86,7 +106,7 @@ lógica de negocio todavía — ver filas `TODO` abajo.
 | FND-003 | Config-as-code (manifiestos en Git, UI no es source of truth) | `TODO` | `aeon validate` acepta/rechaza manifiestos de `examples/` | — |
 | RUN-001 | Run Controller (start/cancel/pause/resume/status/stream) | `DONE` | `TestRunControllerLifecycle` en verde | go/internal/api/run_controller_handlers_test.go |
 | RUN-002 | Graph Runtime (sequential/parallel/conditional/loop/subgraph/fan-in) | `DONE` | `test_graph_runtime_node_kinds` en verde | python/tests/integration/test_graph_runtime.py |
-| RUN-003 | Budgets (tokens/calls/tools/cost/deadline/depth, hard stop) | `TODO` | `test_budget_hard_stop` en verde | — |
+| RUN-003 | Budgets (tokens/calls/tools/cost/deadline/depth, hard stop) | `DONE` | `test_budget_hard_stop` en verde (tool_calls/depth/deadline; model_calls/tokens/cost_usd declarados, no aplicados hasta MDL-001) | python/tests/integration/test_budget_hard_stop.py |
 | RUN-004 | Checkpoint & replay (resume sin duplicar tool effects) | `DONE` | `test_crash_resume_no_duplicate_write` en verde | python/tests/integration/test_crash_resume.py |
 | RUN-005 | Approvals (interrupt durable, parameter binding, expiry) | `TODO` | `test_approval_binding` en verde | — |
 | MDL-001 | Model Gateway (capability profiles, adapters, fallback, routing) | `TODO` | `test_model_gateway_routing_fallback` en verde | — |

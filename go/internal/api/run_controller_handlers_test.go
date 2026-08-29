@@ -60,7 +60,12 @@ func newRunID(label string) string {
 
 func startRun(t *testing.T, srv *httptest.Server, runID string, graph map[string]any) {
 	t.Helper()
-	raw, _ := json.Marshal(startRunRequest{RunID: runID, Graph: graph})
+	startRunWithBudgets(t, srv, runID, graph, nil)
+}
+
+func startRunWithBudgets(t *testing.T, srv *httptest.Server, runID string, graph, budgets map[string]any) {
+	t.Helper()
+	raw, _ := json.Marshal(startRunRequest{RunID: runID, Graph: graph, Budgets: budgets})
 	resp, err := http.Post(srv.URL+"/runs", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		t.Fatalf("POST /runs: %v", err)
@@ -186,6 +191,28 @@ func TestRunControllerLifecycle(t *testing.T) {
 		}
 		if !sawSucceeded {
 			t.Fatalf("stream for run %s never reported SUCCEEDED", runID)
+		}
+	})
+
+	t.Run("budgets are enforced end to end through the HTTP API", func(t *testing.T) {
+		// RUN-003's hard stop, exercised through this Go layer rather than just graph.py directly
+		// (see test_budget_hard_stop.py for full dimension coverage): a loop willing to run 5
+		// iterations, but the budget only allows 2 — the run must fail, and the failure must be
+		// observable through the same Status endpoint every other scenario uses.
+		runID := newRunID("budget")
+		graph := map[string]any{
+			"id": "root", "kind": "loop", "max_iterations": 5,
+			"body": simpleGraph("budget-test.txt"),
+		}
+		startRunWithBudgets(t, srv, runID, graph, map[string]any{"max_tool_calls": 2})
+
+		final := waitForStatus(t, srv, runID, "FAILED", 15*time.Second)
+		consumed, ok := final["budgets_consumed"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected budgets_consumed in status, got %v", final)
+		}
+		if toolCalls, _ := consumed["tool_calls"].(float64); toolCalls != 2 {
+			t.Fatalf("expected exactly 2 tool calls to have run before the hard stop, got %v", consumed)
 		}
 	})
 }

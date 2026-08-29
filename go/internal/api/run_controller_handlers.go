@@ -28,8 +28,9 @@ func (h *RunControllerHandlers) Register(mux *http.ServeMux) {
 func workflowID(runID string) string { return "graph-run-" + runID }
 
 type startRunRequest struct {
-	RunID string         `json:"run_id"`
-	Graph map[string]any `json:"graph"`
+	RunID   string         `json:"run_id"`
+	Graph   map[string]any `json:"graph"`
+	Budgets map[string]any `json:"budgets,omitempty"` // RUN-003: optional {max_tool_calls, max_depth, deadline_seconds}
 }
 
 func (h *RunControllerHandlers) start(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +43,7 @@ func (h *RunControllerHandlers) start(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("run_id and graph are required"))
 		return
 	}
-	info, err := h.Controller.Start(r.Context(), body.RunID, body.Graph)
+	info, err := h.Controller.Start(r.Context(), body.RunID, body.Graph, body.Budgets)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
