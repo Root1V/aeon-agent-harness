@@ -6,21 +6,26 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-29 (`aeon validate` real: JSON Schema + $ref multi-archivo).
+> Última actualización: 2026-08-29 (Typed Context Lanes reales: fidelity policy aplicada, no sólo declarada).
 
 ## Resumen ejecutivo
 
+F0 se considera suficientemente avanzada para seguir en orden a F1 (decisión del usuario); los
+`TODO`/`IN_PROGRESS` que quedan en F0 (Model Gateway con proveedores cloud, tracing) se retoman
+más adelante, no se movieron a `backlog.md` — siguen siendo parte del plan, sólo no son el foco
+ahora mismo.
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
-| F0 | Foundation durable | ~53% (9/17) | `IN_PROGRESS` |
-| F1 | Contexto y evidencia | 0% | `TODO` |
+| F0 | Foundation durable | ~53% (9/17) | `IN_PROGRESS` (en pausa, ver nota arriba) |
+| F1 | Contexto y evidencia | ~11% (1/9) | `IN_PROGRESS` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
 
-Bloqueos abiertos: ninguno. Supuesto pendiente de confirmar: forma de la API de la plataforma de
-inferencia local "Prometheus" del usuario (asumimos OpenAI-compatible — ver ADR-004).
+Bloqueos abiertos: ninguno. El supuesto sobre la API de Prometheus ya no está pendiente — resuelto
+con los hechos reales, ver ADR-004 y la nota de `MDL-006` en F0 abajo.
 
 **Progreso real verificado hoy:**
 - `RUN-004` (Checkpoint & replay) — [test_crash_resume_no_duplicate_write](python/tests/integration/test_crash_resume.py)
@@ -143,6 +148,22 @@ inferencia local "Prometheus" del usuario (asumimos OpenAI-compatible — ver AD
 El resto de F0 (Model Gateway con el resto de proveedores, routing/fallback, tabla de dedupe del
 Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
 
+**F1 — arrancada:**
+- `CTX-001` (Typed Context Lanes) — [test_context_lanes.py](python/tests/unit/test_context_lanes.py)
+  prueba que la fidelidad de cada lane se **aplica**, no sólo se declara: `L0_POLICY`
+  (`PINNED_EXACT`) sobrevive byte a byte sin reescritura ni truncado; `L2_EVIDENCE`
+  (`EVIDENCE_ATOMIC`) rechaza cualquier entrada sin `claim_id`/`source_id`; `L3_EPISODIC`
+  (`ADDRESSABLE`) acepta texto completo o un puntero `recall_id`, pero rechaza cualquier otra
+  forma. El mapeo lane→fidelidad es fijo por diseño (`LANE_FIDELITY`, no configurable por llamada)
+  para que sea estructuralmente imposible renderizar `L0` como si fuera resumible. La combinación
+  completa de las 7 lanes se probó determinista: `assemble()` con el mismo input produce salida
+  byte-idéntica, siempre en orden `L0..L6` fijo, sin importar el orden de inserción del dict de
+  entrada — la propiedad de "función pura" que el plan exige para que el context assembly sea
+  reproducible bajo replay. Fuera de alcance de `CTX-001` (llegan con `CTX-002..005`, `RAG-001`,
+  `MEM-*`): budgeting/orden por cache-hit, offload de tool I/O grande, compactación tipada, y
+  addressable recall — el módulo deja el punto de extensión (`_RENDERERS`) listo para cuando
+  lleguen, sin necesidad de tocar el enforcement ya existente.
+
 ---
 
 ## F0 — Foundation durable (semanas 1-4)
@@ -174,7 +195,7 @@ cuatro adaptadores cloud/local (`test_provider_parity`).
 
 | ID | Feature | Estado | Criterio de DONE | PR |
 |---|---|---|---|---|
-| CTX-001 | Typed Context Lanes (L0-L6) | `TODO` | `test_lane_fidelity_policy` en verde | — |
+| CTX-001 | Typed Context Lanes (L0-L6) | `DONE` | `test_lane_fidelity_policy` en verde | python/tests/unit/test_context_lanes.py |
 | CTX-002 | Context Budgeter (ensamblado por prioridad + cache-hit) | `TODO` | `test_budgeter_cache_stable_ordering` en verde | — |
 | CTX-003 | Offload (tool I/O grande → observation store + puntero) | `TODO` | `test_no_full_document_injection` en verde | — |
 | CTX-004 | Typed Compaction (fidelity policy por lane, no resumen uniforme) | `TODO` | `test_pinned_exact_survives_stress` en verde | — |
