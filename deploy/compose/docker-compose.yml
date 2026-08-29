@@ -222,6 +222,22 @@ services:
       AEON_MODELGW_ADDR: modelgw:9402
       AEON_TOOLGW_ADDR: toolgw:9403
 
+  runcontroller:
+    build:
+      context: ../../go
+      dockerfile: ../deploy/compose/Dockerfile.go
+      args:
+        CMD_PATH: ./cmd/aeon-runcontroller
+    profiles: ["core", "obs", "local-llm", "full"]
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      AEON_TEMPORAL_ADDRESS: temporal:7233
+    ports:
+      - "9404:9404"
+
 volumes:
   temporal-db-data:
   postgres-data:

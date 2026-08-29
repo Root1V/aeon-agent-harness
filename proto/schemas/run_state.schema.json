@@ -10,7 +10,7 @@
     "run_id": { "type": "string", "format": "uuid" },
     "tenant_id": { "type": "string" },
     "agent_manifest_ref": { "type": "string", "description": "name@version of the AgentManifest driving this run." },
-    "status": { "type": "string", "enum": ["PENDING", "RUNNING", "PAUSED_FOR_APPROVAL", "SUCCEEDED", "FAILED", "CANCELLED"] },
+    "status": { "type": "string", "enum": ["PENDING", "RUNNING", "PAUSED", "PAUSED_FOR_APPROVAL", "SUCCEEDED", "FAILED", "CANCELLED"], "description": "PAUSED is an operator-initiated pause (RUN-001, Run Controller); PAUSED_FOR_APPROVAL is a run blocked on a specific approval decision (RUN-005) — distinct because only the latter carries pending_approval." },
     "graph_cursor": {
       "type": "object",
       "description": "Position in the graph runtime (RUN-002): which node(s) are active/pending per branch.",

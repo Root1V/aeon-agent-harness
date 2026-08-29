@@ -20,6 +20,7 @@ looks like a hang (infinite backoff-retry) rather than a crash. See docs/adr/000
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -74,6 +75,11 @@ class GraphExecutionState:
     run_id: str
     context: dict[str, Any] = field(default_factory=dict)
     step_seq: int = 0
+    # RUN-001 (Run Controller): when set, checked before every node. A caller pauses a run purely
+    # by flipping whatever mutable flag this closure reads (see workflows/graph_run.py's `pause`/
+    # `resume` signals) — execute_graph itself has no notion of "paused", only "wait until told to
+    # proceed", which keeps this module Temporal-signal-agnostic.
+    is_paused: Callable[[], bool] = lambda: False
 
     def next_step_seq(self) -> int:
         self.step_seq += 1
@@ -85,6 +91,9 @@ async def execute_graph(node: dict[str, Any], state: GraphExecutionState) -> dic
     if not node_id:
         raise GraphError("every GraphNode requires an 'id'")
     kind = node.get("kind")
+
+    if state.is_paused():
+        await workflow.wait_condition(lambda: not state.is_paused())
 
     if kind == "tool_call":
         result = await _execute_tool_call(node, state)
