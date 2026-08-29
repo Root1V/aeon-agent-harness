@@ -88,12 +88,57 @@ func (c *Controller) Resume(ctx context.Context, workflowID string) error {
 	return nil
 }
 
+// PendingApproval fetches the run's pending_approval query (RUN-005), or nil if nothing is
+// currently pending. Shaped like RunState's pending_approval field (proto/schemas/run_state.schema.json).
+func (c *Controller) PendingApproval(ctx context.Context, workflowID string) (map[string]any, error) {
+	val, err := c.Client.QueryWorkflow(ctx, workflowID, "", "pending_approval")
+	if err != nil {
+		return nil, fmt.Errorf("runcontroller: pending_approval: %w", err)
+	}
+	var pending map[string]any
+	if err := val.Get(&pending); err != nil {
+		return nil, fmt.Errorf("runcontroller: pending_approval: decoding: %w", err)
+	}
+	return pending, nil
+}
+
+// Approve signals approval of toolCallHash. It first fetches the currently pending approval to
+// find its approval_id — a caller only ever needs to name the hash it saw in Status/
+// PendingApproval, not track approval_ids itself. The workflow (graph_run.py's _await_approval)
+// is what actually enforces that toolCallHash matches the parameters about to execute
+// (RUN-005's parameter binding) — passing it through unmodified here, rather than re-deriving it
+// from the pending approval, is what lets a caller approve the WRONG hash and be denied.
+func (c *Controller) Approve(ctx context.Context, workflowID, toolCallHash string) error {
+	return c.sendApprovalDecision(ctx, workflowID, "approve", toolCallHash)
+}
+
+// Reject signals rejection of toolCallHash.
+func (c *Controller) Reject(ctx context.Context, workflowID, toolCallHash string) error {
+	return c.sendApprovalDecision(ctx, workflowID, "reject", toolCallHash)
+}
+
+func (c *Controller) sendApprovalDecision(ctx context.Context, workflowID, signalName, toolCallHash string) error {
+	pending, err := c.PendingApproval(ctx, workflowID)
+	if err != nil {
+		return fmt.Errorf("runcontroller: %s: %w", signalName, err)
+	}
+	if pending == nil {
+		return fmt.Errorf("runcontroller: %s: no approval is currently pending for %s", signalName, workflowID)
+	}
+	decision := map[string]any{"approval_id": pending["approval_id"], "tool_call_hash": toolCallHash}
+	if err := c.Client.SignalWorkflow(ctx, workflowID, "", signalName, decision); err != nil {
+		return fmt.Errorf("runcontroller: %s: %w", signalName, err)
+	}
+	return nil
+}
+
 // Status is RunState's status field (proto/schemas/run_state.schema.json), derived from Temporal's
-// own execution status plus (while RUNNING) the workflow's own is_paused query.
+// own execution status plus (while RUNNING) the workflow's own is_paused/pending_approval queries.
 type Status struct {
 	WorkflowID      string         `json:"workflow_id"`
 	Status          string         `json:"status"`
 	Paused          bool           `json:"paused"`
+	PendingApproval map[string]any `json:"pending_approval,omitempty"`
 	BudgetsConsumed map[string]any `json:"budgets_consumed,omitempty"`
 }
 
@@ -108,11 +153,12 @@ func (c *Controller) Status(ctx context.Context, workflowID string) (*Status, er
 	temporalStatus := desc.WorkflowExecutionInfo.GetStatus()
 
 	paused := false
+	var pendingApproval map[string]any
 	if temporalStatus == enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING {
-		val, err := c.Client.QueryWorkflow(ctx, workflowID, "", "is_paused")
-		if err == nil {
+		if val, err := c.Client.QueryWorkflow(ctx, workflowID, "", "is_paused"); err == nil {
 			_ = val.Get(&paused)
 		}
+		pendingApproval, _ = c.PendingApproval(ctx, workflowID)
 	}
 
 	var budgetsConsumed map[string]any
@@ -122,17 +168,22 @@ func (c *Controller) Status(ctx context.Context, workflowID string) (*Status, er
 
 	return &Status{
 		WorkflowID:      workflowID,
-		Status:          mapStatus(temporalStatus, paused),
+		Status:          mapStatus(temporalStatus, paused, pendingApproval != nil),
 		Paused:          paused,
+		PendingApproval: pendingApproval,
 		BudgetsConsumed: budgetsConsumed,
 	}, nil
 }
 
 // mapStatus translates Temporal's execution status into RunState's status enum
-// (proto/schemas/run_state.schema.json).
-func mapStatus(s enumspb.WorkflowExecutionStatus, paused bool) string {
+// (proto/schemas/run_state.schema.json). A pending approval takes precedence over a plain pause —
+// PAUSED_FOR_APPROVAL is the more actionable of the two if somehow both were true at once.
+func mapStatus(s enumspb.WorkflowExecutionStatus, paused, hasPendingApproval bool) string {
 	switch s {
 	case enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING:
+		if hasPendingApproval {
+			return "PAUSED_FOR_APPROVAL"
+		}
 		if paused {
 			return "PAUSED"
 		}

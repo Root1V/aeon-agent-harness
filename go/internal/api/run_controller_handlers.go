@@ -22,6 +22,8 @@ func (h *RunControllerHandlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /runs/{run_id}/cancel", h.cancel)
 	mux.HandleFunc("POST /runs/{run_id}/pause", h.pause)
 	mux.HandleFunc("POST /runs/{run_id}/resume", h.resume)
+	mux.HandleFunc("POST /runs/{run_id}/approve", h.approve)
+	mux.HandleFunc("POST /runs/{run_id}/reject", h.reject)
 	mux.HandleFunc("GET /runs/{run_id}/stream", h.stream)
 }
 
@@ -78,6 +80,44 @@ func (h *RunControllerHandlers) pause(w http.ResponseWriter, r *http.Request) {
 
 func (h *RunControllerHandlers) resume(w http.ResponseWriter, r *http.Request) {
 	if err := h.Controller.Resume(r.Context(), workflowID(r.PathValue("run_id"))); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+type approvalDecisionRequest struct {
+	ToolCallHash string `json:"tool_call_hash"`
+}
+
+func (h *RunControllerHandlers) approve(w http.ResponseWriter, r *http.Request) {
+	var body approvalDecisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if body.ToolCallHash == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("tool_call_hash is required"))
+		return
+	}
+	if err := h.Controller.Approve(r.Context(), workflowID(r.PathValue("run_id")), body.ToolCallHash); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *RunControllerHandlers) reject(w http.ResponseWriter, r *http.Request) {
+	var body approvalDecisionRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if body.ToolCallHash == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("tool_call_hash is required"))
+		return
+	}
+	if err := h.Controller.Reject(r.Context(), workflowID(r.PathValue("run_id")), body.ToolCallHash); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}

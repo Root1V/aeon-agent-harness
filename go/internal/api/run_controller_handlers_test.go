@@ -88,6 +88,25 @@ func postAction(t *testing.T, srv *httptest.Server, runID, action string) {
 	}
 }
 
+func postApprovalDecision(t *testing.T, srv *httptest.Server, runID, action, toolCallHash string) *http.Response {
+	t.Helper()
+	raw, _ := json.Marshal(approvalDecisionRequest{ToolCallHash: toolCallHash})
+	resp, err := http.Post(srv.URL+"/runs/"+runID+"/"+action, "application/json", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("POST /runs/%s/%s: %v", runID, action, err)
+	}
+	return resp
+}
+
+// approvalGraph mirrors python/tests/integration/test_approval_binding.py's fixture graph — a
+// single tool_call node requiring approval.
+func approvalGraph(path string) map[string]any {
+	return map[string]any{
+		"id": "n0", "kind": "tool_call", "tool_name": "artifact.write",
+		"tool_args": map[string]any{"path": path}, "requires_approval": true,
+	}
+}
+
 func getStatus(t *testing.T, srv *httptest.Server, runID string) map[string]any {
 	t.Helper()
 	resp, err := http.Get(srv.URL + "/runs/" + runID)
@@ -213,6 +232,50 @@ func TestRunControllerLifecycle(t *testing.T) {
 		}
 		if toolCalls, _ := consumed["tool_calls"].(float64); toolCalls != 2 {
 			t.Fatalf("expected exactly 2 tool calls to have run before the hard stop, got %v", consumed)
+		}
+	})
+
+	t.Run("approvals are enforced end to end through the HTTP API", func(t *testing.T) {
+		// RUN-005, exercised through this Go layer (full parameter-binding coverage — rejection,
+		// mismatched-hash denial, expiry — lives in test_approval_binding.py): a run blocks on
+		// PAUSED_FOR_APPROVAL, and approving the hash actually seen in Status lets it complete.
+		runID := newRunID("approval")
+		startRun(t, srv, runID, approvalGraph("approval-test.txt"))
+
+		paused := waitForStatus(t, srv, runID, "PAUSED_FOR_APPROVAL", 15*time.Second)
+		pending, ok := paused["pending_approval"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected pending_approval in status, got %v", paused)
+		}
+		toolCallHash, _ := pending["tool_call_hash"].(string)
+		if toolCallHash == "" {
+			t.Fatalf("expected a non-empty tool_call_hash in pending_approval, got %v", pending)
+		}
+
+		resp := postApprovalDecision(t, srv, runID, "approve", toolCallHash)
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("POST /runs/%s/approve status = %d, want 202", runID, resp.StatusCode)
+		}
+
+		waitForStatus(t, srv, runID, "SUCCEEDED", 15*time.Second)
+	})
+
+	t.Run("approving the wrong hash is denied, not silently accepted", func(t *testing.T) {
+		runID := newRunID("approval-wrong-hash")
+		startRun(t, srv, runID, approvalGraph("approval-wrong-hash-test.txt"))
+		waitForStatus(t, srv, runID, "PAUSED_FOR_APPROVAL", 15*time.Second)
+
+		resp := postApprovalDecision(t, srv, runID, "approve", "not-the-real-hash")
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusAccepted {
+			t.Fatalf("POST /runs/%s/approve status = %d, want 202 (the signal itself is accepted; the workflow denies it)", runID, resp.StatusCode)
+		}
+
+		final := waitForStatus(t, srv, runID, "FAILED", 15*time.Second)
+		consumed, _ := final["budgets_consumed"].(map[string]any)
+		if toolCalls, _ := consumed["tool_calls"].(float64); toolCalls != 0 {
+			t.Fatalf("expected the call to never execute after a mismatched-hash approval, got %v", consumed)
 		}
 	})
 }

@@ -13,6 +13,7 @@
     },
     "tool_name": { "type": "string", "description": "kind=tool_call only." },
     "tool_args": { "type": "object", "description": "kind=tool_call only." },
+    "requires_approval": { "type": "boolean", "description": "kind=tool_call only (RUN-005). When true, execution blocks on a durable Temporal signal (approve/reject) bound to this exact node/tool/args via a SHA-256 hash (compute_tool_call_hash) — an approval granted for different parameters is rejected, not silently accepted." },
     "children": {
       "type": "array",
       "items": { "$ref": "#" },
