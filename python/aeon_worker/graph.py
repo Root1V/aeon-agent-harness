@@ -20,7 +20,9 @@ looks like a hang (infinite backoff-retry) rather than a crash. See docs/adr/000
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import hashlib
+import json
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
@@ -95,6 +97,24 @@ class BudgetsConsumed:
     cost_usd: float = 0.0
 
 
+class ApprovalDeniedError(GraphError):
+    """RUN-005: raised when a `requires_approval` tool_call's decision is a rejection, or an
+    approval was granted for parameters that don't match the call about to run (parameter
+    binding — see compute_tool_call_hash). Either way, the call never executes."""
+
+
+class ApprovalExpiredError(GraphError):
+    """RUN-005: raised when a `requires_approval` tool_call's TTL elapses with no decision at
+    all — a silent non-decision must not be treated as an approval."""
+
+
+def compute_tool_call_hash(node_id: str, tool_name: str, tool_args: dict[str, Any]) -> str:
+    """RUN-005's parameter binding: an approval is only valid for the EXACT (node, tool, args) it
+    was granted for. Canonical JSON (sorted keys) makes this stable regardless of dict ordering."""
+    canonical = json.dumps({"node_id": node_id, "tool_name": tool_name, "tool_args": tool_args}, sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _resolve_path(obj: Any, path: str) -> Any:
     """Walks a dotted path (e.g. 'result.status') through nested dicts. Missing keys resolve to
     _MISSING (distinct from a real None) so `exists` comparisons are unambiguous."""
@@ -140,6 +160,14 @@ class GraphExecutionState:
     # RUN-003 (Budgets): limits and running counts. See BudgetPolicy/BudgetsConsumed above.
     budgets: BudgetPolicy = field(default_factory=BudgetPolicy)
     consumed: BudgetsConsumed = field(default_factory=BudgetsConsumed)
+    # RUN-005 (Approvals): called for a tool_call node with requires_approval=true, given
+    # (node_id, tool_call_hash, ttl_seconds). Must raise ApprovalDeniedError/ApprovalExpiredError
+    # if the call must not proceed, and return normally if approved — see workflows/graph_run.py's
+    # `_await_approval`. None (the default) means no approval mechanism is wired; a node that sets
+    # requires_approval with this unset is a misconfiguration, not a silent pass-through (see
+    # _execute_tool_call) — approval gates must never be quietly skippable.
+    await_approval: Callable[[str, str, "int | None"], Awaitable[None]] | None = None
+    approval_ttl_seconds: int | None = None
 
     def next_step_seq(self) -> int:
         self.step_seq += 1
@@ -199,6 +227,15 @@ async def _execute_tool_call(node: dict[str, Any], state: GraphExecutionState) -
             f"tool_calls would exceed max_tool_calls={state.budgets.max_tool_calls} at node {node['id']!r}",
             reason="tool_calls_exceeded",
         )
+
+    if node.get("requires_approval"):
+        if state.await_approval is None:
+            raise GraphError(f"node {node['id']!r} sets requires_approval but no approval mechanism is wired")
+        tool_call_hash = compute_tool_call_hash(node["id"], node["tool_name"], node.get("tool_args", {}))
+        # Raises ApprovalDeniedError/ApprovalExpiredError and never returns if the call must not
+        # proceed — the tool_calls counter below is only reached once approval is actually granted.
+        await state.await_approval(node["id"], tool_call_hash, state.approval_ttl_seconds)
+
     state.consumed.tool_calls += 1
 
     inp = ExecuteToolInput(

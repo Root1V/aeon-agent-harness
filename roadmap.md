@@ -6,13 +6,13 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-29 (Budgets reales: tool_calls/depth/deadline con hard stop).
+> Última actualización: 2026-08-29 (Approvals reales: interrupt durable, parameter binding, expiry).
 
 ## Resumen ejecutivo
 
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
-| F0 | Foundation durable | ~41% (7/17) | `IN_PROGRESS` |
+| F0 | Foundation durable | ~47% (8/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 0% | `TODO` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
@@ -91,10 +91,28 @@ inferencia local "Prometheus" del usuario (asumimos OpenAI-compatible — ver AD
   también en vivo por HTTP contra `aeon-runcontroller` real: `budgets_consumed` es consultable
   incluso después de que el run termine en `FAILED`, porque Temporal responde queries sobre un
   workflow cerrado reproduciendo su historial.
+- `RUN-005` (Approvals) — [test_approval_binding.py](python/tests/integration/test_approval_binding.py)
+  prueba las cuatro salidas posibles de un nodo `tool_call` marcado `requires_approval: true`,
+  contra un Temporal efímero real: **aprobado** con el hash exacto → la tool se ejecuta de verdad;
+  **rechazado** → nunca se ejecuta; **aprobado con un hash distinto al que está pendiente**
+  (parameter binding — el corazón de esta feature, matching el criterio de la spec "aprobar con
+  args A, mutar a B antes de ejecutar → rechazo") → denegado, nunca se ejecuta; **expira sin
+  decisión** (TTL) → denegado, nunca se ejecuta. `pending_approval` es consultable durante la
+  espera y sigue la forma exacta de `RunState.pending_approval`. Verificado también en vivo por
+  HTTP contra `aeon-runcontroller` real: `POST /runs/{id}/approve` sólo necesita el `tool_call_hash`
+  que el cliente vio en `Status` — el controller resuelve el `approval_id` internamente consultando
+  `pending_approval`, así que un dashboard nunca necesita rastrear `approval_id`s.
+  **Nota de implementación real:** el diseño original de las señales `approve`/`reject` usaba dos
+  argumentos posicionales (`approval_id, tool_call_hash`) — funciona en Python-a-Python, pero el
+  cliente Go de Temporal (`SignalWorkflow`) sólo puede codificar **un** argumento por señal
+  (`dc.ToPayloads(arg)` envuelve exactamente un valor). Enviar dos habría fallado en runtime con el
+  mismo síntoma silencioso de intentos anteriores (fallo de decode → reintento infinito). Se
+  corrigió pasando un único payload estructurado (`{"approval_id":..., "tool_call_hash":...}`),
+  que además es la práctica correcta para cualquier señal que deba ser interoperable entre SDKs.
 
-El resto de F0 (Model Gateway con proveedores reales, aprobaciones, tabla de dedupe del Tool
-Gateway) siguen siendo stubs de scaffolding: compilan y sirven `/healthz`, pero no implementan
-lógica de negocio todavía — ver filas `TODO` abajo.
+El resto de F0 (Model Gateway con proveedores reales, tabla de dedupe del Tool Gateway) siguen
+siendo stubs de scaffolding: compilan y sirven `/healthz`, pero no implementan lógica de negocio
+todavía — ver filas `TODO` abajo.
 
 ---
 
@@ -108,7 +126,7 @@ lógica de negocio todavía — ver filas `TODO` abajo.
 | RUN-002 | Graph Runtime (sequential/parallel/conditional/loop/subgraph/fan-in) | `DONE` | `test_graph_runtime_node_kinds` en verde | python/tests/integration/test_graph_runtime.py |
 | RUN-003 | Budgets (tokens/calls/tools/cost/deadline/depth, hard stop) | `DONE` | `test_budget_hard_stop` en verde (tool_calls/depth/deadline; model_calls/tokens/cost_usd declarados, no aplicados hasta MDL-001) | python/tests/integration/test_budget_hard_stop.py |
 | RUN-004 | Checkpoint & replay (resume sin duplicar tool effects) | `DONE` | `test_crash_resume_no_duplicate_write` en verde | python/tests/integration/test_crash_resume.py |
-| RUN-005 | Approvals (interrupt durable, parameter binding, expiry) | `TODO` | `test_approval_binding` en verde | — |
+| RUN-005 | Approvals (interrupt durable, parameter binding, expiry) | `DONE` | `test_approval_binding` en verde (aprobado, rechazado, hash no coincide, expira) | python/tests/integration/test_approval_binding.py |
 | MDL-001 | Model Gateway (capability profiles, adapters, fallback, routing) | `TODO` | `test_model_gateway_routing_fallback` en verde | — |
 | MDL-003 | Adaptador `anthropic` | `TODO` | pasa `provider_conformance` | — |
 | MDL-004 | Adaptador `openai` | `TODO` | pasa `provider_conformance` | — |
