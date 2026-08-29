@@ -1,0 +1,55 @@
+{
+  "id": "root",
+  "kind": "sequential",
+  "children": [
+    { "id": "greet", "kind": "tool_call", "tool_name": "artifact.write", "tool_args": { "path": "greet.txt" } },
+    {
+      "id": "parallel-block",
+      "kind": "parallel",
+      "children": [
+        { "id": "p1", "kind": "tool_call", "tool_name": "artifact.write", "tool_args": { "path": "p1.txt" } },
+        { "id": "p2", "kind": "tool_call", "tool_name": "artifact.write", "tool_args": { "path": "p2.txt" } }
+      ]
+    },
+    {
+      "id": "branch-on-p1",
+      "kind": "conditional",
+      "condition": { "node_ref": "p1", "path": "result.status", "equals": "written" },
+      "if_true": { "id": "cond-true", "kind": "tool_call", "tool_name": "artifact.write", "tool_args": { "path": "cond-true.txt" } },
+      "if_false": { "id": "cond-false", "kind": "tool_call", "tool_name": "artifact.write", "tool_args": { "path": "cond-false.txt" } }
+    },
+    {
+      "id": "loop-stops-early",
+      "kind": "loop",
+      "max_iterations": 5,
+      "stop_condition": { "path": "result.status", "equals": "written" },
+      "body": { "id": "loop-stops-early-body", "kind": "tool_call", "tool_name": "artifact.write", "tool_args": { "path": "loop-early.txt" } }
+    },
+    {
+      "id": "loop-runs-full",
+      "kind": "loop",
+      "max_iterations": 3,
+      "stop_condition": { "path": "result.status", "equals": "never-matches" },
+      "body": { "id": "loop-runs-full-body", "kind": "tool_call", "tool_name": "artifact.write", "tool_args": { "path": "loop-full.txt" } }
+    },
+    {
+      "id": "wrapped-subgraph",
+      "kind": "subgraph",
+      "graph": {
+        "id": "inner-sequential",
+        "kind": "sequential",
+        "children": [
+          { "id": "inner-node", "kind": "tool_call", "tool_name": "artifact.write", "tool_args": { "path": "inner.txt" } }
+        ]
+      }
+    },
+    {
+      "id": "fan-in-block",
+      "kind": "fan_in",
+      "children": [
+        { "id": "f1", "kind": "tool_call", "tool_name": "artifact.write", "tool_args": { "path": "f1.txt" } },
+        { "id": "f2", "kind": "tool_call", "tool_name": "artifact.write", "tool_args": { "path": "f2.txt" } }
+      ]
+    }
+  ]
+}

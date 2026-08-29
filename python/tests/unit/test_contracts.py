@@ -59,3 +59,12 @@ def test_deep_research_policy_bundle_matches_schema():
     schema = json.loads((MANIFESTS_DIR / "policy_bundle.schema.json").read_text())
     doc = yaml.safe_load((EXAMPLES_DIR / "policy_bundle.yaml").read_text())
     Draft202012Validator(schema).validate(doc)
+
+
+def test_graph_all_node_kinds_fixture_matches_schema():
+    """Guards the same fixture tests/integration/test_graph_runtime.py executes against a real
+    Temporal server — a structural drift here (e.g. a typo'd 'kind') would otherwise only surface
+    as a runtime GraphError deep inside that slower integration test."""
+    schema = json.loads((SCHEMAS_DIR / "graph_spec.schema.json").read_text())
+    doc = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "graph_all_node_kinds.json").read_text())
+    Draft202012Validator(schema).validate(doc)

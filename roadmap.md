@@ -6,13 +6,13 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-28 (Cedar Policy Engine real, verificado en vivo).
+> Última actualización: 2026-08-29 (Graph Runtime real, los 6 tipos de nodo verificados).
 
 ## Resumen ejecutivo
 
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
-| F0 | Foundation durable | ~24% (4/17) | `IN_PROGRESS` |
+| F0 | Foundation durable | ~29% (5/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 0% | `TODO` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
@@ -43,10 +43,26 @@ inferencia local "Prometheus" del usuario (asumimos OpenAI-compatible — ver AD
   el default-deny de Cedar; y la política es por agente, no global (otro agente no hereda los
   permisos de `deep-research-general`). Verificado también en vivo por HTTP contra
   `aeon-toolgw` real corriendo en el compose stack.
+- `RUN-002` (Graph Runtime) — [test_graph_runtime_node_kinds](python/tests/integration/test_graph_runtime.py)
+  ejecuta [una única fixture](python/tests/fixtures/graph_all_node_kinds.json) (también
+  schema-validada en `test_contracts.py`, para que ambos tests no puedan divergir) que ejercita los
+  6 tipos de nodo en un solo árbol contra un Temporal efímero real: `sequential`, `parallel` (dos
+  tools corren de verdad, no se saltan), `conditional` (la rama se decide leyendo el resultado ya
+  ejecutado de un hermano — `if_false` nunca se ejecuta), `loop` (una vez frena antes por
+  `stop_condition`, otra agota `max_iterations`, cada iteración con su propia `idempotency_key` aun
+  con los mismos `tool_args`), `subgraph` (envuelve el resultado interno, no lo sustituye —
+  `graph_result`), y `fan_in` (mezcla los resultados de sus hijos en una sola lista). **Nota de
+  implementación real:** este feature expuso un bug genuino de Temporal Python SDK — el sandbox
+  sólo respeta `imports_passed_through()` si se declara en el fichero que define el `@workflow.defn`
+  directamente, no en un módulo helper que ese fichero importa (aunque el helper también esté
+  marcado passthrough). El síntoma no es un error de import: es un fallo determinista de decode
+  ("`name 'Any' is not defined`") que Temporal reintenta para siempre con backoff, indistinguible de
+  un cuelgue salvo leyendo el stderr del worker. Documentado en
+  [ADR-001](docs/adr/0001-temporal-determinism-boundary.md).
 
-El resto de F0 (Model Gateway con proveedores reales, aprobaciones, budgets, tabla de dedupe del
-Tool Gateway) siguen siendo stubs de scaffolding: compilan y sirven `/healthz`, pero no implementan
-lógica de negocio todavía — ver filas `TODO` abajo.
+El resto de F0 (Model Gateway con proveedores reales, aprobaciones, budgets, Run Controller, tabla
+de dedupe del Tool Gateway) siguen siendo stubs de scaffolding: compilan y sirven `/healthz`, pero
+no implementan lógica de negocio todavía — ver filas `TODO` abajo.
 
 ---
 
@@ -57,7 +73,7 @@ lógica de negocio todavía — ver filas `TODO` abajo.
 | FND-001 | Agent Registry (CRUD/versionado, lifecycle Draft→Candidate→Released→Retired) | `DONE` | `TestAgentRegistryLifecycle` en verde | go/internal/store/agent_registry_test.go |
 | FND-003 | Config-as-code (manifiestos en Git, UI no es source of truth) | `TODO` | `aeon validate` acepta/rechaza manifiestos de `examples/` | — |
 | RUN-001 | Run Controller (start/cancel/pause/resume/status/stream) | `TODO` | `test_run_controller_lifecycle` en verde | — |
-| RUN-002 | Graph Runtime (sequential/parallel/conditional/loop/subgraph/fan-in) | `TODO` | `test_graph_runtime_node_kinds` en verde | — |
+| RUN-002 | Graph Runtime (sequential/parallel/conditional/loop/subgraph/fan-in) | `DONE` | `test_graph_runtime_node_kinds` en verde | python/tests/integration/test_graph_runtime.py |
 | RUN-003 | Budgets (tokens/calls/tools/cost/deadline/depth, hard stop) | `TODO` | `test_budget_hard_stop` en verde | — |
 | RUN-004 | Checkpoint & replay (resume sin duplicar tool effects) | `DONE` | `test_crash_resume_no_duplicate_write` en verde | python/tests/integration/test_crash_resume.py |
 | RUN-005 | Approvals (interrupt durable, parameter binding, expiry) | `TODO` | `test_approval_binding` en verde | — |

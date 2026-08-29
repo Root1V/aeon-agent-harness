@@ -35,5 +35,24 @@ either crashes the workflow or silently diverges — undetected in dev, catastro
   accept this and bound the blast radius with a low `maximumAttempts` and per-attempt cost
   accounting (so a flaky retry doesn't silently multiply spend).
 - Any new node type in the Graph Runtime (RUN-002) must be reviewed for this boundary before merge.
-- Replay-based tests (`test_crash_resume_no_duplicate_write`) become the primary acceptance
-  evidence for RUN-004, not code review alone.
+- Replay-based tests (`test_crash_resume_no_duplicate_write`, `test_graph_runtime_node_kinds`)
+  become the primary acceptance evidence for RUN-002/RUN-004, not code review alone.
+
+## Implementation note: `imports_passed_through()` must be declared in the `@workflow.defn` file
+
+Discovered building RUN-002's Graph Runtime (python/aeon_worker/graph.py). Temporal's Python SDK
+sandbox re-executes whichever module actually defines the `@workflow.defn` class under a restricted
+import environment; `with workflow.unsafe.imports_passed_through(): import X` inside THAT file is
+what tells the sandbox "reuse the real `X` module object, don't reload it." Declaring the same
+`imports_passed_through()` block only in a *helper* module the workflow file imports (even one
+already itself marked passthrough) is not equivalent — it does not propagate transitively to that
+helper's own imports. The symptom is not an import error: it's Activity result decoding failing
+deterministically with `NameError: name 'Any' is not defined` (or similar) inside
+`get_type_hints()`, on every replay — which manifests as the workflow task retrying forever with
+Temporal's backoff, indistinguishable from a hang unless you read the worker's stderr.
+
+Rule: every workflow file (`workflows/*.py`) must directly declare `imports_passed_through()` for
+every module whose types cross an Activity/Workflow payload boundary — `ExecuteToolInput`,
+`ExecuteToolOutput`, `execute_tool_activity`, etc. — even if a helper module it imports already
+imports those names itself. See `agent_run.py` and `graph_run.py` for the pattern; `graph.py`'s
+module docstring carries the same note.

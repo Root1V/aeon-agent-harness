@@ -1,8 +1,9 @@
 """Worker process entrypoint: `python -m aeon_worker` (see deploy/compose/Dockerfile.python).
 
-Connects to Temporal and polls the AEON_TASK_QUEUE task queue, running AgentRunWorkflow and its
-Activities. Also used directly (not via compose) by tests/integration/test_crash_resume.py, which
-spawns this as a real OS subprocess so it can kill it to simulate a worker crash.
+Connects to Temporal and polls the AEON_TASK_QUEUE task queue, running AgentRunWorkflow,
+GraphRunWorkflow (RUN-002), and their Activities. Also used directly (not via compose) by
+tests/integration/test_crash_resume.py, which spawns this as a real OS subprocess so it can kill
+it to simulate a worker crash.
 """
 from __future__ import annotations
 
@@ -15,6 +16,7 @@ from temporalio.worker import Worker
 
 from aeon_worker.activities.tool_activities import execute_tool_activity
 from aeon_worker.workflows.agent_run import AgentRunWorkflow
+from aeon_worker.workflows.graph_run import GraphRunWorkflow
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("aeon_worker")
@@ -31,7 +33,7 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue=task_queue,
-        workflows=[AgentRunWorkflow],
+        workflows=[AgentRunWorkflow, GraphRunWorkflow],
         activities=[execute_tool_activity],
     )
     logger.info("worker ready, polling task_queue=%s", task_queue)

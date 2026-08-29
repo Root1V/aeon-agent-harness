@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon.dev/schemas/graph_spec.schema.json",
+  "title": "GraphNode",
+  "description": "A node in the Graph Runtime (RUN-002). Recursive: sequential/parallel/fan_in/conditional/loop/subgraph nodes contain child GraphNodes via 'children'/'if_true'/'if_false'/'body'/'graph'; tool_call is the only leaf kind. Evaluated by aeon_worker.graph.execute_graph inside a Temporal workflow (docs/adr/0001) — never call a model or tool outside this executor's Activity calls.",
+  "type": "object",
+  "required": ["id", "kind"],
+  "properties": {
+    "id": { "type": "string", "description": "Unique within the graph; used as the idempotency key's node_id component for tool_call leaves and as the key into the run's node-result context for conditional/loop references." },
+    "kind": {
+      "type": "string",
+      "enum": ["tool_call", "sequential", "parallel", "fan_in", "conditional", "loop", "subgraph"]
+    },
+    "tool_name": { "type": "string", "description": "kind=tool_call only." },
+    "tool_args": { "type": "object", "description": "kind=tool_call only." },
+    "children": {
+      "type": "array",
+      "items": { "$ref": "#" },
+      "description": "kind=sequential (run in order) | parallel (run concurrently) | fan_in (run concurrently, then merge each child's 'result' field into a single list)."
+    },
+    "condition": {
+      "type": "object",
+      "description": "kind=conditional only. { node_ref: <id already executed>, path: dotted path into that node's result, equals|exists: comparator }.",
+      "required": ["node_ref", "path"],
+      "properties": {
+        "node_ref": { "type": "string" },
+        "path": { "type": "string" },
+        "equals": {},
+        "exists": { "type": "boolean" }
+      }
+    },
+    "if_true": { "$ref": "#", "description": "kind=conditional only." },
+    "if_false": { "$ref": "#", "description": "kind=conditional only; optional — if omitted and the condition is false, the conditional node is a no-op." },
+    "body": { "$ref": "#", "description": "kind=loop only. Re-executed up to max_iterations times; each iteration's node id is '<body.id>[<iteration index>]', which keeps idempotency keys distinct per iteration." },
+    "max_iterations": { "type": "integer", "minimum": 1, "description": "kind=loop only. Hard bound — the loop runtime does not support unbounded loops (a taste of RUN-003's hard budgets, ahead of the full budget system)." },
+    "stop_condition": {
+      "type": "object",
+      "description": "kind=loop only, optional. { path: dotted path into the just-completed iteration's result, equals|exists: comparator }. When it matches after an iteration, the loop stops early with stopped_reason='condition_met' instead of running to max_iterations.",
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string" },
+        "equals": {},
+        "exists": { "type": "boolean" }
+      }
+    },
+    "graph": { "$ref": "#", "description": "kind=subgraph only. Executed recursively via the same executor; the result is { node_id, kind: 'subgraph', graph_result: <inner graph's result> } — wrapped, not transparent, so the subgraph node's own id stays findable in the result tree." }
+  }
+}
