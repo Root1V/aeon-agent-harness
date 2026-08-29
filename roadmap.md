@@ -118,10 +118,22 @@ inferencia local "Prometheus" del usuario (asumimos OpenAI-compatible — ver AD
   del `$ref`. Los cuatro `kind` soportados (`Agent`, `EvalSuite`, `PolicyBundle`,
   `ModelPolicyBundle`) se resuelven a su schema por convención de `$id`
   (`https://aeon.dev/manifests/<archivo>`), no por lógica hardcodeada por tipo.
+- `MDL-006` (`prometheus_inference`, **IN_PROGRESS**) — el adaptador es real, no un stub: OAuth2
+  `client_credentials` de verdad contra el auth-service de Prometheus (confirmado con el equipo de
+  la plataforma y contra una instancia local viva en `127.0.0.1:8020`/`9000`), con caché de token,
+  reintento automático con token fresco tras un 401, y `POST /v1/chat/completions` en formato
+  OpenAI real. `prometheus_inference_test.go` prueba todo esto contra un servidor falso que replica
+  el contrato documentado exacto (no un mock superficial): confirma que `GET /v1/models` es público,
+  que dos llamadas seguidas reusan el mismo token (no hay una petición redundante), y que un 401
+  fuerza exactamente un token nuevo y reintenta con él. Se creó también una interfaz `Provider`
+  única compartida (`go/internal/providers/provider.go`) — antes estaba duplicada idéntica en cada
+  uno de los 5 stubs. **Pendiente para pasar a `DONE`:** la suite `provider_conformance` (llega con
+  `EVAL-002`/F2) y una verificación en vivo con un modelo real registrado (la instancia de prueba
+  no tenía ninguno dado de alta en el momento de esta implementación). Ver
+  [ADR-004](docs/adr/0004-model-gateway-provider-abstraction.md), resuelto con los hechos reales.
 
-El resto de F0 (Model Gateway con proveedores reales, tabla de dedupe del Tool Gateway) siguen
-siendo stubs de scaffolding: compilan y sirven `/healthz`, pero no implementan lógica de negocio
-todavía — ver filas `TODO` abajo.
+El resto de F0 (Model Gateway con el resto de proveedores, routing/fallback, tabla de dedupe del
+Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
 
 ---
 
@@ -140,7 +152,7 @@ todavía — ver filas `TODO` abajo.
 | MDL-003 | Adaptador `anthropic` | `TODO` | pasa `provider_conformance` | — |
 | MDL-004 | Adaptador `openai` | `TODO` | pasa `provider_conformance` | — |
 | MDL-005 | Adaptador `gemini` | `TODO` | pasa `provider_conformance` | — |
-| MDL-006 | Adaptador `prometheus_inference` (LLM local) | `TODO` | pasa `provider_conformance`; ver ADR-004 | — |
+| MDL-006 | Adaptador `prometheus_inference` (LLM local) | `IN_PROGRESS` | pasa `provider_conformance` (suite no existe aún, llega con EVAL-002/F2); mientras tanto: `TestPrometheusInferenceRetriesOnceWithFreshTokenAfter401` y el resto de `prometheus_inference_test.go` en verde | go/internal/providers/prometheus_inference/prometheus_inference_test.go |
 | MDL-007 | Adaptador `openai_compatible` (vLLM/Ollama/TGI genérico) | `TODO` | pasa `provider_conformance` | — |
 | TOOL-001 | Tool Registry/Gateway (typed schemas, risk classification, scopes) | `DONE` | `TestToolRegistryCRUDAndRiskClassification` (registry) + `TestToolPolicyDeniesOutOfManifestToolCall` (gateway ejecuta con policy check real) | go/internal/store/tool_registry_test.go, go/internal/api/tool_gateway_handlers_test.go |
 | SEC-001 | Policy Engine (Cedar, authz fuera del modelo) | `DONE` | `TestToolPolicyDeniesOutOfManifestToolCall` en verde | go/internal/api/tool_gateway_handlers_test.go |
