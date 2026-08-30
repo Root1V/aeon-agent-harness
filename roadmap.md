@@ -6,26 +6,34 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-29 (los 5 adaptadores de Model Gateway reales + conformidad
-> cruzada mínima).
+> Última actualización: 2026-08-29 (OBS-001, distributed tracing, verificado en vivo contra un
+> OTel Collector + Tempo reales).
 
 ## Resumen ejecutivo
 
 F1 (Contexto y evidencia) se completó en su totalidad. Por decisión del usuario, antes de avanzar a
-F2 se está terminando lo pendiente de F0. Ya cerrado: Model Gateway con los 5 adaptadores
-(`MDL-001/003/004/005/006/007`) y la conformidad cruzada mínima. Sólo queda `OBS-001` (tracing).
+F2 se terminó lo pendiente de F0: Model Gateway con los 5 adaptadores
+(`MDL-001/003/004/005/006/007`), la conformidad cruzada mínima, y ahora `OBS-001` (tracing), con
+spans reales verificados en un OTel Collector + Tempo reales. Sólo queda una nota de infraestructura
+de desarrollo sobre el perfil `local-llm` de `deploy/compose` (ver la fila `—` de F0 abajo), no una
+feature con ID propio.
 
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
-| F0 | Foundation durable | ~88% (15/17) | `IN_PROGRESS` |
+| F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
 
-Bloqueos abiertos: ninguno. El supuesto sobre la API de Prometheus ya no está pendiente — resuelto
-con los hechos reales, ver ADR-004 y la nota de `MDL-006` en F0 abajo.
+Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
+F0): la imagen oficial `vllm/vllm-openai` (perfil `local-llm`) requiere GPU/CUDA y falla en hosts
+sin GPU — incluyendo el Mac Apple Silicon de este proyecto, verificado al levantar `--profile full`.
+`make dev` con `PROFILE=core` o `PROFILE=obs` (core+obs, sin `local-llm`) está completamente
+verificado y sano — es lo que este equipo usa día a día, con Prometheus como inferencia local real,
+no vLLM. El supuesto sobre la API de Prometheus ya no está pendiente — resuelto con los hechos
+reales, ver ADR-004 y la nota de `MDL-006` en F0 abajo.
 
 **Progreso real verificado hoy:**
 - `RUN-004` (Checkpoint & replay) — [test_crash_resume_no_duplicate_write](python/tests/integration/test_crash_resume.py)
@@ -348,15 +356,26 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
 | MDL-007 | Adaptador `openai_compatible` (vLLM/Ollama/TGI genérico) | `DONE` | pasa `provider_conformance` (versión mínima) | go/internal/providers/conformance_test.go, go/internal/providers/openai_compatible/openai_compatible_test.go |
 | TOOL-001 | Tool Registry/Gateway (typed schemas, risk classification, scopes) | `DONE` | `TestToolRegistryCRUDAndRiskClassification` (registry) + `TestToolPolicyDeniesOutOfManifestToolCall` (gateway ejecuta con policy check real) | go/internal/store/tool_registry_test.go, go/internal/api/tool_gateway_handlers_test.go |
 | SEC-001 | Policy Engine (Cedar, authz fuera del modelo) | `DONE` | `TestToolPolicyDeniesOutOfManifestToolCall` en verde | go/internal/api/tool_gateway_handlers_test.go |
-| OBS-001 | Distributed tracing (OTel GenAI semantic conventions) | `TODO` | spans `invoke_agent`/`chat`/`execute_tool` visibles en Tempo | — |
+| OBS-001 | Distributed tracing (OTel GenAI semantic conventions) | `DONE` | `TestDistributedTracingSpansReachTempo` en verde — spans reales `invoke_agent`/`chat`/`execute_tool` emitidos por el Run Controller/Model Gateway/Tool Gateway, exportados por un OTel Collector real y encontrados en una Tempo real vía TraceQL | go/internal/api/tracing_integration_test.go |
 | — | `deploy/compose` completo (Temporal, Postgres+pgvector, MinIO, OTel, Tempo, Grafana) | `IN_PROGRESS` | `make dev` levanta todos los servicios sanos | — |
 
-**Salida de fase — parcialmente cumplida:** `test_crash_resume_no_duplicate_write` en verde ✅;
+**Nota sobre la fila `deploy/compose` completo:** perfiles `core` y `obs` (Temporal, Postgres,
+MinIO, OTel Collector, Tempo, control plane y gateways) verificados sanos end-to-end durante el
+trabajo de `OBS-001`. El perfil `local-llm` (`vllm/vllm-openai`) requiere GPU/CUDA y no arranca en
+un host sin GPU — no es un defecto de este compose sino una limitación de esa imagen oficial; no
+bloquea a F2, que puede correr con `PROFILE=core`/`PROFILE=obs` más Prometheus como inferencia
+local real. Queda `IN_PROGRESS` en vez de `DONE` porque el criterio tal como está escrito ("todos
+los servicios") no se puede prometer para `local-llm` en este tipo de host; requiere una decisión
+explícita (¿excluir `vllm` del criterio, o sustituirlo por un servidor CPU-compatible?) antes de
+cerrarse — ver `backlog.md`.
+
+**Salida de fase — cumplida:** `test_crash_resume_no_duplicate_write` en verde ✅;
 `TestProviderConformance` prueba que el mismo request representativo pasa contra los 5 adaptadores
-(cloud + local) con la misma forma normalizada de salida ✅ — pero es la versión **mínima** de
+(cloud + local) con la misma forma normalizada de salida ✅ — es la versión **mínima** de
 `provider_conformance`, no la suite completa de `EVAL-002`/F2 (tool calling real, structured
-output, respeto de constraints, contexto largo, rechazo de inyección). Sigue pendiente: `OBS-001`
-(tracing).
+output, respeto de constraints, contexto largo, rechazo de inyección), que queda para F2/EVAL-002;
+`TestDistributedTracingSpansReachTempo` en verde ✅. Sólo la nota de `deploy/compose`/`local-llm`
+de arriba queda abierta, sin bloquear F2.
 
 ## F1 — Contexto y evidencia (semanas 5-8)
 

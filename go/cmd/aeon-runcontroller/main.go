@@ -5,6 +5,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/api"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	"github.com/aeon-ai/aeon/go/internal/runcontroller"
+	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
 
 func main() {
@@ -21,6 +23,16 @@ func main() {
 		os.Setenv("AEON_PORT", p)
 	} else {
 		os.Setenv("AEON_PORT", "9404")
+	}
+
+	otelEndpoint := os.Getenv("AEON_OTEL_ENDPOINT")
+	if otelEndpoint == "" {
+		otelEndpoint = "otel-collector:4318"
+	}
+	if _, shutdown, err := tracing.Init(context.Background(), "aeon-runcontroller", otelEndpoint); err != nil {
+		log.Printf("aeon-runcontroller: tracing disabled: %v", err)
+	} else {
+		defer shutdown(context.Background())
 	}
 
 	address := os.Getenv("AEON_TEMPORAL_ADDRESS")

@@ -119,3 +119,21 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Fase objetivo:** F5.
 - **Criterio de entrada:** hay tráfico de producción real que justifique despliegue progresivo.
 - **Coste:** L.
+
+### Servidor local-llm compatible con CPU (reemplazo o complemento de vLLM en `deploy/compose`)
+
+- **Descripción:** el servicio `vllm` del perfil `local-llm` (`deploy/compose/docker-compose.yml`)
+  usa la imagen oficial `vllm/vllm-openai`, que requiere GPU/CUDA y falla al arrancar en cualquier
+  host sin GPU — incluyendo el Mac Apple Silicon de este proyecto (verificado al levantar
+  `--profile full`; ver la nota de la fila `deploy/compose completo` en `roadmap.md` F0). No
+  bloquea el desarrollo actual porque el equipo usa Prometheus (externo) como inferencia local
+  real, no este servicio de desarrollo/CI.
+- **Fase objetivo:** sin fase fija — infraestructura de desarrollo, no una feature de producto.
+- **Criterio de entrada:** alguien necesita `PROFILE=local-llm`/`full` funcionando en un host sin
+  GPU (p. ej. CI, o desarrollo sin acceso a un endpoint local-inference externo). La solución es
+  sustituir o complementar `vllm` por un servidor CPU-compatible que hable el mismo wire format
+  OpenAI Chat Completions (p. ej. Ollama con su endpoint `/v1` experimental, o llama.cpp server) —
+  o, más simple, excluir `vllm` del criterio de "todos los servicios sanos" de `make dev` y
+  documentar que `local-llm` requiere GPU explícitamente.
+- **Coste:** S si sólo se documenta/excluye el criterio; M si se sustituye por un servidor real
+  CPU-compatible (implica validar que el adaptador `openai_compatible` sigue funcionando contra él).

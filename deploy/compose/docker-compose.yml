@@ -112,7 +112,10 @@ services:
     depends_on: [tempo]
 
   tempo:
-    image: grafana/tempo:latest
+    # Pinned (not :latest): v3.0 restructured compaction/retention config into a distributed
+    # "backend_scheduler" model incompatible with this single-binary compose deployment's
+    # tempo-config.yaml. 2.7.1 is the last release on the config schema this file uses.
+    image: grafana/tempo:2.7.1
     profiles: ["obs", "full"]
     command: ["-config.file=/etc/tempo.yaml"]
     volumes:

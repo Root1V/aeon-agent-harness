@@ -14,8 +14,18 @@ import (
 	"fmt"
 	"sort"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/aeon-ai/aeon/go/internal/providers"
 )
+
+// tracer emits OBS-001's "chat" spans (OTel GenAI semantic conventions) around each provider
+// attempt. A no-op until some binary calls tracing.Init (go/internal/tracing) — safe to use from
+// any caller, instrumented or not.
+var tracer = otel.Tracer("aeon-modelgw")
 
 // Candidate mirrors one entry of ModelProfile's candidates[] (proto/schemas/model_profile.schema.json).
 type Candidate struct {
@@ -106,11 +116,21 @@ func (g *Gateway) Decide(
 		}
 		input["model"] = c.Model
 
-		output, err := provider.Decide(ctx, input)
+		spanCtx, span := tracer.Start(ctx, "chat", trace.WithAttributes(
+			attribute.String("gen_ai.operation.name", "chat"),
+			attribute.String("gen_ai.system", c.Provider),
+			attribute.String("gen_ai.request.model", c.Model),
+		))
+		output, err := provider.Decide(spanCtx, input)
 		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			span.End()
 			attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model, Err: err.Error()})
 			continue
 		}
+		span.SetStatus(codes.Ok, "")
+		span.End()
 
 		attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model})
 		return &DecisionResult{ProviderUsed: c.Provider, Model: c.Model, Output: output, Attempts: attempts}, nil
