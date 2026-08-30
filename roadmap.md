@@ -7,8 +7,8 @@
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
 > Última actualización: 2026-08-30 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha —
-> `DR-001`..`DR-005`, `EVAL-001` y ahora `EVAL-002`: `aeon eval run deep_research_core` ejecuta el
-> pipeline real de Deep Research offline y produce un reporte real).
+> `DR-001`..`DR-005`, `EVAL-001`..`EVAL-003`: la promoción Candidate→Released del Agent Registry
+> ahora bloquea de verdad ante una regresión real de eval).
 
 ## Resumen ejecutivo
 
@@ -88,11 +88,23 @@ como ruta contenedora) — es un puente real, aunque temporal: cuando el motor t
 servicio (como el Model Gateway tras `DR-001`), este `exec.Command` deja de ser necesario. "Provider
 matrix" y "trace graders" quedan fuera de este primer Runner — ver `backlog.md`.
 
+`EVAL-003` (Release Gates) añadió `aeon_evalops/release_gate.py::evaluate_release_gate`: compara
+dos `SuiteReport` (el baseline del `Released` actual y el del candidato) y bloquea la promoción si
+algún grader empeoró frente al baseline — **aunque el candidato siga pasando el umbral estático de
+`EVAL-002`** (ese es exactamente el caso que prueba `test_release_gate_blocks_regression_even_when_
+still_above_threshold`: 1.0→0.85 con umbral 0.8). Un grader `SKIPPED` en cualquiera de los dos lados,
+o sin contraparte en el baseline, nunca bloquea ni desbloquea por sí solo. El Agent Registry en Go
+(`go/internal/store/agent_registry.go`) ahora APLICA de verdad esa decisión: `TransitionLifecycle`
+exige `ReleaseGateDecision.Allowed` para el paso Candidate→Released específicamente (ignorado en
+cualquier otra transición) — probado contra Postgres real en `TestAgentRegistryReleaseGateBlocksPromotion`.
+El registry nunca calcula el veredicto, sólo lo aplica — la misma separación Decision/workflow de
+ADR-001.
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | ~54% (7/13) | `IN_PROGRESS` |
+| F2 | Deep Research + EvalOps (**MVP**) | ~62% (8/13) | `IN_PROGRESS` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -477,7 +489,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 | DR-005 | Citation Verifier (claim-to-evidence, repair-from-ledger) | `DONE` | familia `test_reporter_cannot_invent_citations` en verde | python/tests/unit/test_citation_verifier.py |
 | EVAL-001 | Eval Registry (datasets, graders, thresholds, versions) | `DONE` | `TestAeonEvalListShowsSuitesFromEvalsDir` en verde — `aeon eval list` muestra las 4 suites reales de `evals/suites` (las mismas que nombra `examples/deep-research/agent.yaml`'s `evalGates`) | go/cmd/aeon/main_test.go |
 | EVAL-002 | Eval Runner (offline/repeated trials/provider matrix/trace graders) | `DONE` | `aeon eval run deep_research_core` produce reporte real — ver `test_eval_run_produces_a_report_for_deep_research_core` (motor) y `TestAeonEvalRun` (CLI) en verde. Sólo "offline" y "repeated trials" son reales hoy; "provider matrix" y "trace graders" quedan en `backlog.md` | python/tests/unit/test_eval_runner.py, go/cmd/aeon/main_test.go |
-| EVAL-003 | Release Gates (bloquear promoción por regresión) | `TODO` | `test_release_gate_blocks_regression` en verde | — |
+| EVAL-003 | Release Gates (bloquear promoción por regresión) | `DONE` | `test_release_gate_blocks_regression_even_when_still_above_threshold` en verde (motor) + `TestAgentRegistryReleaseGateBlocksPromotion` en verde (aplicación real en el registry) | python/tests/unit/test_release_gate.py, go/internal/store/agent_registry_test.go |
 | DX-001 | SDK Python (start_run, tools, contexts, memory, traces, approvals) | `TODO` | `examples/deep-research` corre con `aeon_sdk` | — |
 | DX-002 | CLI (init/validate/run/eval/trace/replay/publish) | `TODO` | los 7 subcomandos ejecutan sin error contra el compose | — |
 | DX-003 | Template Deep Research | `TODO` | `examples/deep-research/agent.yaml` válido y ejecutable | — |

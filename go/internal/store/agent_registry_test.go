@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -60,14 +61,19 @@ func TestAgentRegistryLifecycle(t *testing.T) {
 	}
 
 	// Skipping a state must be rejected (Draft -> Released is not a single step).
-	if _, err := registry.TransitionLifecycle(ctx, name, version, LifecycleReleased); !errors.Is(err, ErrInvalidTransition) {
+	if _, err := registry.TransitionLifecycle(ctx, name, version, LifecycleReleased, ReleaseGateDecision{}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("Draft->Released: got %v, want ErrInvalidTransition", err)
 	}
 
-	// Walk the lifecycle forward one step at a time.
+	// Walk the lifecycle forward one step at a time. The Candidate -> Released step needs an
+	// Allowed release gate decision (EVAL-003) — every other step ignores it.
 	forward := []string{LifecycleCandidate, LifecycleReleased, LifecycleRetired}
 	for _, target := range forward {
-		rec, err := registry.TransitionLifecycle(ctx, name, version, target)
+		gate := ReleaseGateDecision{}
+		if target == LifecycleReleased {
+			gate = ReleaseGateDecision{Allowed: true, Reason: "eval suite passed with no regression (test fixture)"}
+		}
+		rec, err := registry.TransitionLifecycle(ctx, name, version, target, gate)
 		if err != nil {
 			t.Fatalf("transition to %s: %v", target, err)
 		}
@@ -77,7 +83,7 @@ func TestAgentRegistryLifecycle(t *testing.T) {
 	}
 
 	// Retired is terminal: no further transition is valid, including re-requesting Retired.
-	if _, err := registry.TransitionLifecycle(ctx, name, version, LifecycleRetired); !errors.Is(err, ErrInvalidTransition) {
+	if _, err := registry.TransitionLifecycle(ctx, name, version, LifecycleRetired, ReleaseGateDecision{}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("transition from terminal Retired: got %v, want ErrInvalidTransition", err)
 	}
 
@@ -111,4 +117,60 @@ func TestAgentRegistryLifecycle(t *testing.T) {
 	if _, err := registry.Get(ctx, "does-not-exist", "0.0.0"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get missing agent: got %v, want ErrNotFound", err)
 	}
+}
+
+// TestAgentRegistryReleaseGateBlocksPromotion is EVAL-003's registry-side integration test: a
+// Candidate can't reach Released without an Allowed ReleaseGateDecision (computed elsewhere, by
+// aeon_evalops.release_gate.evaluate_release_gate — see python/tests/unit/test_release_gate.py's
+// test_release_gate_blocks_regression for the actual regression-detection logic this store applies
+// but never computes itself), and a blocked promotion leaves the agent's lifecycle unchanged.
+func TestAgentRegistryReleaseGateBlocksPromotion(t *testing.T) {
+	s := newTestStore(t)
+	registry := s.AgentRegistry()
+	ctx := context.Background()
+
+	name := "test-agent-gate-" + randSuffix(t)
+	version := "0.1.0"
+	if _, err := registry.Create(ctx, testAgentManifest(name, version), "test-owner"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := registry.TransitionLifecycle(ctx, name, version, LifecycleCandidate, ReleaseGateDecision{}); err != nil {
+		t.Fatalf("Draft->Candidate: %v", err)
+	}
+
+	t.Run("a blocked gate rejects the promotion and leaves the agent at Candidate", func(t *testing.T) {
+		_, err := registry.TransitionLifecycle(ctx, name, version, LifecycleReleased, ReleaseGateDecision{
+			Allowed: false, Reason: "citation_integrity_grader regressed from 1.000 to 0.900",
+		})
+		if !errors.Is(err, ErrReleaseGateBlocked) {
+			t.Fatalf("got %v, want ErrReleaseGateBlocked", err)
+		}
+		if !strings.Contains(err.Error(), "regressed") {
+			t.Errorf("expected the gate's own reason in the error, got: %v", err)
+		}
+
+		rec, getErr := registry.Get(ctx, name, version)
+		if getErr != nil {
+			t.Fatalf("Get: %v", getErr)
+		}
+		if rec.Lifecycle != LifecycleCandidate {
+			t.Fatalf("lifecycle after a blocked promotion = %q, want unchanged %q", rec.Lifecycle, LifecycleCandidate)
+		}
+	})
+
+	t.Run("an allowed gate lets the same promotion through", func(t *testing.T) {
+		rec, err := registry.TransitionLifecycle(ctx, name, version, LifecycleReleased, ReleaseGateDecision{Allowed: true})
+		if err != nil {
+			t.Fatalf("TransitionLifecycle with an allowed gate: %v", err)
+		}
+		if rec.Lifecycle != LifecycleReleased {
+			t.Fatalf("lifecycle = %q, want %q", rec.Lifecycle, LifecycleReleased)
+		}
+	})
+
+	t.Run("the gate is ignored for every transition other than Candidate->Released", func(t *testing.T) {
+		if _, err := registry.TransitionLifecycle(ctx, name, version, LifecycleRetired, ReleaseGateDecision{Allowed: false}); err != nil {
+			t.Fatalf("Released->Retired should ignore the gate entirely, got: %v", err)
+		}
+	})
 }
