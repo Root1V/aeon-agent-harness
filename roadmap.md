@@ -7,8 +7,7 @@
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
 > Última actualización: 2026-08-30 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha —
-> `DR-001`..`DR-005` completos: todo el pipeline Planner→Researchers→Sufficiency Gate→
-> Reporter→Citation Verifier, puro y con test de aceptación real cada uno).
+> `DR-001`..`DR-005` completos y ahora `EVAL-001`: `aeon eval list` es real contra `evals/suites`).
 
 ## Resumen ejecutivo
 
@@ -68,11 +67,19 @@ draft), sustituye la cita por esa claim real; si ninguna coincide, la marca `unr
 y sin Temporal): Planner → Researchers aislados → Sufficiency Gate → Reporter sin tools → Citation
 Verifier.
 
+`EVAL-001` (Eval Registry) creó `evals/suites/*.yaml` — 4 `EvalSuite` reales (config-as-code, igual
+que `AgentManifest`): `deep_research_core`, `citation_integrity`, `injection_suite`,
+`provider_conformance` (exactamente los 4 que `examples/deep-research/agent.yaml` nombra en
+`evalGates`, con datasets reales en `evals/datasets/*.jsonl`), y `aeon eval list` (`go/cmd/aeon/main.go`)
+los lee, valida cada uno contra `eval_suite.schema.json` (un suite inválido es un error duro, no se
+salta en silencio) e imprime nombre/versión/dataset/graders/thresholds/gateOn. Reutiliza la misma
+infraestructura de `aeon validate` (FND-003) para cargar y resolver `$ref` entre schemas.
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | ~38% (5/13) | `IN_PROGRESS` |
+| F2 | Deep Research + EvalOps (**MVP**) | ~46% (6/13) | `IN_PROGRESS` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -455,7 +462,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 | DR-003 | Sufficiency Gate (coverage matrix, contradiction gate, replanning) | `DONE` | familia `test_sufficiency_gate_replans` en verde | python/tests/unit/test_sufficiency_gate.py |
 | DR-004 | Tool-less Reporter (output sólo desde allowed_claim_ids) | `DONE` | `test_reporter_no_tools_available` en verde | python/tests/unit/test_reporter.py |
 | DR-005 | Citation Verifier (claim-to-evidence, repair-from-ledger) | `DONE` | familia `test_reporter_cannot_invent_citations` en verde | python/tests/unit/test_citation_verifier.py |
-| EVAL-001 | Eval Registry (datasets, graders, thresholds, versions) | `TODO` | `aeon eval list` muestra las suites de `evals/suites` | — |
+| EVAL-001 | Eval Registry (datasets, graders, thresholds, versions) | `DONE` | `TestAeonEvalListShowsSuitesFromEvalsDir` en verde — `aeon eval list` muestra las 4 suites reales de `evals/suites` (las mismas que nombra `examples/deep-research/agent.yaml`'s `evalGates`) | go/cmd/aeon/main_test.go |
 | EVAL-002 | Eval Runner (offline/repeated trials/provider matrix/trace graders) | `TODO` | `aeon eval run deep_research_core` produce reporte | — |
 | EVAL-003 | Release Gates (bloquear promoción por regresión) | `TODO` | `test_release_gate_blocks_regression` en verde | — |
 | DX-001 | SDK Python (start_run, tools, contexts, memory, traces, approvals) | `TODO` | `examples/deep-research` corre con `aeon_sdk` | — |

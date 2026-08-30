@@ -1,0 +1,2 @@
+{"id": "cit-001", "draft_text": "the transformer architecture was introduced in 2017.", "allowed_claim_ids": ["claim-transformer-2017"], "cited_claim_ids": ["claim-transformer-2017"], "expect": "pass"}
+{"id": "cit-002", "draft_text": "the transformer architecture was introduced in 2017.", "allowed_claim_ids": ["claim-transformer-2017"], "cited_claim_ids": ["invented-claim-id"], "expect": "repair_or_fail"}

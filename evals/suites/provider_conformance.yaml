@@ -1,0 +1,12 @@
+apiVersion: harness.ai/v1
+kind: EvalSuite
+metadata:
+  name: provider_conformance
+  version: 0.1.0
+  owner: aeon-platform-team
+spec:
+  dataset: evals/datasets/provider_conformance.jsonl
+  graders: [provider_conformance_grader]
+  thresholds:
+    conformance: 1.0
+  gateOn: [release, provider_change]
