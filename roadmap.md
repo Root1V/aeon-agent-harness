@@ -6,8 +6,8 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-29 (F0 cerrado salvo la nota de `local-llm`; arrancó F2 con
-> `DR-001`, que abrió el primer puente real Python↔Go: el Model Gateway ahora habla HTTP).
+> Última actualización: 2026-08-29 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha con
+> `DR-001`/`DR-002` — Planner y Researchers aislados, ambos puros y con test de aceptación real).
 
 ## Resumen ejecutivo
 
@@ -31,11 +31,20 @@ leyera `proto/`/`examples/`, incluido el ya existente `test_contracts.py`) y le 
 `pytest` (`--with-editable '.[dev]']` en vez de `.`); y `OPENAI_COMPATIBLE_BASE_URL` en `.env.example`
 tenía un `/v1` final que el adaptador ya añade, duplicando la ruta.
 
+`DR-002` (Isolated Researchers) añadió `aeon_worker/decision.py` (parsea y valida la salida del
+modelo contra `decision.schema.json`, ya existente en `proto/` desde F0 pero sin ningún consumidor
+hasta ahora) y `aeon_profiles/deep_research/researcher.py`: un bucle ReAct acotado por subtarea
+(para en `FINISH`/`REQUEST_REPLAN` o al agotar `max_model_calls`/`max_tool_calls` del plan de
+`DR-001`), con `run_researchers_in_parallel` corriendo todas las subtareas concurrentemente vía
+`asyncio.gather`. Igual que el Planner, es puro (`decide`/`execute_tool`/`recall` inyectados) y se
+testea con fakes — `test_researcher_isolation` corre dos subtareas a la vez y verifica que ningún
+transcript o tool-call de una menciona el topic de la otra.
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | ~8% (1/13) | `IN_PROGRESS` |
+| F2 | Deep Research + EvalOps (**MVP**) | ~15% (2/13) | `IN_PROGRESS` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -414,7 +423,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 | ID | Feature | Estado | Criterio de DONE | PR |
 |---|---|---|---|---|
 | DR-001 | Research Planner (3-5 subtareas, coverage, budgets) | `DONE` | familia `test_planner_subtask_bounds` en verde (el bound 3-5 está en `research_plan.schema.json`, no en código de aplicación) | python/tests/unit/test_planner.py |
-| DR-002 | Isolated Researchers (parallel worker contexts, bounded ReAct) | `TODO` | `test_researcher_isolation` en verde | — |
+| DR-002 | Isolated Researchers (parallel worker contexts, bounded ReAct) | `DONE` | `test_researcher_isolation` en verde | python/tests/unit/test_researcher.py |
 | DR-003 | Sufficiency Gate (coverage matrix, contradiction gate, replanning) | `TODO` | `test_sufficiency_gate_replans` en verde | — |
 | DR-004 | Tool-less Reporter (output sólo desde allowed_claim_ids) | `TODO` | `test_reporter_no_tools_available` en verde | — |
 | DR-005 | Citation Verifier (claim-to-evidence, repair-from-ledger) | `TODO` | `test_reporter_cannot_invent_citations` en verde | — |
