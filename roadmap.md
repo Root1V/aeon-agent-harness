@@ -6,9 +6,9 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-29 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha con
-> `DR-001`..`DR-004` — Planner, Researchers aislados, Sufficiency Gate y Reporter sin tools, todos
-> puros y con test de aceptación real).
+> Última actualización: 2026-08-30 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha —
+> `DR-001`..`DR-005` completos: todo el pipeline Planner→Researchers→Sufficiency Gate→
+> Reporter→Citation Verifier, puro y con test de aceptación real cada uno).
 
 ## Resumen ejecutivo
 
@@ -56,11 +56,23 @@ toma sólo las claims de subtareas que `DR-003` marcó cubiertas y no impugnadas
 (`ReporterError`, sin reparar) cualquier reporte que cite un `claim_id` fuera de ese conjunto
 permitido; reparar una cita real pero mal formada es trabajo de `DR-005`.
 
+`DR-005` (Citation Verifier) cierra el pipeline de Deep Research: `aeon_profiles/deep_research/
+citation_verifier.py` es un segundo chequeo, independiente y de sólo lectura, sobre un
+`ReportDraft` — no confía en que `DR-004` ya lo haya filtrado (defensa en profundidad, igual que
+RUN-003 verifica presupuestos en dos sitios). Para cada cita que no resuelve contra
+`select_allowed_claims`, intenta reparación determinista: si el propio texto del draft ya contiene
+literalmente el `quote` de alguna claim permitida (y aún no usada por otra reparación en el mismo
+draft), sustituye la cita por esa claim real; si ninguna coincide, la marca `unrepairable` y
+`verified=False` — nunca inventa evidencia para tapar el hueco. Con esto, `DR-001`→`DR-002`→
+`DR-003`→`DR-004`→`DR-005` forma un pipeline real y encadenado (aunque cada pieza sigue siendo pura
+y sin Temporal): Planner → Researchers aislados → Sufficiency Gate → Reporter sin tools → Citation
+Verifier.
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | ~31% (4/13) | `IN_PROGRESS` |
+| F2 | Deep Research + EvalOps (**MVP**) | ~38% (5/13) | `IN_PROGRESS` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -266,7 +278,7 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   excede el presupuesto de tokens del modelo destino. `enforce()` lanza `IntegrityViolation` con
   las tres categorías de violación reportadas juntas si coinciden, no sólo la primera que
   encuentra — se probó explícitamente. Esto es el equivalente, del lado del contexto de ENTRADA,
-  a lo que `DR-005` (Citation Verifier, `TODO`) hará del lado de la SALIDA del modelo.
+  a lo que `DR-005` (Citation Verifier, `DONE`) hace del lado de la SALIDA del modelo.
 - `RAG-001` (Retrieval Gateway) — [test_retrieval_gateway.py](python/tests/unit/test_retrieval_gateway.py)
   prueba el invariante que más importa: **el ACL lo aplica el gateway, nunca el connector**. Un
   documento fuera del scope del principal nunca llega, aunque sería el resultado más relevante
@@ -442,7 +454,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 | DR-002 | Isolated Researchers (parallel worker contexts, bounded ReAct) | `DONE` | `test_researcher_isolation` en verde | python/tests/unit/test_researcher.py |
 | DR-003 | Sufficiency Gate (coverage matrix, contradiction gate, replanning) | `DONE` | familia `test_sufficiency_gate_replans` en verde | python/tests/unit/test_sufficiency_gate.py |
 | DR-004 | Tool-less Reporter (output sólo desde allowed_claim_ids) | `DONE` | `test_reporter_no_tools_available` en verde | python/tests/unit/test_reporter.py |
-| DR-005 | Citation Verifier (claim-to-evidence, repair-from-ledger) | `TODO` | `test_reporter_cannot_invent_citations` en verde | — |
+| DR-005 | Citation Verifier (claim-to-evidence, repair-from-ledger) | `DONE` | familia `test_reporter_cannot_invent_citations` en verde | python/tests/unit/test_citation_verifier.py |
 | EVAL-001 | Eval Registry (datasets, graders, thresholds, versions) | `TODO` | `aeon eval list` muestra las suites de `evals/suites` | — |
 | EVAL-002 | Eval Runner (offline/repeated trials/provider matrix/trace graders) | `TODO` | `aeon eval run deep_research_core` produce reporte | — |
 | EVAL-003 | Release Gates (bloquear promoción por regresión) | `TODO` | `test_release_gate_blocks_regression` en verde | — |
