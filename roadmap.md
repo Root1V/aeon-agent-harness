@@ -287,6 +287,13 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   Anthropic se concatenan y se devuelven en la forma normalizada común
   (`providers.NormalizedChatResponse`), no en el shape nativo de Anthropic. Un API key incorrecto
   falla con el 401 real del servidor falso, no un error genérico.
+- `MDL-004` (Adaptador `openai`, **IN_PROGRESS** — falta la suite `provider_conformance`) —
+  [openai_test.go](go/internal/providers/openai/openai_test.go) prueba el cliente HTTP real contra
+  `POST /v1/chat/completions` con `Authorization: Bearer`. El shape de OpenAI es el que ya
+  inspiró la convención común del gateway, así que aquí la traducción es casi paso directo — pero
+  la respuesta igual se re-envuelve explícitamente en `providers.NormalizedChatResponse`, igual que
+  cualquier otro adaptador, para que ningún caller necesite saber que está hablando con OpenAI en
+  vez de con otro proveedor.
 
 ---
 
@@ -303,7 +310,7 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
 | RUN-005 | Approvals (interrupt durable, parameter binding, expiry) | `DONE` | `test_approval_binding` en verde (aprobado, rechazado, hash no coincide, expira) | python/tests/integration/test_approval_binding.py |
 | MDL-001 | Model Gateway (capability profiles, adapters, fallback, routing) | `DONE` | `TestModelGatewayRoutingFallback` en verde | go/internal/modelgateway/gateway_test.go |
 | MDL-003 | Adaptador `anthropic` | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestAnthropicAdapterDecideNormalizesRequestAndResponse` | go/internal/providers/anthropic/anthropic_test.go |
-| MDL-004 | Adaptador `openai` | `TODO` | pasa `provider_conformance` | — |
+| MDL-004 | Adaptador `openai` | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestOpenAIAdapterDecideNormalizesResponse` | go/internal/providers/openai/openai_test.go |
 | MDL-005 | Adaptador `gemini` | `TODO` | pasa `provider_conformance` | — |
 | MDL-006 | Adaptador `prometheus_inference` (LLM local) | `IN_PROGRESS` | pasa `provider_conformance` (suite no existe aún, llega con EVAL-002/F2); mientras tanto: `TestPrometheusInferenceRetriesOnceWithFreshTokenAfter401` y el resto de `prometheus_inference_test.go` en verde | go/internal/providers/prometheus_inference/prometheus_inference_test.go |
 | MDL-007 | Adaptador `openai_compatible` (vLLM/Ollama/TGI genérico) | `TODO` | pasa `provider_conformance` | — |
