@@ -36,12 +36,16 @@ class ExecuteToolOutput:
     result: dict[str, Any]
 
 
-@activity.defn
-async def execute_tool_activity(inp: ExecuteToolInput) -> ExecuteToolOutput:
-    """Executes a tool call with idempotency (RUN-004). In production this delegates to the Tool
-    Gateway (go/internal/store dedupe table, proto/aeon/v1/tool_gateway.proto ExecuteTool RPC);
-    here it uses the local EffectsLedger so this Activity is self-contained for the integration
-    test, which needs no Go services running to prove the crash/resume property end-to-end.
+async def execute_tool(inp: ExecuteToolInput) -> ExecuteToolOutput:
+    """Executes a tool call with idempotency (RUN-004) — a plain function, not `@activity.defn`, so
+    it can be called directly from another Activity's own body (e.g. aeon_worker.activities.
+    deep_research_activities' per-subtask Researcher Activity) without nesting a Temporal activity
+    call inside an activity. execute_tool_activity below is the workflow-callable wrapper.
+
+    In production this delegates to the Tool Gateway (go/internal/store dedupe table, proto/aeon/v1/
+    tool_gateway.proto ExecuteTool RPC); here it uses the local EffectsLedger so this stays
+    self-contained for the integration tests, which need no Go services running to prove the
+    crash/resume property end-to-end.
     """
     key = derive_idempotency_key(inp.run_id, inp.node_id, inp.step_seq, inp.tool_args)
     ledger = EffectsLedger(DEFAULT_LEDGER_PATH)
@@ -58,3 +62,8 @@ async def execute_tool_activity(inp: ExecuteToolInput) -> ExecuteToolOutput:
         os._exit(1)  # noqa: SLF001 — deliberate hard kill, not a normal exception path.
 
     return ExecuteToolOutput(deduplicated=deduplicated, idempotency_key=key, result=result)
+
+
+@activity.defn
+async def execute_tool_activity(inp: ExecuteToolInput) -> ExecuteToolOutput:
+    return await execute_tool(inp)
