@@ -18,7 +18,7 @@ ahora mismo.
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~53% (9/17) | `IN_PROGRESS` (en pausa, ver nota arriba) |
-| F1 | Contexto y evidencia | ~44% (4/9) | `IN_PROGRESS` |
+| F1 | Contexto y evidencia | ~56% (5/9) | `IN_PROGRESS` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
@@ -198,6 +198,19 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   (ya son mínimos, no hay nada que compactar). `compact_lane`/`compact_lanes` son funciones puras
   (no mutan su entrada), consistente con `ContextAssembler.assemble()` de `CTX-001` y
   `ContextBudgeter.budget()` de `CTX-002`.
+- `CTX-005` (Addressable Recall) — [test_context_recall.py](python/tests/unit/test_context_recall.py)
+  cierra el ciclo que `CTX-003` dejó abierto: `recall(recall_id, store, query=...)` recupera
+  contenido real desde el `ObservationStore`, no un stub. Sin `query`, devuelve una ventana acotada
+  desde el inicio (no el documento completo). Con `query`, hace una extracción real por ventana de
+  palabra clave — encuentra la primera ocurrencia y devuelve sólo el entorno cercano, probado que
+  es <10% del tamaño del documento original, no todo. Una `query` que no aparece en ningún sitio
+  devuelve `matched=False` con contenido vacío — honesto sobre el "no encontrado" en vez de fingir
+  una coincidencia. Un `recall_id` inventado falla con `RecallNotFoundError`, ruidoso a propósito.
+  `recall_as_lane_entry()` reinyecta el fragmento recuperado como una entrada de lane válida:
+  probado de punta a punta que el documento original de >50k tokens NUNCA aparece en el contexto
+  ensamblado, sólo el fragmento pedido — la propiedad que hace útil todo el ciclo offload→recall.
+  Búsqueda semántica real sobre contenido recuperado queda para `RAG-001` (`TODO`); esto es
+  deliberadamente una extracción simple pero genuina, no un placeholder.
 
 ---
 
@@ -234,7 +247,7 @@ cuatro adaptadores cloud/local (`test_provider_parity`).
 | CTX-002 | Context Budgeter (ensamblado por prioridad + cache-hit) | `DONE` | `test_budgeter_cache_stable_ordering` en verde | python/tests/unit/test_context_budgeter.py |
 | CTX-003 | Offload (tool I/O grande → observation store + puntero) | `DONE` | `test_no_full_document_injection` en verde | python/tests/unit/test_context_offload.py |
 | CTX-004 | Typed Compaction (fidelity policy por lane, no resumen uniforme) | `DONE` | `test_pinned_exact_survives_stress` en verde | python/tests/unit/test_context_compaction.py |
-| CTX-005 | Addressable Recall (IDs estables, `context.recall`) | `TODO` | `test_addressable_recall_roundtrip` en verde | — |
+| CTX-005 | Addressable Recall (IDs estables, `context.recall`) | `DONE` | `test_addressable_recall_roundtrip` en verde | python/tests/unit/test_context_recall.py |
 | CTX-006 | Context Integrity Gate (constraint/citation/token checks pre-model-call) | `TODO` | `test_integrity_gate_blocks_missing_constraint` en verde | — |
 | RAG-001 | Retrieval Gateway (connectors, ACL, hybrid search, rerank, cache) | `TODO` | `test_retrieval_acl_enforced` en verde | — |
 | RAG-002 | Evidence Extractor (compactación condicionada → EvidencePacket) | `TODO` | `test_evidence_packet_schema_valid` en verde | — |
