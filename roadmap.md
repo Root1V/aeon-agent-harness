@@ -18,7 +18,7 @@ ahora mismo.
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~53% (9/17) | `IN_PROGRESS` (en pausa, ver nota arriba) |
-| F1 | Contexto y evidencia | ~67% (6/9) | `IN_PROGRESS` |
+| F1 | Contexto y evidencia | ~78% (7/9) | `IN_PROGRESS` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
@@ -221,6 +221,19 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   las tres categorías de violación reportadas juntas si coinciden, no sólo la primera que
   encuentra — se probó explícitamente. Esto es el equivalente, del lado del contexto de ENTRADA,
   a lo que `DR-005` (Citation Verifier, `TODO`) hará del lado de la SALIDA del modelo.
+- `RAG-001` (Retrieval Gateway) — [test_retrieval_gateway.py](python/tests/unit/test_retrieval_gateway.py)
+  prueba el invariante que más importa: **el ACL lo aplica el gateway, nunca el connector**. Un
+  documento fuera del scope del principal nunca llega, aunque sería el resultado más relevante
+  (probado con un documento de baja relevancia dentro de scope ganando sobre uno de alta relevancia
+  fuera de scope), y aunque el connector subyacente sí lo tenga de verdad (probado consultando el
+  mismo connector con dos conjuntos de scopes distintos). Documentos sin `acl` son públicos por
+  convención (nunca al revés — ausencia de ACL nunca significa "denegar por defecto" de forma
+  silenciosa, sería peor que ruidosa). Búsqueda híbrida real (no un placeholder): solapamiento de
+  términos + boost por frase exacta, ambos en Python puro, sin modelo de embeddings ni red — un
+  connector real con pgvector (ya en el compose stack) se conecta detrás del mismo `Protocol`
+  cuando haga falta. Caché probado de verdad: una consulta repetida no vuelve a invocar al
+  connector, y la caché está particionada por `(query, scopes)` — dos principals con scopes
+  distintos nunca comparten una entrada de caché, que sería una fuga de ACL a través de la caché.
 
 ---
 
@@ -259,7 +272,7 @@ cuatro adaptadores cloud/local (`test_provider_parity`).
 | CTX-004 | Typed Compaction (fidelity policy por lane, no resumen uniforme) | `DONE` | `test_pinned_exact_survives_stress` en verde | python/tests/unit/test_context_compaction.py |
 | CTX-005 | Addressable Recall (IDs estables, `context.recall`) | `DONE` | `test_addressable_recall_roundtrip` en verde | python/tests/unit/test_context_recall.py |
 | CTX-006 | Context Integrity Gate (constraint/citation/token checks pre-model-call) | `DONE` | `test_integrity_gate_blocks_missing_constraint` en verde | python/tests/unit/test_context_integrity.py |
-| RAG-001 | Retrieval Gateway (connectors, ACL, hybrid search, rerank, cache) | `TODO` | `test_retrieval_acl_enforced` en verde | — |
+| RAG-001 | Retrieval Gateway (connectors, ACL, hybrid search, rerank, cache) | `DONE` | `test_retrieval_acl_enforced` en verde | python/tests/unit/test_retrieval_gateway.py |
 | RAG-002 | Evidence Extractor (compactación condicionada → EvidencePacket) | `TODO` | `test_evidence_packet_schema_valid` en verde | — |
 | RAG-003 | Evidence Ledger (provenance, dedupe, contradictions, source quality) | `TODO` | `test_ledger_contradiction_grouping` en verde | — |
 
