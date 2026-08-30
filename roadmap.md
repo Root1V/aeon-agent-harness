@@ -18,7 +18,7 @@ ahora mismo.
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~53% (9/17) | `IN_PROGRESS` (en pausa, ver nota arriba) |
-| F1 | Contexto y evidencia | ~33% (3/9) | `IN_PROGRESS` |
+| F1 | Contexto y evidencia | ~44% (4/9) | `IN_PROGRESS` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
@@ -187,6 +187,17 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   `Protocol` — producción apuntará esto a MinIO/S3 sin cambiar la interfaz. `Addressable Recall`
   (`CTX-005`, `TODO`) es lo que falta para que una tool pueda pedir de vuelta el contenido completo
   por `recall_id` durante un run; `CTX-003` sólo resuelve la mitad de "guardar y apuntar".
+- `CTX-004` (Typed Compaction) — [test_context_compaction.py](python/tests/unit/test_context_compaction.py)
+  prueba el criterio de aceptación literal de la spec §9: `L0_POLICY` (`PINNED_EXACT`) sobrevive
+  **50 ciclos** de compactación byte a byte, incluso con un target de compactación absurdamente
+  ajustado (1 carácter) en cada ciclo, y aunque otras lanes en el mismo `dict` sí se compacten de
+  verdad junto a ella. No hay "resumen uniforme": cada fidelidad tiene su propia regla —
+  `PINNED_EXACT` es un no-op siempre; `EVIDENCE_ATOMIC` sólo puede descartar entradas completas
+  (nunca reescribir una que sobrevive — se probó que la entrada superviviente queda byte-idéntica);
+  `ADDRESSABLE` trunca el texto de entradas completas pero deja los punteros `recall_id` intactos
+  (ya son mínimos, no hay nada que compactar). `compact_lane`/`compact_lanes` son funciones puras
+  (no mutan su entrada), consistente con `ContextAssembler.assemble()` de `CTX-001` y
+  `ContextBudgeter.budget()` de `CTX-002`.
 
 ---
 
@@ -222,7 +233,7 @@ cuatro adaptadores cloud/local (`test_provider_parity`).
 | CTX-001 | Typed Context Lanes (L0-L6) | `DONE` | `test_lane_fidelity_policy` en verde | python/tests/unit/test_context_lanes.py |
 | CTX-002 | Context Budgeter (ensamblado por prioridad + cache-hit) | `DONE` | `test_budgeter_cache_stable_ordering` en verde | python/tests/unit/test_context_budgeter.py |
 | CTX-003 | Offload (tool I/O grande → observation store + puntero) | `DONE` | `test_no_full_document_injection` en verde | python/tests/unit/test_context_offload.py |
-| CTX-004 | Typed Compaction (fidelity policy por lane, no resumen uniforme) | `TODO` | `test_pinned_exact_survives_stress` en verde | — |
+| CTX-004 | Typed Compaction (fidelity policy por lane, no resumen uniforme) | `DONE` | `test_pinned_exact_survives_stress` en verde | python/tests/unit/test_context_compaction.py |
 | CTX-005 | Addressable Recall (IDs estables, `context.recall`) | `TODO` | `test_addressable_recall_roundtrip` en verde | — |
 | CTX-006 | Context Integrity Gate (constraint/citation/token checks pre-model-call) | `TODO` | `test_integrity_gate_blocks_missing_constraint` en verde | — |
 | RAG-001 | Retrieval Gateway (connectors, ACL, hybrid search, rerank, cache) | `TODO` | `test_retrieval_acl_enforced` en verde | — |
