@@ -20,3 +20,27 @@ type Provider interface {
 	// successful task" across token-based and compute-based providers.
 	CostModel() string // "token_based" | "compute_based"
 }
+
+// NormalizedChatResponse is the ONE output shape every adapter's Decide() must return, regardless
+// of the wire format its own provider actually speaks (Anthropic's content blocks, Gemini's
+// candidates, OpenAI's choices). This is what makes cross-provider conformance checking
+// mechanical: a caller (or a future provider_conformance suite) reads choices[0].message.content
+// and usage.* the same way no matter which adapter served the call. Each adapter's own tests
+// verify it translates its provider's real response into exactly this shape.
+func NormalizedChatResponse(model, content, finishReason string, promptTokens, completionTokens int) map[string]any {
+	return map[string]any{
+		"model": model,
+		"choices": []any{
+			map[string]any{
+				"index":         0,
+				"message":       map[string]any{"role": "assistant", "content": content},
+				"finish_reason": finishReason,
+			},
+		},
+		"usage": map[string]any{
+			"prompt_tokens":     promptTokens,
+			"completion_tokens": completionTokens,
+			"total_tokens":      promptTokens + completionTokens,
+		},
+	}
+}

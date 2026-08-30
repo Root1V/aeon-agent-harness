@@ -274,6 +274,19 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   despriorizado; y si no hay ningún candidato local configurado, falla con un error claro
   (`ErrNoRestrictedCandidate`) en vez de caer silenciosamente a un proveedor cloud. El Gateway
   depende únicamente de la interfaz `providers.Provider` — nunca importa un adaptador concreto.
+  De paso se añadió `providers.NormalizedChatResponse()`: la única forma de salida que cualquier
+  adaptador devuelve (`choices[].message.content`, `usage.*`), sin importar el formato real del
+  proveedor — es lo que hace mecánica la futura conformidad cruzada entre proveedores.
+- `MDL-003` (Adaptador `anthropic`, **IN_PROGRESS** — falta la suite `provider_conformance`) —
+  [anthropic_test.go](go/internal/providers/anthropic/anthropic_test.go) prueba un cliente HTTP
+  real contra la Messages API documentada (`POST /v1/messages`, headers `x-api-key` +
+  `anthropic-version`), no un mock superficial. Traducción de request real: un mensaje con
+  `role: system` se extrae al campo `system` de nivel superior (Anthropic no tiene rol "system" en
+  `messages`), y `max_tokens` (obligatorio en esta API, a diferencia de OpenAI) se rellena con un
+  default si el caller no lo especifica. Traducción de response real: los content blocks de
+  Anthropic se concatenan y se devuelven en la forma normalizada común
+  (`providers.NormalizedChatResponse`), no en el shape nativo de Anthropic. Un API key incorrecto
+  falla con el 401 real del servidor falso, no un error genérico.
 
 ---
 
@@ -289,7 +302,7 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
 | RUN-004 | Checkpoint & replay (resume sin duplicar tool effects) | `DONE` | `test_crash_resume_no_duplicate_write` en verde | python/tests/integration/test_crash_resume.py |
 | RUN-005 | Approvals (interrupt durable, parameter binding, expiry) | `DONE` | `test_approval_binding` en verde (aprobado, rechazado, hash no coincide, expira) | python/tests/integration/test_approval_binding.py |
 | MDL-001 | Model Gateway (capability profiles, adapters, fallback, routing) | `DONE` | `TestModelGatewayRoutingFallback` en verde | go/internal/modelgateway/gateway_test.go |
-| MDL-003 | Adaptador `anthropic` | `TODO` | pasa `provider_conformance` | — |
+| MDL-003 | Adaptador `anthropic` | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestAnthropicAdapterDecideNormalizesRequestAndResponse` | go/internal/providers/anthropic/anthropic_test.go |
 | MDL-004 | Adaptador `openai` | `TODO` | pasa `provider_conformance` | — |
 | MDL-005 | Adaptador `gemini` | `TODO` | pasa `provider_conformance` | — |
 | MDL-006 | Adaptador `prometheus_inference` (LLM local) | `IN_PROGRESS` | pasa `provider_conformance` (suite no existe aún, llega con EVAL-002/F2); mientras tanto: `TestPrometheusInferenceRetriesOnceWithFreshTokenAfter401` y el resto de `prometheus_inference_test.go` en verde | go/internal/providers/prometheus_inference/prometheus_inference_test.go |
