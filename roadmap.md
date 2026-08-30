@@ -6,9 +6,9 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-30 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha —
-> `DR-001`..`DR-005`, `EVAL-001`..`EVAL-003`: la promoción Candidate→Released del Agent Registry
-> ahora bloquea de verdad ante una regresión real de eval).
+> Última actualización: 2026-08-30 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha — con
+> `DX-001`, el pipeline `DR-001`..`DR-005` corre por primera vez de verdad dentro de un workflow
+> Temporal real, de punta a punta, vía `aeon_sdk`).
 
 ## Resumen ejecutivo
 
@@ -100,11 +100,33 @@ cualquier otra transición) — probado contra Postgres real en `TestAgentRegist
 El registry nunca calcula el veredicto, sólo lo aplica — la misma separación Decision/workflow de
 ADR-001.
 
+`DX-001` (SDK Python) dio el salto que faltaba: hasta ahora `DR-001`..`DR-005` eran módulos puros
+probados sólo con fakes, nunca ejecutados dentro de un workflow Temporal real. Ahora
+`aeon_worker/workflows/deep_research_run.py::DeepResearchWorkflow` corre el pipeline completo
+—Planner → Researchers en paralelo (`asyncio.gather` sobre Activities, igual que
+`aeon_worker.graph._execute_parallel`) → Sufficiency Gate → Reporter → Citation Verifier— con cada
+llamada a modelo/tool pasando por una Activity real (`aeon_worker/activities/
+deep_research_activities.py`, más `decide`/`execute_tool` refactorizados en `model_activities.py`/
+`tool_activities.py` para exponer su lógica como funciones planas invocables desde otra Activity, no
+sólo vía `workflow.execute_activity`). El workflow en sí sólo toca lo determinista (`evaluate_
+sufficiency`, `verify_and_repair`, ensamblar el Evidence Ledger) — nunca genera IDs aleatorios ni
+hace I/O directo (ADR-001). Deliberadamente una sola pasada: si la Sufficiency Gate encuentra huecos,
+el run igual produce reporte con lo permitido y devuelve `sufficient=False` + `topics_to_replan`, sin
+replanificar automáticamente todavía (ver `backlog.md`).
+
+`aeon_sdk.deep_research.start_deep_research_run` conecta a un Temporal real y arranca ese workflow;
+`aeon_sdk.model_policy.resolve_candidates` resuelve `agent.yaml`'s `modelPolicy.profile` contra el
+`model_policy_bundle.yaml` real (nunca un modelo hardcodeado). `examples/deep-research/run.py` es el
+script real y ejecutable que los junta. La prueba de aceptación
+(`test_deep_research_workflow_produces_a_verified_report_end_to_end`) corre contra un Temporal
+efímero real y un worker en un proceso separado real — sólo el Model Gateway es un doble HTTP (nada
+de esto pasa por fakes en memoria como los tests puros de `DR-001`..`DR-005`).
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | ~62% (8/13) | `IN_PROGRESS` |
+| F2 | Deep Research + EvalOps (**MVP**) | ~69% (9/13) | `IN_PROGRESS` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -490,7 +512,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 | EVAL-001 | Eval Registry (datasets, graders, thresholds, versions) | `DONE` | `TestAeonEvalListShowsSuitesFromEvalsDir` en verde — `aeon eval list` muestra las 4 suites reales de `evals/suites` (las mismas que nombra `examples/deep-research/agent.yaml`'s `evalGates`) | go/cmd/aeon/main_test.go |
 | EVAL-002 | Eval Runner (offline/repeated trials/provider matrix/trace graders) | `DONE` | `aeon eval run deep_research_core` produce reporte real — ver `test_eval_run_produces_a_report_for_deep_research_core` (motor) y `TestAeonEvalRun` (CLI) en verde. Sólo "offline" y "repeated trials" son reales hoy; "provider matrix" y "trace graders" quedan en `backlog.md` | python/tests/unit/test_eval_runner.py, go/cmd/aeon/main_test.go |
 | EVAL-003 | Release Gates (bloquear promoción por regresión) | `DONE` | `test_release_gate_blocks_regression_even_when_still_above_threshold` en verde (motor) + `TestAgentRegistryReleaseGateBlocksPromotion` en verde (aplicación real en el registry) | python/tests/unit/test_release_gate.py, go/internal/store/agent_registry_test.go |
-| DX-001 | SDK Python (start_run, tools, contexts, memory, traces, approvals) | `TODO` | `examples/deep-research` corre con `aeon_sdk` | — |
+| DX-001 | SDK Python (`start_deep_research_run`, primer workflow real DR-001..DR-005) | `DONE` | `test_deep_research_workflow_produces_a_verified_report_end_to_end` en verde — pipeline completo real contra Temporal + worker real, sólo el Model Gateway es un doble HTTP. Alcance: `aeon_sdk.deep_research`/`aeon_sdk.model_policy` (Deep Research únicamente); un `start_run(manifest)` genérico y tools/context/memory/traces/approvals como superficie SDK propia quedan en `backlog.md` | python/tests/integration/test_deep_research_workflow.py, examples/deep-research/run.py |
 | DX-002 | CLI (init/validate/run/eval/trace/replay/publish) | `TODO` | los 7 subcomandos ejecutan sin error contra el compose | — |
 | DX-003 | Template Deep Research | `TODO` | `examples/deep-research/agent.yaml` válido y ejecutable | — |
 | INT-001 | `FrameworkAdapter` LangGraph (Modo B) | `TODO` | `examples/langgraph-interop` corre dentro de una Activity | — |

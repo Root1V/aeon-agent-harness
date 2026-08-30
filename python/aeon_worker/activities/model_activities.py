@@ -46,8 +46,12 @@ class DecideOutput:
     output: dict[str, Any]
 
 
-@activity.defn
-async def decide_activity(inp: DecideInput) -> DecideOutput:
+async def call_model_gateway(inp: DecideInput) -> DecideOutput:
+    """The actual HTTP call to the Model Gateway — a plain function, not `@activity.defn`, so it
+    can be called directly from another Activity's own body (e.g. aeon_worker.activities.
+    deep_research_activities' per-stage Activities) without nesting a Temporal activity call inside
+    an activity, which is not a thing Temporal supports. decide_activity below is the
+    workflow-callable wrapper around this same logic."""
     body = json.dumps(
         {
             "candidates": [{"provider": c.provider, "model": c.model, "priority": c.priority} for c in inp.candidates],
@@ -68,3 +72,8 @@ async def decide_activity(inp: DecideInput) -> DecideOutput:
         raise ModelGatewayError(f"model gateway at {DEFAULT_MODELGW_ADDR} unreachable: {exc.reason}") from exc
 
     return DecideOutput(provider_used=parsed["provider_used"], model=parsed["model"], output=parsed["output"])
+
+
+@activity.defn
+async def decide_activity(inp: DecideInput) -> DecideOutput:
+    return await call_model_gateway(inp)

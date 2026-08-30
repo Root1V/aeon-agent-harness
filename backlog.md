@@ -171,3 +171,32 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   `aeon-evalrunner`, o añadido a `aeon-modelgw`/`aeon-worker`) y hacer que `aeon eval run` llame a
   ese endpoint en vez de invocar un proceso Python local.
 - **Coste:** M.
+
+### Replanning automático en `DeepResearchWorkflow` (DX-001)
+
+- **Descripción:** `DeepResearchWorkflow` corre una sola pasada — si la Sufficiency Gate (`DR-003`)
+  encuentra subtareas sin cubrir o impugnadas, el run igual produce un reporte con lo que sí se
+  permitió y devuelve `sufficient=False` más `topics_to_replan`, pero nunca vuelve a planificar ni
+  a investigar esos temas automáticamente. `DR-003` ya calcula exactamente qué haría falta; falta
+  actuar sobre ello.
+- **Fase objetivo:** F2, antes de cerrar el MVP (el criterio de MVP del roadmap no exige
+  replanning automático explícitamente, pero es la brecha más visible entre "corre" y "es
+  realmente Deep Research").
+- **Criterio de entrada:** decidir el límite de reintentos (¿1 replan? ¿N acotado por presupuesto?)
+  y si el replanning re-invoca al Planner con las `topics_to_replan` como pistas, o genera
+  subtareas de reemplazo directamente a partir de ellas.
+- **Coste:** M.
+
+### `aeon_sdk` genérico: `start_run(manifest)` y superficie tools/context/memory/traces/approvals
+
+- **Descripción:** `DX-001` entregó `aeon_sdk.deep_research.start_deep_research_run` — específico
+  de Deep Research, no el `start_run` genérico que la spec original describe ("API pública:
+  start_run, tools, contexts, memory, traces, approvals"). No hay todavía una forma de resolver un
+  `AgentManifest` arbitrario (grafo + budgets + tools permitidas) a una ejecución de workflow sin
+  escribir un workflow Temporal dedicado por perfil, como se hizo aquí para Deep Research.
+- **Fase objetivo:** F2 tardío o F4, según cuántos perfiles de agente además de Deep Research
+  necesite soportar la plataforma antes de que valga la pena generalizar.
+- **Criterio de entrada:** un segundo perfil de agente real (más allá de Deep Research) que
+  necesite `aeon_sdk` — generalizar antes de eso es adivinar la abstracción correcta sin un
+  segundo caso real que la valide.
+- **Coste:** L.
