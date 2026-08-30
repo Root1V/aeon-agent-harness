@@ -304,6 +304,13 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   usa el header `x-goog-api-key` en su lugar (Gemini soporta ambos) — un secreto nunca debe viajar
   en una URL que termina en logs/historial. Se probó explícitamente que la key nunca aparece en la
   URL de la request real.
+- `MDL-007` (Adaptador `openai_compatible`, **IN_PROGRESS** — falta la suite `provider_conformance`)
+  — [openai_compatible_test.go](go/internal/providers/openai_compatible/openai_compatible_test.go)
+  prueba el fallback genérico para vLLM/Ollama/TGI/LM Studio: mismo shape de request/response que
+  `openai`, pero sin las suposiciones que no valen para un servidor self-hosted — sin `BaseURL` por
+  defecto (falla explícitamente si no se configura, no hay "el" endpoint self-hosted), y sin API
+  key obligatoria (probado que funciona sin ninguna, que es la configuración por defecto de
+  vLLM/Ollama; si se configura una, se envía como Bearer).
 
 ---
 
@@ -323,7 +330,7 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
 | MDL-004 | Adaptador `openai` | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestOpenAIAdapterDecideNormalizesResponse` | go/internal/providers/openai/openai_test.go |
 | MDL-005 | Adaptador `gemini` | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestGeminiAdapterDecideTranslatesRolesAndSystemInstruction` | go/internal/providers/gemini/gemini_test.go |
 | MDL-006 | Adaptador `prometheus_inference` (LLM local) | `IN_PROGRESS` | pasa `provider_conformance` (suite no existe aún, llega con EVAL-002/F2); mientras tanto: `TestPrometheusInferenceRetriesOnceWithFreshTokenAfter401` y el resto de `prometheus_inference_test.go` en verde | go/internal/providers/prometheus_inference/prometheus_inference_test.go |
-| MDL-007 | Adaptador `openai_compatible` (vLLM/Ollama/TGI genérico) | `TODO` | pasa `provider_conformance` | — |
+| MDL-007 | Adaptador `openai_compatible` (vLLM/Ollama/TGI genérico) | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestOpenAICompatibleAdapterWorksWithoutAnAPIKey` | go/internal/providers/openai_compatible/openai_compatible_test.go |
 | TOOL-001 | Tool Registry/Gateway (typed schemas, risk classification, scopes) | `DONE` | `TestToolRegistryCRUDAndRiskClassification` (registry) + `TestToolPolicyDeniesOutOfManifestToolCall` (gateway ejecuta con policy check real) | go/internal/store/tool_registry_test.go, go/internal/api/tool_gateway_handlers_test.go |
 | SEC-001 | Policy Engine (Cedar, authz fuera del modelo) | `DONE` | `TestToolPolicyDeniesOutOfManifestToolCall` en verde | go/internal/api/tool_gateway_handlers_test.go |
 | OBS-001 | Distributed tracing (OTel GenAI semantic conventions) | `TODO` | spans `invoke_agent`/`chat`/`execute_tool` visibles en Tempo | — |
