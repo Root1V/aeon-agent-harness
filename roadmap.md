@@ -18,7 +18,7 @@ ahora mismo.
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~53% (9/17) | `IN_PROGRESS` (en pausa, ver nota arriba) |
-| F1 | Contexto y evidencia | ~78% (7/9) | `IN_PROGRESS` |
+| F1 | Contexto y evidencia | ~89% (8/9) | `IN_PROGRESS` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
@@ -234,6 +234,21 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   cuando haga falta. Caché probado de verdad: una consulta repetida no vuelve a invocar al
   connector, y la caché está particionada por `(query, scopes)` — dos principals con scopes
   distintos nunca comparten una entrada de caché, que sería una fuga de ACL a través de la caché.
+- `RAG-002` (Evidence Extractor) — [test_evidence_extractor.py](python/tests/unit/test_evidence_extractor.py)
+  prueba que los `EvidencePacket` producidos son válidos de verdad contra
+  `evidence_packet.schema.json` (no sólo "tienen la forma correcta en Python"), no sólo que
+  parsean. La extracción está genuinamente **condicionada a la query**: un documento sin contenido
+  relevante produce cero packets, no uno relleno o inventado — se probó con un documento real sobre
+  otro tema. El `quote` de cada packet es siempre texto verbatim que existe literalmente en el
+  documento fuente (probado con `in`, no sólo asumido). La procedencia (`claim_id`, `retrieved_at`)
+  la genera siempre este módulo, nunca la estrategia de extracción — que sólo propone texto de
+  claim/quote, nunca su propia identidad o timestamp. Los scores de `RAG-001` (que pueden superar
+  1.0 por el boost de frase exacta) se recortan al rango `[0,1]` que exige el schema para
+  `source_quality`/`confidence` — sin este recorte, un score alto de relevancia produciría un
+  packet inválido. La estrategia de extracción real usada aquí (`SentenceMatchExtractionStrategy`)
+  es simple pero genuina (sentencias con términos de la query, verbatim) — una estrategia respaldada
+  por modelo (compactación condicionada de verdad) es un reemplazo directo detrás del mismo
+  `Protocol`, sin tocar `extract_evidence`.
 
 ---
 
@@ -273,7 +288,7 @@ cuatro adaptadores cloud/local (`test_provider_parity`).
 | CTX-005 | Addressable Recall (IDs estables, `context.recall`) | `DONE` | `test_addressable_recall_roundtrip` en verde | python/tests/unit/test_context_recall.py |
 | CTX-006 | Context Integrity Gate (constraint/citation/token checks pre-model-call) | `DONE` | `test_integrity_gate_blocks_missing_constraint` en verde | python/tests/unit/test_context_integrity.py |
 | RAG-001 | Retrieval Gateway (connectors, ACL, hybrid search, rerank, cache) | `DONE` | `test_retrieval_acl_enforced` en verde | python/tests/unit/test_retrieval_gateway.py |
-| RAG-002 | Evidence Extractor (compactación condicionada → EvidencePacket) | `TODO` | `test_evidence_packet_schema_valid` en verde | — |
+| RAG-002 | Evidence Extractor (compactación condicionada → EvidencePacket) | `DONE` | `test_evidence_packet_schema_valid` en verde | python/tests/unit/test_evidence_extractor.py |
 | RAG-003 | Evidence Ledger (provenance, dedupe, contradictions, source quality) | `TODO` | `test_ledger_contradiction_grouping` en verde | — |
 
 **Salida de fase:** documento >50k tokens nunca entra completo; 100% de `PINNED_EXACT` y locators
