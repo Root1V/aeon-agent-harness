@@ -6,19 +6,20 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-29 (Typed Context Lanes reales: fidelity policy aplicada, no sólo declarada).
+> Última actualización: 2026-08-29 (F1 completa: Evidence Ledger real, contradicciones agrupadas).
 
 ## Resumen ejecutivo
 
-F0 se considera suficientemente avanzada para seguir en orden a F1 (decisión del usuario); los
+F0 se considera suficientemente avanzada para seguir en orden (decisión del usuario); los
 `TODO`/`IN_PROGRESS` que quedan en F0 (Model Gateway con proveedores cloud, tracing) se retoman
 más adelante, no se movieron a `backlog.md` — siguen siendo parte del plan, sólo no son el foco
-ahora mismo.
+ahora mismo. **F1 (Contexto y evidencia) se completó en su totalidad** en la misma sesión —
+siguiente en orden: F2 (Deep Research + EvalOps, el MVP).
 
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~53% (9/17) | `IN_PROGRESS` (en pausa, ver nota arriba) |
-| F1 | Contexto y evidencia | ~89% (8/9) | `IN_PROGRESS` |
+| F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
@@ -249,6 +250,19 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   es simple pero genuina (sentencias con términos de la query, verbatim) — una estrategia respaldada
   por modelo (compactación condicionada de verdad) es un reemplazo directo detrás del mismo
   `Protocol`, sin tocar `extract_evidence`.
+- `RAG-003` (Evidence Ledger) — [test_evidence_ledger.py](python/tests/unit/test_evidence_ledger.py)
+  cierra F1. El Ledger **no detecta** contradicciones (eso es trabajo de un modelo, igual que la
+  extracción real de `RAG-002`) — las **preserva y agrupa** cuando el caller identifica qué
+  `claim_id`s se contradicen, exactamente como pide la spec: "las contradicciones se preservan",
+  nunca se resuelven en silencio. Probado el caso real: una tercera claim que nombra a dos
+  miembros ya agrupados se une al MISMO grupo, no crea uno nuevo (fragmentar sería peor que no
+  agrupar). Nombrar un `claim_id` inexistente falla con `UnknownClaimError`, a propósito ruidoso.
+  Dedupe real por `(source_id, quote)` — el mismo hecho reportado dos veces por la misma fuente no
+  duplica entrada. `source_quality` por fuente es un promedio real sobre los packets vistos, no un
+  valor fijo. **F1 completa: 9/9, con `aeon_context/` (lanes, budgeter, offload, recall, integrity)
+  y `aeon_evidence/` (retrieval, extractor, ledger) formando el pipeline completo de contexto y
+  evidencia — desde el ensamblado con fidelidad tipada hasta la persistencia de evidencia con
+  contradicciones preservadas.**
 
 ---
 
@@ -289,10 +303,12 @@ cuatro adaptadores cloud/local (`test_provider_parity`).
 | CTX-006 | Context Integrity Gate (constraint/citation/token checks pre-model-call) | `DONE` | `test_integrity_gate_blocks_missing_constraint` en verde | python/tests/unit/test_context_integrity.py |
 | RAG-001 | Retrieval Gateway (connectors, ACL, hybrid search, rerank, cache) | `DONE` | `test_retrieval_acl_enforced` en verde | python/tests/unit/test_retrieval_gateway.py |
 | RAG-002 | Evidence Extractor (compactación condicionada → EvidencePacket) | `DONE` | `test_evidence_packet_schema_valid` en verde | python/tests/unit/test_evidence_extractor.py |
-| RAG-003 | Evidence Ledger (provenance, dedupe, contradictions, source quality) | `TODO` | `test_ledger_contradiction_grouping` en verde | — |
+| RAG-003 | Evidence Ledger (provenance, dedupe, contradictions, source quality) | `DONE` | `test_ledger_contradiction_grouping` en verde | python/tests/unit/test_evidence_ledger.py |
 
-**Salida de fase:** documento >50k tokens nunca entra completo; 100% de `PINNED_EXACT` y locators
-sobreviven 50 ciclos de compactación.
+**Salida de fase — cumplida:** documento >50k tokens nunca entra completo (`test_no_full_document_injection`);
+100% de `PINNED_EXACT` y locators sobreviven 50 ciclos de compactación (`test_pinned_exact_survives_stress`).
+F1 completa: 9/9 features, todas con test de aceptación real en verde — `aeon_context/` (lanes,
+budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, ledger).
 
 ## F2 — Deep Research + EvalOps → MVP (semanas 9-11)
 
