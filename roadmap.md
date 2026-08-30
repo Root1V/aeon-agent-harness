@@ -18,7 +18,7 @@ ahora mismo.
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~53% (9/17) | `IN_PROGRESS` (en pausa, ver nota arriba) |
-| F1 | Contexto y evidencia | ~22% (2/9) | `IN_PROGRESS` |
+| F1 | Contexto y evidencia | ~33% (3/9) | `IN_PROGRESS` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
@@ -177,6 +177,16 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   añadía igual sin mirar el presupuesto. Se corrigió reservando el coste de las lanes obligatorias
   por adelantado, para que el orden de aparición nunca afecte si el presupuesto se respeta de
   verdad.
+- `CTX-003` (Offload) — [test_context_offload.py](python/tests/unit/test_context_offload.py)
+  prueba el criterio de aceptación literal de la spec §9: un documento de >50k tokens (`>50k×4`
+  caracteres, mismo ratio que usa la estimación de tokens de `CTX-001`) nunca aparece completo en
+  ningún sitio — ni en la entrada de la lane, ni (de punta a punta) en el texto ensamblado por
+  `ContextAssembler`, sólo un puntero `{recall_id, summary}`. El contenido original se recupera
+  byte a byte desde el `ObservationStore` por su `recall_id`. La implementación de storage para
+  dev/test es un `FilesystemObservationStore` real (no un mock) sobre disco local, detrás de un
+  `Protocol` — producción apuntará esto a MinIO/S3 sin cambiar la interfaz. `Addressable Recall`
+  (`CTX-005`, `TODO`) es lo que falta para que una tool pueda pedir de vuelta el contenido completo
+  por `recall_id` durante un run; `CTX-003` sólo resuelve la mitad de "guardar y apuntar".
 
 ---
 
@@ -211,7 +221,7 @@ cuatro adaptadores cloud/local (`test_provider_parity`).
 |---|---|---|---|---|
 | CTX-001 | Typed Context Lanes (L0-L6) | `DONE` | `test_lane_fidelity_policy` en verde | python/tests/unit/test_context_lanes.py |
 | CTX-002 | Context Budgeter (ensamblado por prioridad + cache-hit) | `DONE` | `test_budgeter_cache_stable_ordering` en verde | python/tests/unit/test_context_budgeter.py |
-| CTX-003 | Offload (tool I/O grande → observation store + puntero) | `TODO` | `test_no_full_document_injection` en verde | — |
+| CTX-003 | Offload (tool I/O grande → observation store + puntero) | `DONE` | `test_no_full_document_injection` en verde | python/tests/unit/test_context_offload.py |
 | CTX-004 | Typed Compaction (fidelity policy por lane, no resumen uniforme) | `TODO` | `test_pinned_exact_survives_stress` en verde | — |
 | CTX-005 | Addressable Recall (IDs estables, `context.recall`) | `TODO` | `test_addressable_recall_roundtrip` en verde | — |
 | CTX-006 | Context Integrity Gate (constraint/citation/token checks pre-model-call) | `TODO` | `test_integrity_gate_blocks_missing_constraint` en verde | — |
