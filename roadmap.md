@@ -7,7 +7,8 @@
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
 > Última actualización: 2026-08-29 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha con
-> `DR-001`/`DR-002` — Planner y Researchers aislados, ambos puros y con test de aceptación real).
+> `DR-001`/`DR-002`/`DR-003` — Planner, Researchers aislados y Sufficiency Gate, todos puros y con
+> test de aceptación real).
 
 ## Resumen ejecutivo
 
@@ -40,11 +41,19 @@ hasta ahora) y `aeon_profiles/deep_research/researcher.py`: un bucle ReAct acota
 testea con fakes — `test_researcher_isolation` corre dos subtareas a la vez y verifica que ningún
 transcript o tool-call de una menciona el topic de la otra.
 
+`DR-003` (Sufficiency Gate) añadió `aeon_profiles/deep_research/sufficiency_gate.py`: cruza el plan
+de `DR-001` con los `ResearchResult` de `DR-002` y el Evidence Ledger de F1 (`aeon_evidence.ledger`,
+enlazando por `EvidencePacket.subtopic_id == Subtask.id`) para decidir, por subtarea, si está
+cubierta (terminó con evidencia real, no sólo un `FINISH` vacío) y si está impugnada por un
+`contradiction_group` sin resolver — nunca resuelve una contradicción, sólo la señala. Cuando
+cualquier subtarea queda sin cubrir o impugnada, la Gate pide replanning de exactamente esos
+`coverage_topic`, no de todo el plan. Sigue el mismo patrón: puro, sin Temporal, testeado con fakes.
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | ~15% (2/13) | `IN_PROGRESS` |
+| F2 | Deep Research + EvalOps (**MVP**) | ~23% (3/13) | `IN_PROGRESS` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -424,7 +433,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 |---|---|---|---|---|
 | DR-001 | Research Planner (3-5 subtareas, coverage, budgets) | `DONE` | familia `test_planner_subtask_bounds` en verde (el bound 3-5 está en `research_plan.schema.json`, no en código de aplicación) | python/tests/unit/test_planner.py |
 | DR-002 | Isolated Researchers (parallel worker contexts, bounded ReAct) | `DONE` | `test_researcher_isolation` en verde | python/tests/unit/test_researcher.py |
-| DR-003 | Sufficiency Gate (coverage matrix, contradiction gate, replanning) | `TODO` | `test_sufficiency_gate_replans` en verde | — |
+| DR-003 | Sufficiency Gate (coverage matrix, contradiction gate, replanning) | `DONE` | familia `test_sufficiency_gate_replans` en verde | python/tests/unit/test_sufficiency_gate.py |
 | DR-004 | Tool-less Reporter (output sólo desde allowed_claim_ids) | `TODO` | `test_reporter_no_tools_available` en verde | — |
 | DR-005 | Citation Verifier (claim-to-evidence, repair-from-ledger) | `TODO` | `test_reporter_cannot_invent_citations` en verde | — |
 | EVAL-001 | Eval Registry (datasets, graders, thresholds, versions) | `TODO` | `aeon eval list` muestra las suites de `evals/suites` | — |
