@@ -11,6 +11,7 @@ package prometheusinference
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/aeon-ai/aeon/go/internal/providers"
@@ -47,9 +48,28 @@ func New(authURL, gatewayURL, clientID, clientSecret, scope, model string) *Adap
 	}
 }
 
+// chatCompletionResponse is the (OpenAI-shaped) subset of the gateway's real response this adapter
+// needs, decoded with real Go int fields — unlike Client.ChatCompletion's map[string]any, which
+// decodes every JSON number as float64 (encoding/json's default for `any`) and would otherwise
+// make this adapter's output inconsistent with every other Provider's NormalizedChatResponse.
+type chatCompletionResponse struct {
+	Model   string `json:"model"`
+	Choices []struct {
+		FinishReason string `json:"finish_reason"`
+		Message      struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
+}
+
 // Decide sends renderedContext as a Chat Completions request body, defaulting "model" to a.Model
-// when the caller didn't already set one, and returns the raw response for the gateway to turn
-// into a typed Decision (proto/schemas/decision.schema.json).
+// when the caller didn't already set one, and returns providers.NormalizedChatResponse — the same
+// output shape every adapter returns, regardless of the fact that this provider's own wire format
+// already happens to look similar.
 func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (map[string]any, error) {
 	body := make(map[string]any, len(renderedContext)+1)
 	for k, v := range renderedContext {
@@ -61,7 +81,29 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 		}
 		body["model"] = a.Model
 	}
-	return a.Client.ChatCompletion(ctx, body)
+
+	raw, err := a.Client.ChatCompletion(ctx, body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Round-trip through JSON to get real int-typed fields — see chatCompletionResponse's doc.
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("prometheus_inference: re-encoding response: %w", err)
+	}
+	var parsed chatCompletionResponse
+	if err := json.Unmarshal(encoded, &parsed); err != nil {
+		return nil, fmt.Errorf("prometheus_inference: decoding response: %w", err)
+	}
+	if len(parsed.Choices) == 0 {
+		return nil, fmt.Errorf("prometheus_inference: response had no choices")
+	}
+
+	choice := parsed.Choices[0]
+	return providers.NormalizedChatResponse(
+		parsed.Model, choice.Message.Content, choice.FinishReason, parsed.Usage.PromptTokens, parsed.Usage.CompletionTokens,
+	), nil
 }
 
 // CachingCapability: most local-inference setups have no prompt caching (ADR-003's Budgeter falls

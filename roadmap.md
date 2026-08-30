@@ -6,18 +6,18 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-29 (Model Gateway real: routing/fallback + restricción por
-> sensibilidad de datos).
+> Última actualización: 2026-08-29 (los 5 adaptadores de Model Gateway reales + conformidad
+> cruzada mínima).
 
 ## Resumen ejecutivo
 
 F1 (Contexto y evidencia) se completó en su totalidad. Por decisión del usuario, antes de avanzar a
-F2 se está terminando lo pendiente de F0: Model Gateway con los proveedores cloud
-(`MDL-001/003/004/005/007`), la conformidad mínima cruzada de proveedores, y tracing (`OBS-001`).
+F2 se está terminando lo pendiente de F0. Ya cerrado: Model Gateway con los 5 adaptadores
+(`MDL-001/003/004/005/006/007`) y la conformidad cruzada mínima. Sólo queda `OBS-001` (tracing).
 
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
-| F0 | Foundation durable | ~59% (10/17) | `IN_PROGRESS` |
+| F0 | Foundation durable | ~88% (15/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
@@ -311,6 +311,21 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   defecto (falla explícitamente si no se configura, no hay "el" endpoint self-hosted), y sin API
   key obligatoria (probado que funciona sin ninguna, que es la configuración por defecto de
   vLLM/Ollama; si se configura una, se envía como Bearer).
+- **`provider_conformance` (versión mínima)** — [conformance_test.go](go/internal/providers/conformance_test.go)
+  corre el mismo request representativo contra los 5 adaptadores reales (cada uno contra un
+  servidor falso que replica su contrato documentado exacto) y verifica que todos devuelven
+  exactamente la misma forma de salida (`choices[].message.content`/`role`, `usage.*` con enteros
+  reales) sin importar el formato nativo del proveedor. **Bug real encontrado y corregido en el
+  camino:** `prometheus_inference` fallaba esta prueba — a diferencia de los otros 4 adaptadores
+  (que decodifican en un struct tipado antes de construir `NormalizedChatResponse`),
+  `prometheus_inference` reenviaba el JSON crudo decodificado genéricamente, donde
+  `encoding/json` de Go decodifica todo número como `float64`, no `int` — un consumidor que
+  esperara `usage.prompt_tokens` como entero real (p. ej. para sumarlo a un contador de budget)
+  se habría roto en silencio. Corregido para que también decodifique en un struct tipado y pase
+  por `NormalizedChatResponse` como el resto. Esto cierra el criterio de salida de fase de F0 (en
+  su versión mínima) y permite marcar `MDL-003..007` como `DONE` — la versión completa de
+  `provider_conformance` (tool calling real, structured output, constraint respect, contexto
+  largo, rechazo de inyección) llega con `EVAL-002`/F2.
 
 ---
 
@@ -322,22 +337,26 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
 | FND-003 | Config-as-code (manifiestos en Git, UI no es source of truth) | `DONE` | `TestAeonValidateAcceptsAndRejectsExampleManifests` en verde | go/cmd/aeon/main_test.go |
 | RUN-001 | Run Controller (start/cancel/pause/resume/status/stream) | `DONE` | `TestRunControllerLifecycle` en verde | go/internal/api/run_controller_handlers_test.go |
 | RUN-002 | Graph Runtime (sequential/parallel/conditional/loop/subgraph/fan-in) | `DONE` | `test_graph_runtime_node_kinds` en verde | python/tests/integration/test_graph_runtime.py |
-| RUN-003 | Budgets (tokens/calls/tools/cost/deadline/depth, hard stop) | `DONE` | `test_budget_hard_stop` en verde (tool_calls/depth/deadline; model_calls/tokens/cost_usd declarados, no aplicados hasta MDL-001) | python/tests/integration/test_budget_hard_stop.py |
+| RUN-003 | Budgets (tokens/calls/tools/cost/deadline/depth, hard stop) | `DONE` | `test_budget_hard_stop` en verde (tool_calls/depth/deadline; model_calls/tokens/cost_usd declarados, no aplicados — el Graph Runtime en Python todavía no llama al Model Gateway en Go, esa integración es trabajo futuro) | python/tests/integration/test_budget_hard_stop.py |
 | RUN-004 | Checkpoint & replay (resume sin duplicar tool effects) | `DONE` | `test_crash_resume_no_duplicate_write` en verde | python/tests/integration/test_crash_resume.py |
 | RUN-005 | Approvals (interrupt durable, parameter binding, expiry) | `DONE` | `test_approval_binding` en verde (aprobado, rechazado, hash no coincide, expira) | python/tests/integration/test_approval_binding.py |
 | MDL-001 | Model Gateway (capability profiles, adapters, fallback, routing) | `DONE` | `TestModelGatewayRoutingFallback` en verde | go/internal/modelgateway/gateway_test.go |
-| MDL-003 | Adaptador `anthropic` | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestAnthropicAdapterDecideNormalizesRequestAndResponse` | go/internal/providers/anthropic/anthropic_test.go |
-| MDL-004 | Adaptador `openai` | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestOpenAIAdapterDecideNormalizesResponse` | go/internal/providers/openai/openai_test.go |
-| MDL-005 | Adaptador `gemini` | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestGeminiAdapterDecideTranslatesRolesAndSystemInstruction` | go/internal/providers/gemini/gemini_test.go |
-| MDL-006 | Adaptador `prometheus_inference` (LLM local) | `IN_PROGRESS` | pasa `provider_conformance` (suite no existe aún, llega con EVAL-002/F2); mientras tanto: `TestPrometheusInferenceRetriesOnceWithFreshTokenAfter401` y el resto de `prometheus_inference_test.go` en verde | go/internal/providers/prometheus_inference/prometheus_inference_test.go |
-| MDL-007 | Adaptador `openai_compatible` (vLLM/Ollama/TGI genérico) | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestOpenAICompatibleAdapterWorksWithoutAnAPIKey` | go/internal/providers/openai_compatible/openai_compatible_test.go |
+| MDL-003 | Adaptador `anthropic` | `DONE` | pasa `provider_conformance` (versión mínima) | go/internal/providers/conformance_test.go, go/internal/providers/anthropic/anthropic_test.go |
+| MDL-004 | Adaptador `openai` | `DONE` | pasa `provider_conformance` (versión mínima) | go/internal/providers/conformance_test.go, go/internal/providers/openai/openai_test.go |
+| MDL-005 | Adaptador `gemini` | `DONE` | pasa `provider_conformance` (versión mínima) | go/internal/providers/conformance_test.go, go/internal/providers/gemini/gemini_test.go |
+| MDL-006 | Adaptador `prometheus_inference` (LLM local) | `DONE` | pasa `provider_conformance` (versión mínima); verificado también en vivo contra una instancia real | go/internal/providers/conformance_test.go, go/internal/providers/prometheus_inference/prometheus_inference_test.go |
+| MDL-007 | Adaptador `openai_compatible` (vLLM/Ollama/TGI genérico) | `DONE` | pasa `provider_conformance` (versión mínima) | go/internal/providers/conformance_test.go, go/internal/providers/openai_compatible/openai_compatible_test.go |
 | TOOL-001 | Tool Registry/Gateway (typed schemas, risk classification, scopes) | `DONE` | `TestToolRegistryCRUDAndRiskClassification` (registry) + `TestToolPolicyDeniesOutOfManifestToolCall` (gateway ejecuta con policy check real) | go/internal/store/tool_registry_test.go, go/internal/api/tool_gateway_handlers_test.go |
 | SEC-001 | Policy Engine (Cedar, authz fuera del modelo) | `DONE` | `TestToolPolicyDeniesOutOfManifestToolCall` en verde | go/internal/api/tool_gateway_handlers_test.go |
 | OBS-001 | Distributed tracing (OTel GenAI semantic conventions) | `TODO` | spans `invoke_agent`/`chat`/`execute_tool` visibles en Tempo | — |
 | — | `deploy/compose` completo (Temporal, Postgres+pgvector, MinIO, OTel, Tempo, Grafana) | `IN_PROGRESS` | `make dev` levanta todos los servicios sanos | — |
 
-**Salida de fase:** `test_crash_resume_no_duplicate_write` en verde + el mismo run pasa contra los
-cuatro adaptadores cloud/local (`test_provider_parity`).
+**Salida de fase — parcialmente cumplida:** `test_crash_resume_no_duplicate_write` en verde ✅;
+`TestProviderConformance` prueba que el mismo request representativo pasa contra los 5 adaptadores
+(cloud + local) con la misma forma normalizada de salida ✅ — pero es la versión **mínima** de
+`provider_conformance`, no la suite completa de `EVAL-002`/F2 (tool calling real, structured
+output, respeto de constraints, contexto largo, rechazo de inyección). Sigue pendiente: `OBS-001`
+(tracing).
 
 ## F1 — Contexto y evidencia (semanas 5-8)
 

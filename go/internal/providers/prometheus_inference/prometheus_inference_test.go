@@ -206,8 +206,13 @@ func TestPrometheusInferenceRetriesOnceWithFreshTokenAfter401(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide should succeed after transparently retrying with a fresh token: %v", err)
 	}
-	if result["object"] != "chat.completion" {
+	choices, ok := result["choices"].([]any)
+	if !ok || len(choices) != 1 {
 		t.Fatalf("unexpected result after retry: %v", result)
+	}
+	message := choices[0].(map[string]any)["message"].(map[string]any)
+	if message["content"] != "hello" {
+		t.Fatalf("expected the fake gateway's real response content after retry, got %v", message["content"])
 	}
 	if auth.callCount.Load() != 2 {
 		t.Fatalf("expected exactly 2 token requests (initial + forced refresh after 401), got %d", auth.callCount.Load())
