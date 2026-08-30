@@ -7,8 +7,8 @@
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
 > Última actualización: 2026-08-29 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha con
-> `DR-001`/`DR-002`/`DR-003` — Planner, Researchers aislados y Sufficiency Gate, todos puros y con
-> test de aceptación real).
+> `DR-001`..`DR-004` — Planner, Researchers aislados, Sufficiency Gate y Reporter sin tools, todos
+> puros y con test de aceptación real).
 
 ## Resumen ejecutivo
 
@@ -49,11 +49,18 @@ cubierta (terminó con evidencia real, no sólo un `FINISH` vacío) y si está i
 cualquier subtarea queda sin cubrir o impugnada, la Gate pide replanning de exactamente esos
 `coverage_topic`, no de todo el plan. Sigue el mismo patrón: puro, sin Temporal, testeado con fakes.
 
+`DR-004` (Tool-less Reporter) añadió `aeon_profiles/deep_research/reporter.py`: `select_allowed_claims`
+toma sólo las claims de subtareas que `DR-003` marcó cubiertas y no impugnadas, y
+`build_reporter_request` arma la petición al modelo sin la clave `tools`/`tool_choice` en absoluto
+— una garantía estructural, no una instrucción que el modelo podría ignorar. El Reporter rechaza
+(`ReporterError`, sin reparar) cualquier reporte que cite un `claim_id` fuera de ese conjunto
+permitido; reparar una cita real pero mal formada es trabajo de `DR-005`.
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | ~23% (3/13) | `IN_PROGRESS` |
+| F2 | Deep Research + EvalOps (**MVP**) | ~31% (4/13) | `IN_PROGRESS` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -434,7 +441,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 | DR-001 | Research Planner (3-5 subtareas, coverage, budgets) | `DONE` | familia `test_planner_subtask_bounds` en verde (el bound 3-5 está en `research_plan.schema.json`, no en código de aplicación) | python/tests/unit/test_planner.py |
 | DR-002 | Isolated Researchers (parallel worker contexts, bounded ReAct) | `DONE` | `test_researcher_isolation` en verde | python/tests/unit/test_researcher.py |
 | DR-003 | Sufficiency Gate (coverage matrix, contradiction gate, replanning) | `DONE` | familia `test_sufficiency_gate_replans` en verde | python/tests/unit/test_sufficiency_gate.py |
-| DR-004 | Tool-less Reporter (output sólo desde allowed_claim_ids) | `TODO` | `test_reporter_no_tools_available` en verde | — |
+| DR-004 | Tool-less Reporter (output sólo desde allowed_claim_ids) | `DONE` | `test_reporter_no_tools_available` en verde | python/tests/unit/test_reporter.py |
 | DR-005 | Citation Verifier (claim-to-evidence, repair-from-ledger) | `TODO` | `test_reporter_cannot_invent_citations` en verde | — |
 | EVAL-001 | Eval Registry (datasets, graders, thresholds, versions) | `TODO` | `aeon eval list` muestra las suites de `evals/suites` | — |
 | EVAL-002 | Eval Runner (offline/repeated trials/provider matrix/trace graders) | `TODO` | `aeon eval run deep_research_core` produce reporte | — |
