@@ -6,23 +6,36 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-29 (OBS-001, distributed tracing, verificado en vivo contra un
-> OTel Collector + Tempo reales).
+> Última actualización: 2026-08-29 (F0 cerrado salvo la nota de `local-llm`; arrancó F2 con
+> `DR-001`, que abrió el primer puente real Python↔Go: el Model Gateway ahora habla HTTP).
 
 ## Resumen ejecutivo
 
 F1 (Contexto y evidencia) se completó en su totalidad. Por decisión del usuario, antes de avanzar a
 F2 se terminó lo pendiente de F0: Model Gateway con los 5 adaptadores
-(`MDL-001/003/004/005/006/007`), la conformidad cruzada mínima, y ahora `OBS-001` (tracing), con
-spans reales verificados en un OTel Collector + Tempo reales. Sólo queda una nota de infraestructura
-de desarrollo sobre el perfil `local-llm` de `deploy/compose` (ver la fila `—` de F0 abajo), no una
+(`MDL-001/003/004/005/006/007`), la conformidad cruzada mínima, y `OBS-001` (tracing), con spans
+reales verificados en un OTel Collector + Tempo reales. Sólo queda una nota de infraestructura de
+desarrollo sobre el perfil `local-llm` de `deploy/compose` (ver la fila `—` de F0 abajo), no una
 feature con ID propio.
+
+F2 arrancó con `DR-001` (Research Planner). Esto exigió construir la primera integración real
+Python↔Go de la plataforma: el Model Gateway (Go) ahora expone `POST /decide` sobre HTTP
+(`go/internal/api/model_gateway_handlers.go`, montado en `aeon-modelgw`, adaptadores registrados
+desde variables de entorno), y el worker Python lo llama vía una Activity real
+(`aeon_worker/activities/model_activities.py::decide_activity`) — sin esto, ningún feature de F2 que
+necesite un LLM real podría funcionar. El Planner mismo (`aeon_profiles/deep_research/planner.py`)
+es puro y se testea con un `decide` falso; el bound de 3-5 subtareas vive en
+`research_plan.schema.json`, no en código de aplicación. De paso se encontraron y arreglaron dos
+bugs reales preexistentes: `make test-python` sólo montaba `python/` (rompía cualquier test que
+leyera `proto/`/`examples/`, incluido el ya existente `test_contracts.py`) y le faltaba instalar
+`pytest` (`--with-editable '.[dev]']` en vez de `.`); y `OPENAI_COMPATIBLE_BASE_URL` en `.env.example`
+tenía un `/v1` final que el adaptador ya añade, duplicando la ruta.
 
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
+| F2 | Deep Research + EvalOps (**MVP**) | ~8% (1/13) | `IN_PROGRESS` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -400,7 +413,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 
 | ID | Feature | Estado | Criterio de DONE | PR |
 |---|---|---|---|---|
-| DR-001 | Research Planner (3-5 subtareas, coverage, budgets) | `TODO` | `test_planner_subtask_bounds` en verde | — |
+| DR-001 | Research Planner (3-5 subtareas, coverage, budgets) | `DONE` | familia `test_planner_subtask_bounds` en verde (el bound 3-5 está en `research_plan.schema.json`, no en código de aplicación) | python/tests/unit/test_planner.py |
 | DR-002 | Isolated Researchers (parallel worker contexts, bounded ReAct) | `TODO` | `test_researcher_isolation` en verde | — |
 | DR-003 | Sufficiency Gate (coverage matrix, contradiction gate, replanning) | `TODO` | `test_sufficiency_gate_replans` en verde | — |
 | DR-004 | Tool-less Reporter (output sólo desde allowed_claim_ids) | `TODO` | `test_reporter_no_tools_available` en verde | — |

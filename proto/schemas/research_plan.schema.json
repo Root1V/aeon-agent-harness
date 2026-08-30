@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon.dev/schemas/research_plan.schema.json",
+  "title": "ResearchPlan",
+  "description": "Output of DR-001's Research Planner: a fixed set of 3-5 subtasks covering a query, each with its own coverage topic and budget, produced before any Researcher (DR-002) starts. The 3-5 bound is enforced structurally (minItems/maxItems), not by application code, so a plan that doesn't fit can never reach a Researcher.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["query", "subtasks"],
+  "properties": {
+    "query": { "type": "string", "minLength": 1 },
+    "subtasks": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 5,
+      "items": { "$ref": "#/$defs/subtask" }
+    }
+  },
+  "$defs": {
+    "subtask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "description", "coverage_topic", "budget"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "coverage_topic": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The distinct facet of the query this subtask covers — DR-003's Sufficiency Gate checks these against a coverage matrix to decide whether the plan as a whole was sufficient."
+        },
+        "budget": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["max_tool_calls", "max_model_calls"],
+          "properties": {
+            "max_tool_calls": { "type": "integer", "minimum": 1 },
+            "max_model_calls": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    }
+  }
+}
