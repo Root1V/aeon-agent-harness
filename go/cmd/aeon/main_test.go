@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -113,6 +115,76 @@ func TestAeonEvalListShowsSuitesFromEvalsDir(t *testing.T) {
 			t.Error("listEvalSuites() = nil error, want one for a suite missing required 'graders'/'thresholds'")
 		}
 	})
+}
+
+// TestAeonEvalRun is EVAL-002's CLI-side acceptance test. The real Eval Runner engine
+// (aeon_evalops.runner, python/tests/unit/test_eval_runner.py) is Python-only and can't run inside
+// this Go test's own container (no Python toolchain there — see Makefile's test-go vs test-python).
+// So this proves the parts that ARE this CLI's own responsibility: argument handling, and that a
+// configured python engine is actually invoked correctly (via a fake, fully controlled script) or
+// that its absence is reported clearly rather than crashing.
+func TestAeonEvalRun(t *testing.T) {
+	t.Run("requires a suite name", func(t *testing.T) {
+		if err := runEvalRun(io.Discard, io.Discard, "", 1); err == nil {
+			t.Error("runEvalRun(\"\", ...) = nil error, want one for a missing suite name")
+		}
+	})
+
+	t.Run("reports clearly when the configured python engine can't be found", func(t *testing.T) {
+		t.Setenv("AEON_EVAL_PYTHON_BIN", "aeon-eval-python-that-does-not-exist")
+		err := runEvalRun(io.Discard, io.Discard, "deep_research_core", 1)
+		if err == nil {
+			t.Fatal("expected an error when the configured python binary can't be found")
+		}
+		if !strings.Contains(err.Error(), "make eval-run") {
+			t.Errorf("error should point the user at the make eval-run fallback, got: %v", err)
+		}
+	})
+
+	t.Run("invokes the configured python engine with the right module/subcommand/args", func(t *testing.T) {
+		// A fake "python3": proves runEvalRun shells out correctly without needing a real Python
+		// toolchain in this test's own container.
+		scriptPath := filepath.Join(t.TempDir(), "fake-python")
+		if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho \"ran: $@\"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("AEON_EVAL_PYTHON_BIN", scriptPath)
+		t.Setenv("AEON_PYTHON_DIR", t.TempDir()) // the fake script doesn't care about cwd content
+
+		var stdout bytes.Buffer
+		if err := runEvalRun(&stdout, io.Discard, "deep_research_core", 3); err != nil {
+			t.Fatalf("runEvalRun: %v", err)
+		}
+		if !strings.Contains(stdout.String(), "-m aeon_evalops.cli run deep_research_core --trials 3") {
+			t.Errorf("expected the fake python engine to be invoked with the right args, got: %q", stdout.String())
+		}
+	})
+}
+
+func TestParseTrialsFlag(t *testing.T) {
+	cases := []struct {
+		args    []string
+		want    int
+		wantErr bool
+	}{
+		{args: nil, want: 1},
+		{args: []string{"--trials", "5"}, want: 5},
+		{args: []string{"--trials", "0"}, wantErr: true},
+		{args: []string{"--trials", "not-a-number"}, wantErr: true},
+		{args: []string{"--trials"}, wantErr: true},
+	}
+	for _, c := range cases {
+		got, err := parseTrialsFlag(c.args)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("parseTrialsFlag(%v) = %d, nil, want an error", c.args, got)
+			}
+			continue
+		}
+		if err != nil || got != c.want {
+			t.Errorf("parseTrialsFlag(%v) = %d, %v, want %d, nil", c.args, got, err, c.want)
+		}
+	}
 }
 
 func writeTempManifest(t *testing.T, content string) string {

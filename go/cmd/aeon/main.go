@@ -1,8 +1,8 @@
 // Command aeon is the platform CLI (DX-002): init/validate/run/eval/trace/replay/publish.
 //
-// STATUS: `validate` (real JSON Schema validation, FND-003) and `eval list` (EVAL-001) are
-// implemented. Neither talks to the control plane yet. The remaining subcommands are stubs that
-// print what they will do — see roadmap.md DX-002, `TODO`.
+// STATUS: `validate` (real JSON Schema validation, FND-003), `eval list` (EVAL-001), and
+// `eval run` (EVAL-002) are implemented. None talk to the control plane yet. The remaining
+// subcommands are stubs that print what they will do — see roadmap.md DX-002, `TODO`.
 package main
 
 import (
@@ -11,8 +11,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -47,16 +49,32 @@ func main() {
 		fmt.Println("valid")
 	case "eval":
 		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: aeon eval <list> [args]")
+			fmt.Fprintln(os.Stderr, "usage: aeon eval <list|run> [args]")
 			os.Exit(1)
 		}
-		if os.Args[2] != "list" {
-			fmt.Printf("aeon eval %s: not yet implemented — see roadmap.md EVAL-002/EVAL-003\n", os.Args[2])
+		switch os.Args[2] {
+		case "list":
+			if err := runEvalList(os.Stdout); err != nil {
+				fmt.Fprintf(os.Stderr, "eval list: %v\n", err)
+				os.Exit(1)
+			}
+		case "run":
+			if len(os.Args) < 4 {
+				fmt.Fprintln(os.Stderr, "usage: aeon eval run <suite-name> [--trials N]")
+				os.Exit(1)
+			}
+			trials, err := parseTrialsFlag(os.Args[4:])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			if err := runEvalRun(os.Stdout, os.Stderr, os.Args[3], trials); err != nil {
+				fmt.Fprintf(os.Stderr, "eval run: %v\n", err)
+				os.Exit(1)
+			}
+		default:
+			fmt.Printf("aeon eval %s: not yet implemented — see roadmap.md EVAL-003\n", os.Args[2])
 			os.Exit(2)
-		}
-		if err := runEvalList(os.Stdout); err != nil {
-			fmt.Fprintf(os.Stderr, "eval list: %v\n", err)
-			os.Exit(1)
 		}
 	case "init", "run", "trace", "replay", "publish":
 		fmt.Printf("aeon %s: not yet implemented — see roadmap.md DX-002\n", os.Args[1])
@@ -344,5 +362,81 @@ func runEvalList(w io.Writer) error {
 		return err
 	}
 	printEvalSuites(w, suites)
+	return nil
+}
+
+func parseTrialsFlag(args []string) (int, error) {
+	for i := 0; i < len(args); i++ {
+		if args[i] != "--trials" {
+			continue
+		}
+		if i+1 >= len(args) {
+			return 0, fmt.Errorf("--trials requires a value")
+		}
+		n, err := strconv.Atoi(args[i+1])
+		if err != nil || n < 1 {
+			return 0, fmt.Errorf("--trials must be a positive integer, got %q", args[i+1])
+		}
+		return n, nil
+	}
+	return 1, nil
+}
+
+// pythonBin is the interpreter `runEvalRun` invokes — overridable via AEON_EVAL_PYTHON_BIN so
+// tests can point it at a fake, fully controllable script instead of depending on whether a real
+// Python toolchain happens to be on PATH in whatever container runs `go test` (it usually isn't:
+// see Makefile's test-go vs test-python, two separate containers).
+func pythonBin() string {
+	if bin := os.Getenv("AEON_EVAL_PYTHON_BIN"); bin != "" {
+		return bin
+	}
+	return "python3"
+}
+
+// resolvePythonDir finds the python/ directory, mirroring resolveProtoDir/resolveEvalsDir's search
+// order: AEON_PYTHON_DIR env var, then ./python, ../python, ../../python.
+func resolvePythonDir() (string, error) {
+	if dir := os.Getenv("AEON_PYTHON_DIR"); dir != "" {
+		return dir, nil
+	}
+	for _, candidate := range []string{"python", filepath.Join("..", "python"), filepath.Join("..", "..", "python")} {
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("could not locate python/ — set AEON_PYTHON_DIR explicitly")
+}
+
+// runEvalRun is EVAL-002's CLI surface. The actual Eval Runner engine (aeon_evalops.runner) lives
+// in Python — it calls the real DR-001..DR-005 pipeline code, which has no Go equivalent and
+// shouldn't get a second, duplicate implementation here. Until that engine is reachable as a
+// service (like the Model Gateway, MDL-001/DR-001) rather than a local process, this shells out to
+// it directly; see `make eval-run` for the containerized path when no local Python is set up.
+func runEvalRun(stdout, stderr io.Writer, suiteName string, trials int) error {
+	if suiteName == "" {
+		return fmt.Errorf("suite name is required")
+	}
+
+	bin := pythonBin()
+	binPath, err := exec.LookPath(bin)
+	if err != nil {
+		return fmt.Errorf(
+			"%s not found on PATH — the Eval Runner engine lives in Python (aeon_evalops); "+
+				"run it via the Python container instead: `make eval-run SUITE=%s`", bin, suiteName,
+		)
+	}
+
+	pythonDir, err := resolvePythonDir()
+	if err != nil {
+		return err
+	}
+
+	cmd := exec.Command(binPath, "-m", "aeon_evalops.cli", "run", suiteName, "--trials", strconv.Itoa(trials))
+	cmd.Dir = pythonDir
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("eval runner exited with an error: %w", err)
+	}
 	return nil
 }

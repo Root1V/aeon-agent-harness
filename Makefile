@@ -45,6 +45,12 @@ test-python: ## Run Python unit + integration tests in a throwaway container via
 	docker run --rm -v "$(PWD):/repo" -w /repo/python python:3.13-slim sh -c \
 		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q"
 
+eval-run: ## Run an EvalSuite offline (EVAL-002): make eval-run SUITE=deep_research_core [TRIALS=3]
+	# `aeon eval run` (go/cmd/aeon) shells out to this same aeon_evalops.cli entrypoint when a local
+	# Python is on PATH; this target is the containerized fallback when it isn't.
+	docker run --rm -v "$(PWD):/repo" -w /repo/python python:3.13-slim sh -c \
+		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' python -m aeon_evalops.cli run $(SUITE) --trials $(or $(TRIALS),1)"
+
 lint: ## Lint proto/schemas, Go and Python sources
 	for f in proto/schemas/*.json proto/manifests/*.json; do python3 -m json.tool "$$f" >/dev/null || exit 1; done
 	@echo "schemas OK"

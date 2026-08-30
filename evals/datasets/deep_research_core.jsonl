@@ -1,2 +1,2 @@
-{"id": "dr-core-001", "query": "what year was the transformer architecture introduced, and by whom?", "expected_topics": ["transformer architecture", "attention is all you need"]}
-{"id": "dr-core-002", "query": "what are the main tradeoffs between OTel GenAI semantic conventions and a custom tracing schema?", "expected_topics": ["otel genai semantic conventions", "custom schema tradeoffs"]}
+{"id": "dr-core-001", "query": "what year was the transformer architecture introduced, and by whom?", "expected_topics": ["transformer architecture origin", "attention is all you need paper", "authors and institution"]}
+{"id": "dr-core-002", "query": "what are the main tradeoffs between OTel GenAI semantic conventions and a custom tracing schema?", "expected_topics": ["otel genai semantic conventions", "custom schema tradeoffs", "adoption cost"]}

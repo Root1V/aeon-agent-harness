@@ -137,3 +137,37 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   documentar que `local-llm` requiere GPU explícitamente.
 - **Coste:** S si sólo se documenta/excluye el criterio; M si se sustituye por un servidor real
   CPU-compatible (implica validar que el adaptador `openai_compatible` sigue funcionando contra él).
+
+### Eval Runner: provider matrix, trace graders, e `injection_suite` real (EVAL-002)
+
+- **Descripción:** `aeon_evalops/runner.py` (EVAL-002) es real para "offline" y "repeated trials",
+  y `coverage_grader`/`citation_integrity_grader` llaman al pipeline real `DR-001`..`DR-005`. Tres
+  piezas de la descripción original de EVAL-002 quedan fuera de este primer Runner: (1) **provider
+  matrix** — correr el mismo suite contra cada adaptador real (`MDL-003..007`) en vez de fixtures
+  scripted; (2) **trace graders** — calificar en base a spans OTel reales (`OBS-001`) en vez de sólo
+  el resultado final; (3) un harness offline real para `injection_suite` (hoy reporta `SKIPPED`
+  honestamente, sin inventar un puntaje).
+- **Fase objetivo:** F2 (antes del cierre del MVP) o F4 si se decide diferir.
+- **Criterio de entrada:** provider matrix necesita el Model Gateway real (`aeon-modelgw`)
+  alcanzable en el entorno donde corre el Runner, no sólo fixtures — natural una vez `INT-002`
+  (endpoint OpenAI-compatible) o el propio `aeon-modelgw` esté siempre arriba en CI. Trace graders
+  necesita un Tempo real alcanzable (igual que `TestDistributedTracingSpansReachTempo`).
+  `injection_suite` necesita decidir qué constituye "resistencia a inyección" verificable offline
+  (p. ej. un documento con instrucciones embebidas → ningún `tool_call` no solicitado en el
+  resultado) antes de escribir su harness.
+- **Coste:** M cada uno; los tres son independientes entre sí.
+
+### Motor del Eval Runner como servicio (reemplazar el `exec.Command` de `aeon eval run`)
+
+- **Descripción:** `aeon eval run` (Go) hoy shell-ea directamente a
+  `python -m aeon_evalops.cli` (o falla con un mensaje claro si no hay Python en el `PATH`,
+  documentado como fallback vía `make eval-run`). Esto es una solución puente, no la arquitectura
+  final: rompe la premisa de `aeon/cli` como binario Go estático sin dependencias, y no funciona
+  si el CLI corre en una máquina distinta a donde vive `python/`.
+- **Fase objetivo:** F2, cuando el resto de EVAL-002 (provider matrix) ya necesite que el motor sea
+  un servicio de todos modos.
+- **Criterio de entrada:** el mismo patrón que ya resolvió esto para el Model Gateway
+  (`DR-001`): exponer `aeon_evalops.runner.run_suite` sobre HTTP (p. ej. un endpoint en un nuevo
+  `aeon-evalrunner`, o añadido a `aeon-modelgw`/`aeon-worker`) y hacer que `aeon eval run` llame a
+  ese endpoint en vez de invocar un proceso Python local.
+- **Coste:** M.
