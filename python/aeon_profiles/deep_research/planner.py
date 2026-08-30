@@ -9,6 +9,7 @@ its own and has no Temporal import, so it's directly unit-testable with a fake `
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +17,12 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-_SCHEMA_PATH = Path(__file__).resolve().parents[3] / "proto" / "schemas" / "research_plan.schema.json"
+# AEON_SCHEMAS_DIR (same convention the Go CLI's resolveProtoDir uses) first, falling back to this
+# repo's own layout — the fallback only holds in a full checkout, not inside a container image
+# that ships python/ alone. See deploy/compose's worker service, which mounts proto/ read-only and
+# sets AEON_SCHEMAS_DIR — without it, this import crashes the whole worker process on startup.
+_PROTO_DIR = Path(os.environ["AEON_SCHEMAS_DIR"]) if os.environ.get("AEON_SCHEMAS_DIR") else Path(__file__).resolve().parents[3] / "proto"
+_SCHEMA_PATH = _PROTO_DIR / "schemas" / "research_plan.schema.json"
 _VALIDATOR = Draft202012Validator(json.loads(_SCHEMA_PATH.read_text()))
 
 MIN_SUBTASKS = 3

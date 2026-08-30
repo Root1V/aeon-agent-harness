@@ -200,3 +200,29 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   necesite `aeon_sdk` — generalizar antes de eso es adivinar la abstracción correcta sin un
   segundo caso real que la valide.
 - **Coste:** L.
+
+### `aeon replay --assert-identical` (diff/reejecución real, no sólo historial)
+
+- **Descripción:** `aeon replay <run_id>` (DX-002) hoy imprime el historial real de eventos de
+  Temporal — prueba que el CLI puede conectarse y consultar de verdad, pero no reejecuta el
+  workflow ni compara resultados. El MVP final del roadmap describe `aeon replay <run_id>
+  --assert-identical`: reejecutar contra el historial grabado y confirmar que el resultado es
+  bit-a-bit idéntico (la prueba real de que ADR-001 se cumple).
+- **Fase objetivo:** cierre del MVP de F2.
+- **Criterio de entrada:** ninguno especial — es trabajo directo, usar
+  `temporalio`'s replay tooling (Go o Python) contra el historial ya obtenible.
+- **Coste:** M.
+
+### `aeon publish` con promoción Candidate→Released gateada por eval real
+
+- **Descripción:** `aeon publish` (DX-002) registra y promueve Draft→Candidate contra el control
+  plane real, pero deliberadamente NO intenta Candidate→Released — ese paso necesita un
+  `ReleaseGateDecision` (EVAL-003) real, comparando el `SuiteReport` del candidato contra un
+  baseline, y hoy no hay de dónde sacar ese baseline automáticamente (ni un flag `--release` en el
+  CLI, ni una noción de "cuál es el Released actual para comparar").
+- **Fase objetivo:** F2 tardío, una vez que `EVAL-002`'s "provider matrix"/motor-como-servicio
+  (ver entradas de arriba) esté resuelto — sin eso, calcular el `SuiteReport` del candidato desde
+  el CLI Go implica el mismo puente `exec.Command` a Python que `eval run` ya usa.
+- **Criterio de entrada:** decidir de dónde sale el "baseline": ¿el último agente `Released` con
+  el mismo `name`? ¿un `SuiteReport` guardado explícitamente en el publish anterior?
+- **Coste:** M.

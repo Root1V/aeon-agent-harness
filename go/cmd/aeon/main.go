@@ -76,9 +76,56 @@ func main() {
 			fmt.Printf("aeon eval %s: not yet implemented — see roadmap.md EVAL-003\n", os.Args[2])
 			os.Exit(2)
 		}
-	case "init", "run", "trace", "replay", "publish":
-		fmt.Printf("aeon %s: not yet implemented — see roadmap.md DX-002\n", os.Args[1])
-		os.Exit(2)
+	case "init":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: aeon init <directory>")
+			os.Exit(1)
+		}
+		if err := runInit(os.Args[2]); err != nil {
+			fmt.Fprintf(os.Stderr, "init: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("scaffolded a new agent project at %s\n", os.Args[2])
+	case "run":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: aeon run <example-directory> [query]")
+			os.Exit(1)
+		}
+		query := ""
+		if len(os.Args) > 3 {
+			query = strings.Join(os.Args[3:], " ")
+		}
+		if err := runRun(os.Stdout, os.Stderr, os.Args[2], query); err != nil {
+			fmt.Fprintf(os.Stderr, "run: %v\n", err)
+			os.Exit(1)
+		}
+	case "trace":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: aeon trace <run_id>")
+			os.Exit(1)
+		}
+		if err := runTrace(os.Stdout, os.Args[2]); err != nil {
+			fmt.Fprintf(os.Stderr, "trace: %v\n", err)
+			os.Exit(1)
+		}
+	case "replay":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: aeon replay <run_id>")
+			os.Exit(1)
+		}
+		if err := runReplay(os.Stdout, os.Args[2]); err != nil {
+			fmt.Fprintf(os.Stderr, "replay: %v\n", err)
+			os.Exit(1)
+		}
+	case "publish":
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: aeon publish <path-to-agent-manifest.yaml>")
+			os.Exit(1)
+		}
+		if err := runPublish(os.Stdout, os.Args[2]); err != nil {
+			fmt.Fprintf(os.Stderr, "publish: %v\n", err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(1)

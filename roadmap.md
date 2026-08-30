@@ -6,9 +6,9 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-30 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha — con
-> `DX-001`, el pipeline `DR-001`..`DR-005` corre por primera vez de verdad dentro de un workflow
-> Temporal real, de punta a punta, vía `aeon_sdk`).
+> Última actualización: 2026-08-30 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha —
+> `DX-002` completa la CLI y de paso destapó un bug real: el `worker` de compose no arrancaba
+> desde `DX-001`, ver más abajo).
 
 ## Resumen ejecutivo
 
@@ -122,11 +122,32 @@ script real y ejecutable que los junta. La prueba de aceptación
 efímero real y un worker en un proceso separado real — sólo el Model Gateway es un doble HTTP (nada
 de esto pasa por fakes en memoria como los tests puros de `DR-001`..`DR-005`).
 
+`DX-002` (CLI) completó `init` (scaffolding real de `agent.yaml`/`policy_bundle.yaml`/
+`model_policy_bundle.yaml`, cada uno válido tal cual contra `aeon validate`), `run` (delega a
+`<directorio>/run.py`, mismo patrón de `aeon eval run`), `trace` (consulta TraceQL real contra
+Tempo, reutilizando el atributo `gen_ai.agent.name` de `OBS-001`), `replay` (historial real de
+Temporal vía el cliente Go, sin diff/reejecución todavía — ver `backlog.md`) y `publish` (valida,
+registra en el Agent Registry real y promueve Draft→Candidate; re-ejecutable de forma idempotente).
+Verificado a mano contra el stack real (`--profile core --profile obs`): `init`→`validate`→
+`publish` contra Postgres real, `trace` contra Tempo real, `replay` contra Temporal real — cada uno
+con datos genuinos, no fixtures.
+
+**Bug real encontrado y arreglado durante esta verificación:** el servicio `worker` de
+`deploy/compose` llevaba roto desde `DX-001` — `aeon_worker/__main__.py` ahora importa
+`deep_research_activities`, que a su vez importa `planner.py`/`decision.py`, y ambos cargan un
+JSON Schema con una ruta relativa que asume un checkout completo del repo. La imagen del `worker`
+sólo empaqueta `python/` (su build context), así que `proto/` nunca estuvo ahí — el worker
+crasheaba al arrancar, antes incluso de conectar a Temporal, y nadie lo había notado porque ningún
+test lo ejercitaba contra la imagen real de compose. Arreglado con la misma convención que ya usa
+la CLI Go (`AEON_SCHEMAS_DIR`): ambos módulos Python la consultan primero, y `docker-compose.yml`
+monta `proto/` de sólo lectura en el `worker` y la define. Verificado arrancando el `worker` real y
+completando un run real de punta a punta.
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | ~69% (9/13) | `IN_PROGRESS` |
+| F2 | Deep Research + EvalOps (**MVP**) | ~77% (10/13) | `IN_PROGRESS` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -513,7 +534,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 | EVAL-002 | Eval Runner (offline/repeated trials/provider matrix/trace graders) | `DONE` | `aeon eval run deep_research_core` produce reporte real — ver `test_eval_run_produces_a_report_for_deep_research_core` (motor) y `TestAeonEvalRun` (CLI) en verde. Sólo "offline" y "repeated trials" son reales hoy; "provider matrix" y "trace graders" quedan en `backlog.md` | python/tests/unit/test_eval_runner.py, go/cmd/aeon/main_test.go |
 | EVAL-003 | Release Gates (bloquear promoción por regresión) | `DONE` | `test_release_gate_blocks_regression_even_when_still_above_threshold` en verde (motor) + `TestAgentRegistryReleaseGateBlocksPromotion` en verde (aplicación real en el registry) | python/tests/unit/test_release_gate.py, go/internal/store/agent_registry_test.go |
 | DX-001 | SDK Python (`start_deep_research_run`, primer workflow real DR-001..DR-005) | `DONE` | `test_deep_research_workflow_produces_a_verified_report_end_to_end` en verde — pipeline completo real contra Temporal + worker real, sólo el Model Gateway es un doble HTTP. Alcance: `aeon_sdk.deep_research`/`aeon_sdk.model_policy` (Deep Research únicamente); un `start_run(manifest)` genérico y tools/context/memory/traces/approvals como superficie SDK propia quedan en `backlog.md` | python/tests/integration/test_deep_research_workflow.py, examples/deep-research/run.py |
-| DX-002 | CLI (init/validate/run/eval/trace/replay/publish) | `TODO` | los 7 subcomandos ejecutan sin error contra el compose | — |
+| DX-002 | CLI (init/validate/run/eval/trace/replay/publish) | `DONE` | los 7 subcomandos ejecutan sin error contra el compose real — verificado a mano (`init`/`validate`/`publish` contra Postgres real, `trace` contra Tempo real, `replay` contra Temporal real) más `TestAeonInit`/`TestAeonRun`/`TestAeonTrace`/`TestAeonReplay`/`TestAeonPublish` en verde | go/cmd/aeon/dx002.go, go/cmd/aeon/dx002_test.go |
 | DX-003 | Template Deep Research | `TODO` | `examples/deep-research/agent.yaml` válido y ejecutable | — |
 | INT-001 | `FrameworkAdapter` LangGraph (Modo B) | `TODO` | `examples/langgraph-interop` corre dentro de una Activity | — |
 | INT-002 | Endpoint OpenAI-compatible del Model Gateway (Modo C) | `TODO` | un cliente `openai` apuntando a `base_url` local obtiene routing/budgets | — |
