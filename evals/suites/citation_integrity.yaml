@@ -1,0 +1,12 @@
+apiVersion: harness.ai/v1
+kind: EvalSuite
+metadata:
+  name: citation_integrity
+  version: 0.1.0
+  owner: aeon-platform-team
+spec:
+  dataset: evals/datasets/citation_integrity.jsonl
+  graders: [citation_integrity_grader]
+  thresholds:
+    citation_integrity: 1.0
+  gateOn: [release, nightly]

@@ -1,0 +1,13 @@
+apiVersion: harness.ai/v1
+kind: EvalSuite
+metadata:
+  name: deep_research_core
+  version: 0.1.0
+  owner: aeon-platform-team
+spec:
+  dataset: evals/datasets/deep_research_core.jsonl
+  graders: [coverage_grader, citation_integrity_grader]
+  thresholds:
+    coverage: 0.8
+    citation_integrity: 0.95
+  gateOn: [release, nightly]

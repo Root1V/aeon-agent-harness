@@ -1,0 +1,1 @@
+{"id": "conf-001", "rendered_context": {"model": "conformance-test-model", "messages": [{"role": "user", "content": "ping"}]}, "expect": "NormalizedChatResponse-shaped output from every registered provider"}
