@@ -223,7 +223,14 @@ services:
       <<: *common-env
       AEON_TEMPORAL_ADDRESS: temporal:7233
       AEON_MODELGW_ADDR: modelgw:9402
+      # DX-001's Deep Research Activities import aeon_profiles/aeon_worker modules that load JSON
+      # Schemas from proto/ at import time — proto/ isn't in this image's build context (see
+      # Dockerfile.python: context is python/ alone), so it must be mounted and pointed to here,
+      # or the worker crashes on startup before ever connecting to Temporal.
+      AEON_SCHEMAS_DIR: /proto
       AEON_TOOLGW_ADDR: toolgw:9403
+    volumes:
+      - ../../proto:/proto:ro
 
   runcontroller:
     build:

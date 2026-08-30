@@ -9,6 +9,7 @@ worth spending model output tokens on or trusting the model to keep unique.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,7 +17,11 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-_SCHEMA_PATH = Path(__file__).resolve().parents[2] / "proto" / "schemas" / "decision.schema.json"
+# AEON_SCHEMAS_DIR (same convention the Go CLI's resolveProtoDir uses) first, falling back to this
+# repo's own layout — see aeon_profiles.deep_research.planner's identical comment for why the
+# fallback alone isn't enough inside deploy/compose's worker container.
+_PROTO_DIR = Path(os.environ["AEON_SCHEMAS_DIR"]) if os.environ.get("AEON_SCHEMAS_DIR") else Path(__file__).resolve().parents[2] / "proto"
+_SCHEMA_PATH = _PROTO_DIR / "schemas" / "decision.schema.json"
 _VALIDATOR = Draft202012Validator(json.loads(_SCHEMA_PATH.read_text()))
 
 VALID_ACTIONS = frozenset({"CALL_TOOL", "RECALL_OBSERVATION", "EMIT_MESSAGE", "REQUEST_REPLAN", "FINISH"})
