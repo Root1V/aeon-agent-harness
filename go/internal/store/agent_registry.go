@@ -41,6 +41,21 @@ var ErrInvalidTransition = errors.New("store: invalid lifecycle transition")
 // are immutable once created; a new version is how you change a Released agent.
 var ErrAlreadyExists = errors.New("store: already exists")
 
+// ErrReleaseGateBlocked is returned when a Candidate -> Released transition is requested with a
+// ReleaseGateDecision that didn't allow it (EVAL-003).
+var ErrReleaseGateBlocked = errors.New("store: release gate blocked promotion to Released")
+
+// ReleaseGateDecision is EVAL-003's typed verdict on whether a Candidate may be promoted to
+// Released — computed elsewhere (aeon_evalops.release_gate.evaluate_release_gate, comparing the
+// candidate's eval results against the currently Released version's own baseline) and passed in
+// here. This store has no way to run an eval suite itself and shouldn't grow one; it only applies
+// the decision, the same separation of concerns as a Decision applied by a deterministic workflow
+// (docs/adr/0001). Ignored for every transition except Candidate -> Released.
+type ReleaseGateDecision struct {
+	Allowed bool
+	Reason  string // surfaced in the error when Allowed is false
+}
+
 // AgentRecord is a stored AgentManifest plus registry metadata (FND-001).
 type AgentRecord struct {
 	Name      string         `json:"name"`
@@ -117,10 +132,10 @@ func (r *AgentRegistry) List(ctx context.Context) ([]*AgentRecord, error) {
 
 // TransitionLifecycle moves an agent version forward exactly one lifecycle step (Draft ->
 // Candidate -> Released -> Retired). Any other requested target — skipping a state, moving
-// backward, or requesting the current state — returns ErrInvalidTransition. This is what
-// eventually backs Release Gates (EVAL-003): a controlled, auditable, one-step-at-a-time path
-// to Released.
-func (r *AgentRegistry) TransitionLifecycle(ctx context.Context, name, version, target string) (*AgentRecord, error) {
+// backward, or requesting the current state — returns ErrInvalidTransition. The Candidate ->
+// Released step additionally requires gate.Allowed (EVAL-003's Release Gate) — every other
+// transition ignores gate entirely, so callers not promoting to Released may pass the zero value.
+func (r *AgentRegistry) TransitionLifecycle(ctx context.Context, name, version, target string, gate ReleaseGateDecision) (*AgentRecord, error) {
 	current, err := r.Get(ctx, name, version)
 	if err != nil {
 		return nil, err
@@ -129,6 +144,14 @@ func (r *AgentRegistry) TransitionLifecycle(ctx context.Context, name, version, 
 	if !ok || allowed != target {
 		return nil, fmt.Errorf("%w: %s@%s is %s, cannot move to %s (only %s is allowed)",
 			ErrInvalidTransition, name, version, current.Lifecycle, target, allowed)
+	}
+
+	if current.Lifecycle == LifecycleCandidate && target == LifecycleReleased && !gate.Allowed {
+		reason := gate.Reason
+		if reason == "" {
+			reason = "no passing release gate decision was provided"
+		}
+		return nil, fmt.Errorf("%w: %s@%s: %s", ErrReleaseGateBlocked, name, version, reason)
 	}
 
 	_, err = r.pool.Exec(ctx,

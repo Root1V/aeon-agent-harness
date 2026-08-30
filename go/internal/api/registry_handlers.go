@@ -68,12 +68,20 @@ func (h *RegistryHandlers) getAgent(w http.ResponseWriter, r *http.Request) {
 func (h *RegistryHandlers) transitionAgent(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Target string `json:"target"`
+		// ReleaseGate is EVAL-003's verdict — computed elsewhere (aeon_evalops.release_gate) and
+		// passed through here. Only checked for the Candidate -> Released step; omit it (or set
+		// allowed:false) for every other transition, which ignores it entirely.
+		ReleaseGate struct {
+			Allowed bool   `json:"allowed"`
+			Reason  string `json:"reason"`
+		} `json:"release_gate"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	rec, err := h.Store.AgentRegistry().TransitionLifecycle(r.Context(), r.PathValue("name"), r.PathValue("version"), body.Target)
+	gate := store.ReleaseGateDecision{Allowed: body.ReleaseGate.Allowed, Reason: body.ReleaseGate.Reason}
+	rec, err := h.Store.AgentRegistry().TransitionLifecycle(r.Context(), r.PathValue("name"), r.PathValue("version"), body.Target, gate)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -119,7 +127,7 @@ func writeStoreError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err)
 	case errors.Is(err, store.ErrAlreadyExists):
 		writeError(w, http.StatusConflict, err)
-	case errors.Is(err, store.ErrInvalidTransition):
+	case errors.Is(err, store.ErrInvalidTransition), errors.Is(err, store.ErrReleaseGateBlocked):
 		writeError(w, http.StatusUnprocessableEntity, err)
 	case strings.Contains(err.Error(), "idempotency_key_fields"),
 		strings.Contains(err.Error(), "invalid side_effect"),
