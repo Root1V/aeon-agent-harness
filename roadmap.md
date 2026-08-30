@@ -18,7 +18,7 @@ ahora mismo.
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~53% (9/17) | `IN_PROGRESS` (en pausa, ver nota arriba) |
-| F1 | Contexto y evidencia | ~11% (1/9) | `IN_PROGRESS` |
+| F1 | Contexto y evidencia | ~22% (2/9) | `IN_PROGRESS` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
@@ -163,6 +163,20 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   `MEM-*`): budgeting/orden por cache-hit, offload de tool I/O grande, compactación tipada, y
   addressable recall — el módulo deja el punto de extensión (`_RENDERERS`) listo para cuando
   lleguen, sin necesidad de tocar el enforcement ya existente.
+- `CTX-002` (Context Budgeter) — [test_context_budgeter.py](python/tests/unit/test_context_budgeter.py)
+  prueba la propiedad económica real, no sólo el orden: el prefijo estable (`L0_POLICY` →
+  `L6_SKILLS` → `L1_STATE`) sale **byte-idéntico** entre dos "turnos" que sólo difieren en las
+  lanes volátiles (`L2_EVIDENCE`/`L3_EPISODIC`) — eso es justo lo que hace que un proveedor con
+  prompt caching detecte el mismo prefijo y lo cobre más barato. El orden `CACHE_STABLE_ORDER` es
+  deliberadamente distinto del orden `L0..L6` de `CTX-001` (ese es por fidelidad, éste es por
+  economía de caché — ambos fijos, cada uno por su propia razón). Bajo presión de presupuesto se
+  descarta primero lo más volátil (`L2`/`L3`), nunca `L0_POLICY`/`L1_STATE`. **Bug real encontrado
+  y corregido en el camino:** el algoritmo greedy original podía exceder el presupuesto total si
+  una lane opcional aparecía en el orden ANTES que una lane obligatoria (p. ej. `L6_SKILLS` antes
+  que `L1_STATE`) — se colaba "creyendo" que sobraba espacio, y luego la lane obligatoria se
+  añadía igual sin mirar el presupuesto. Se corrigió reservando el coste de las lanes obligatorias
+  por adelantado, para que el orden de aparición nunca afecte si el presupuesto se respeta de
+  verdad.
 
 ---
 
@@ -196,7 +210,7 @@ cuatro adaptadores cloud/local (`test_provider_parity`).
 | ID | Feature | Estado | Criterio de DONE | PR |
 |---|---|---|---|---|
 | CTX-001 | Typed Context Lanes (L0-L6) | `DONE` | `test_lane_fidelity_policy` en verde | python/tests/unit/test_context_lanes.py |
-| CTX-002 | Context Budgeter (ensamblado por prioridad + cache-hit) | `TODO` | `test_budgeter_cache_stable_ordering` en verde | — |
+| CTX-002 | Context Budgeter (ensamblado por prioridad + cache-hit) | `DONE` | `test_budgeter_cache_stable_ordering` en verde | python/tests/unit/test_context_budgeter.py |
 | CTX-003 | Offload (tool I/O grande → observation store + puntero) | `TODO` | `test_no_full_document_injection` en verde | — |
 | CTX-004 | Typed Compaction (fidelity policy por lane, no resumen uniforme) | `TODO` | `test_pinned_exact_survives_stress` en verde | — |
 | CTX-005 | Addressable Recall (IDs estables, `context.recall`) | `TODO` | `test_addressable_recall_roundtrip` en verde | — |
