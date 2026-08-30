@@ -18,7 +18,7 @@ ahora mismo.
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~53% (9/17) | `IN_PROGRESS` (en pausa, ver nota arriba) |
-| F1 | Contexto y evidencia | ~56% (5/9) | `IN_PROGRESS` |
+| F1 | Contexto y evidencia | ~67% (6/9) | `IN_PROGRESS` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
@@ -211,6 +211,16 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   ensamblado, sólo el fragmento pedido — la propiedad que hace útil todo el ciclo offload→recall.
   Búsqueda semántica real sobre contenido recuperado queda para `RAG-001` (`TODO`); esto es
   deliberadamente una extracción simple pero genuina, no un placeholder.
+- `CTX-006` (Context Integrity Gate) — [test_context_integrity.py](python/tests/unit/test_context_integrity.py)
+  cierra el subgrupo `CTX-*`: es el último chequeo antes de una llamada al modelo, sobre el
+  contexto ya ensamblado por `CTX-001..005`. No es fuente de ninguna garantía por sí mismo —
+  `IntegrityGate` detecta si algo aguas arriba falló silenciosamente: una constraint requerida
+  (`required_constraints`) que ya no aparece en el texto ensamblado, un puntero `[recall:id]` cuyo
+  `id` no está en el conjunto de `recall_id`s conocidos (referencia colgante), o un contexto que
+  excede el presupuesto de tokens del modelo destino. `enforce()` lanza `IntegrityViolation` con
+  las tres categorías de violación reportadas juntas si coinciden, no sólo la primera que
+  encuentra — se probó explícitamente. Esto es el equivalente, del lado del contexto de ENTRADA,
+  a lo que `DR-005` (Citation Verifier, `TODO`) hará del lado de la SALIDA del modelo.
 
 ---
 
@@ -248,7 +258,7 @@ cuatro adaptadores cloud/local (`test_provider_parity`).
 | CTX-003 | Offload (tool I/O grande → observation store + puntero) | `DONE` | `test_no_full_document_injection` en verde | python/tests/unit/test_context_offload.py |
 | CTX-004 | Typed Compaction (fidelity policy por lane, no resumen uniforme) | `DONE` | `test_pinned_exact_survives_stress` en verde | python/tests/unit/test_context_compaction.py |
 | CTX-005 | Addressable Recall (IDs estables, `context.recall`) | `DONE` | `test_addressable_recall_roundtrip` en verde | python/tests/unit/test_context_recall.py |
-| CTX-006 | Context Integrity Gate (constraint/citation/token checks pre-model-call) | `TODO` | `test_integrity_gate_blocks_missing_constraint` en verde | — |
+| CTX-006 | Context Integrity Gate (constraint/citation/token checks pre-model-call) | `DONE` | `test_integrity_gate_blocks_missing_constraint` en verde | python/tests/unit/test_context_integrity.py |
 | RAG-001 | Retrieval Gateway (connectors, ACL, hybrid search, rerank, cache) | `TODO` | `test_retrieval_acl_enforced` en verde | — |
 | RAG-002 | Evidence Extractor (compactación condicionada → EvidencePacket) | `TODO` | `test_evidence_packet_schema_valid` en verde | — |
 | RAG-003 | Evidence Ledger (provenance, dedupe, contradictions, source quality) | `TODO` | `test_ledger_contradiction_grouping` en verde | — |
