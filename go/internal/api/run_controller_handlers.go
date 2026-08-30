@@ -6,8 +6,18 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/aeon-ai/aeon/go/internal/runcontroller"
 )
+
+// runControllerTracer emits OBS-001's "invoke_agent" span (OTel GenAI semantic conventions) around
+// starting a run — the root of a run's trace. A no-op until some binary calls tracing.Init
+// (go/internal/tracing) — safe regardless of whether tracing is wired up.
+var runControllerTracer = otel.Tracer("aeon-runcontroller")
 
 // RunControllerHandlers exposes RUN-001: start/cancel/pause/resume/status/stream for a run, as a
 // thin HTTP layer over runcontroller.Controller (which does the actual Temporal client calls).
@@ -45,11 +55,21 @@ func (h *RunControllerHandlers) start(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("run_id and graph are required"))
 		return
 	}
-	info, err := h.Controller.Start(r.Context(), body.RunID, body.Graph, body.Budgets)
+
+	ctx, span := runControllerTracer.Start(r.Context(), "invoke_agent", trace.WithAttributes(
+		attribute.String("gen_ai.operation.name", "invoke_agent"),
+		attribute.String("gen_ai.agent.name", body.RunID),
+	))
+	defer span.End()
+
+	info, err := h.Controller.Start(ctx, body.RunID, body.Graph, body.Budgets)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	span.SetStatus(codes.Ok, "")
 	writeJSON(w, http.StatusCreated, info)
 }
 

@@ -26,14 +26,16 @@ test-go: ## Run Go tests in a throwaway container (registry Postgres tests self-
 	# load config-as-code files from examples/ to exercise the real checked-in manifests.
 	docker run --rm -v "$(PWD):/repo" -w /repo/go golang:1.25-alpine go test ./...
 
-test-go-integration: ## Run Go tests against real Postgres + Temporal + a real worker (starts/stops them around the run)
-	$(COMPOSE) --profile core up -d --wait postgres temporal worker
+test-go-integration: ## Run Go tests against real Postgres + Temporal + a real worker + OTel/Tempo (starts/stops them around the run)
+	$(COMPOSE) --profile core --profile obs up -d --wait postgres temporal worker otel-collector tempo
 	docker run --rm --network aeon_default -v "$(PWD):/repo" -w /repo/go \
 		-e AEON_TEST_PG_DSN="postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable" \
 		-e AEON_TEST_TEMPORAL_ADDRESS="temporal:7233" \
+		-e AEON_TEST_OTEL_ENDPOINT="otel-collector:4318" \
+		-e AEON_TEST_TEMPO_QUERY_URL="http://tempo:3200" \
 		golang:1.25-alpine sh -c \
 		"apk add --no-cache postgresql-client >/dev/null && until pg_isready -h postgres -U aeon >/dev/null 2>&1; do sleep 1; done && go test ./... -v"
-	$(COMPOSE) --profile core stop postgres temporal worker
+	$(COMPOSE) --profile core --profile obs stop postgres temporal worker otel-collector tempo
 
 test-python: ## Run Python unit + integration tests in a throwaway container via uv
 	docker run --rm -v "$(PWD)/python:/app" -w /app python:3.13-slim sh -c \

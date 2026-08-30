@@ -10,11 +10,13 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
+	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
 
 func main() {
@@ -23,6 +25,17 @@ func main() {
 	} else {
 		os.Setenv("AEON_PORT", "9402")
 	}
+
+	otelEndpoint := os.Getenv("AEON_OTEL_ENDPOINT")
+	if otelEndpoint == "" {
+		otelEndpoint = "otel-collector:4318"
+	}
+	if _, shutdown, err := tracing.Init(context.Background(), "aeon-modelgw", otelEndpoint); err != nil {
+		log.Printf("aeon-modelgw: tracing disabled: %v", err)
+	} else {
+		defer shutdown(context.Background())
+	}
+
 	mux := http.NewServeMux()
 	srv := httpserver.New("aeon-modelgw", mux)
 	log.Println("aeon-modelgw starting (provider adapters not yet implemented — see roadmap.md MDL-001..007)")
