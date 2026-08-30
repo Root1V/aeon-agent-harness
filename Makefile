@@ -38,8 +38,12 @@ test-go-integration: ## Run Go tests against real Postgres + Temporal + a real w
 	$(COMPOSE) --profile core --profile obs stop postgres temporal worker otel-collector tempo
 
 test-python: ## Run Python unit + integration tests in a throwaway container via uv
-	docker run --rm -v "$(PWD)/python:/app" -w /app python:3.13-slim sh -c \
-		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable . pytest -q"
+	# Mounts the whole repo, not just python/: test_contracts.py and (from DR-001) the Deep
+	# Research profile's Planner load JSON Schemas from proto/schemas and fixtures from examples/,
+	# both outside python/. '.[dev]' pulls in pytest/pytest-asyncio/pyyaml/referencing — plain
+	# '--with-editable .' only installs the package's runtime dependencies.
+	docker run --rm -v "$(PWD):/repo" -w /repo/python python:3.13-slim sh -c \
+		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q"
 
 lint: ## Lint proto/schemas, Go and Python sources
 	for f in proto/schemas/*.json proto/manifests/*.json; do python3 -m json.tool "$$f" >/dev/null || exit 1; done
