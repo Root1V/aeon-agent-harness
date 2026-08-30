@@ -7,7 +7,8 @@
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
 > Última actualización: 2026-08-30 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha —
-> `DR-001`..`DR-005` completos y ahora `EVAL-001`: `aeon eval list` es real contra `evals/suites`).
+> `DR-001`..`DR-005`, `EVAL-001` y ahora `EVAL-002`: `aeon eval run deep_research_core` ejecuta el
+> pipeline real de Deep Research offline y produce un reporte real).
 
 ## Resumen ejecutivo
 
@@ -75,11 +76,23 @@ los lee, valida cada uno contra `eval_suite.schema.json` (un suite inválido es 
 salta en silencio) e imprime nombre/versión/dataset/graders/thresholds/gateOn. Reutiliza la misma
 infraestructura de `aeon validate` (FND-003) para cargar y resolver `$ref` entre schemas.
 
+`EVAL-002` (Eval Runner) hizo real el motor: `aeon_evalops/runner.py` corre el pipeline
+`DR-001`..`DR-005` completo por cada caso del dataset contra fixtures deterministas de
+`decide`/`execute_tool` (ninguna llamada a un proveedor real, sin coste) y califica
+`coverage_grader`/`citation_integrity_grader` con el resultado REAL de `evaluate_sufficiency`/
+`verify_and_repair` — no un doble. Un suite sin harness offline registrado (`injection_suite`, hoy)
+se reporta `SKIPPED` explícitamente, nunca con un puntaje inventado; el resumen `overall` distingue
+`SKIPPED` de `PASS` para que eso no se lea como un éxito. `aeon eval run` (Go) delega al motor vía
+`python -m aeon_evalops.cli` (interprete configurable vía `AEON_EVAL_PYTHON_BIN`, con `make eval-run`
+como ruta contenedora) — es un puente real, aunque temporal: cuando el motor tenga su propio
+servicio (como el Model Gateway tras `DR-001`), este `exec.Command` deja de ser necesario. "Provider
+matrix" y "trace graders" quedan fuera de este primer Runner — ver `backlog.md`.
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | ~46% (6/13) | `IN_PROGRESS` |
+| F2 | Deep Research + EvalOps (**MVP**) | ~54% (7/13) | `IN_PROGRESS` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -463,7 +476,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 | DR-004 | Tool-less Reporter (output sólo desde allowed_claim_ids) | `DONE` | `test_reporter_no_tools_available` en verde | python/tests/unit/test_reporter.py |
 | DR-005 | Citation Verifier (claim-to-evidence, repair-from-ledger) | `DONE` | familia `test_reporter_cannot_invent_citations` en verde | python/tests/unit/test_citation_verifier.py |
 | EVAL-001 | Eval Registry (datasets, graders, thresholds, versions) | `DONE` | `TestAeonEvalListShowsSuitesFromEvalsDir` en verde — `aeon eval list` muestra las 4 suites reales de `evals/suites` (las mismas que nombra `examples/deep-research/agent.yaml`'s `evalGates`) | go/cmd/aeon/main_test.go |
-| EVAL-002 | Eval Runner (offline/repeated trials/provider matrix/trace graders) | `TODO` | `aeon eval run deep_research_core` produce reporte | — |
+| EVAL-002 | Eval Runner (offline/repeated trials/provider matrix/trace graders) | `DONE` | `aeon eval run deep_research_core` produce reporte real — ver `test_eval_run_produces_a_report_for_deep_research_core` (motor) y `TestAeonEvalRun` (CLI) en verde. Sólo "offline" y "repeated trials" son reales hoy; "provider matrix" y "trace graders" quedan en `backlog.md` | python/tests/unit/test_eval_runner.py, go/cmd/aeon/main_test.go |
 | EVAL-003 | Release Gates (bloquear promoción por regresión) | `TODO` | `test_release_gate_blocks_regression` en verde | — |
 | DX-001 | SDK Python (start_run, tools, contexts, memory, traces, approvals) | `TODO` | `examples/deep-research` corre con `aeon_sdk` | — |
 | DX-002 | CLI (init/validate/run/eval/trace/replay/publish) | `TODO` | los 7 subcomandos ejecutan sin error contra el compose | — |

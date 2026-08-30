@@ -7,13 +7,14 @@ dependencies = [
     "temporalio>=1.8.0",
     "pydantic>=2.9",
     "jsonschema>=4.23",
+    # aeon_evalops.runner (EVAL-002, not a test) parses evals/suites/*.yaml at runtime — not dev-only.
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
-    "pyyaml>=6.0",
     "referencing>=0.35",
 ]
 
@@ -37,4 +38,5 @@ packages = [
     "aeon_memory",
     "aeon_adapters",
     "aeon_profiles",
+    "aeon_evalops",
 ]

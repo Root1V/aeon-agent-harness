@@ -9,6 +9,7 @@ source = { editable = "." }
 dependencies = [
     { name = "jsonschema" },
     { name = "pydantic" },
+    { name = "pyyaml" },
     { name = "temporalio" },
 ]
 
@@ -16,7 +17,6 @@ dependencies = [
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
-    { name = "pyyaml" },
     { name = "referencing" },
 ]
 
@@ -26,7 +26,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
-    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "referencing", marker = "extra == 'dev'", specifier = ">=0.35" },
     { name = "temporalio", specifier = ">=1.8.0" },
 ]
