@@ -6,19 +6,18 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-29 (F1 completa: Evidence Ledger real, contradicciones agrupadas).
+> Última actualización: 2026-08-29 (Model Gateway real: routing/fallback + restricción por
+> sensibilidad de datos).
 
 ## Resumen ejecutivo
 
-F0 se considera suficientemente avanzada para seguir en orden (decisión del usuario); los
-`TODO`/`IN_PROGRESS` que quedan en F0 (Model Gateway con proveedores cloud, tracing) se retoman
-más adelante, no se movieron a `backlog.md` — siguen siendo parte del plan, sólo no son el foco
-ahora mismo. **F1 (Contexto y evidencia) se completó en su totalidad** en la misma sesión —
-siguiente en orden: F2 (Deep Research + EvalOps, el MVP).
+F1 (Contexto y evidencia) se completó en su totalidad. Por decisión del usuario, antes de avanzar a
+F2 se está terminando lo pendiente de F0: Model Gateway con los proveedores cloud
+(`MDL-001/003/004/005/007`), la conformidad mínima cruzada de proveedores, y tracing (`OBS-001`).
 
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
-| F0 | Foundation durable | ~53% (9/17) | `IN_PROGRESS` (en pausa, ver nota arriba) |
+| F0 | Foundation durable | ~59% (10/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 0% | `TODO` |
 | F3 | Memoria gobernada | 0% | `TODO` |
@@ -264,6 +263,18 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   evidencia — desde el ensamblado con fidelidad tipada hasta la persistencia de evidencia con
   contradicciones preservadas.**
 
+**F0 — retomada para terminar lo pendiente antes de F2:**
+- `MDL-001` (Model Gateway) — [gateway_test.go](go/internal/modelgateway/gateway_test.go) prueba
+  routing y fallback reales: candidatos probados en orden de `Priority` (no del orden en que
+  llegan en el slice), fallback automático al siguiente candidato cuando uno falla (con el log de
+  intentos completo, incluido el que falló), y un nombre de proveedor no registrado cae al
+  siguiente candidato en vez de entrar en pánico. `data_sensitivity: restricted`
+  (`model_profile.schema.json`) fuerza `prometheus_inference` como único candidato posible **antes**
+  de empezar a rutear — un candidato cloud con mayor prioridad ni siquiera se intenta, no es sólo
+  despriorizado; y si no hay ningún candidato local configurado, falla con un error claro
+  (`ErrNoRestrictedCandidate`) en vez de caer silenciosamente a un proveedor cloud. El Gateway
+  depende únicamente de la interfaz `providers.Provider` — nunca importa un adaptador concreto.
+
 ---
 
 ## F0 — Foundation durable (semanas 1-4)
@@ -277,7 +288,7 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
 | RUN-003 | Budgets (tokens/calls/tools/cost/deadline/depth, hard stop) | `DONE` | `test_budget_hard_stop` en verde (tool_calls/depth/deadline; model_calls/tokens/cost_usd declarados, no aplicados hasta MDL-001) | python/tests/integration/test_budget_hard_stop.py |
 | RUN-004 | Checkpoint & replay (resume sin duplicar tool effects) | `DONE` | `test_crash_resume_no_duplicate_write` en verde | python/tests/integration/test_crash_resume.py |
 | RUN-005 | Approvals (interrupt durable, parameter binding, expiry) | `DONE` | `test_approval_binding` en verde (aprobado, rechazado, hash no coincide, expira) | python/tests/integration/test_approval_binding.py |
-| MDL-001 | Model Gateway (capability profiles, adapters, fallback, routing) | `TODO` | `test_model_gateway_routing_fallback` en verde | — |
+| MDL-001 | Model Gateway (capability profiles, adapters, fallback, routing) | `DONE` | `TestModelGatewayRoutingFallback` en verde | go/internal/modelgateway/gateway_test.go |
 | MDL-003 | Adaptador `anthropic` | `TODO` | pasa `provider_conformance` | — |
 | MDL-004 | Adaptador `openai` | `TODO` | pasa `provider_conformance` | — |
 | MDL-005 | Adaptador `gemini` | `TODO` | pasa `provider_conformance` | — |
