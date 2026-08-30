@@ -294,6 +294,16 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
   la respuesta igual se re-envuelve explícitamente en `providers.NormalizedChatResponse`, igual que
   cualquier otro adaptador, para que ningún caller necesite saber que está hablando con OpenAI en
   vez de con otro proveedor.
+- `MDL-005` (Adaptador `gemini`, **IN_PROGRESS** — falta la suite `provider_conformance`) —
+  [gemini_test.go](go/internal/providers/gemini/gemini_test.go) prueba el cliente HTTP real contra
+  `POST /v1beta/models/{model}:generateContent`. Tres traducciones reales verificadas: el modelo va
+  en la URL, no en el body; los roles `user`/`assistant` de OpenAI se traducen a `user`/`model` (el
+  vocabulario propio de Gemini); y un mensaje `system` se extrae a `systemInstruction` de nivel
+  superior, igual que Anthropic pero con su propio campo. **Decisión de seguridad deliberada:** el
+  contrato documentado de Gemini pasa la API key como query param (`?key=...`), pero este adaptador
+  usa el header `x-goog-api-key` en su lugar (Gemini soporta ambos) — un secreto nunca debe viajar
+  en una URL que termina en logs/historial. Se probó explícitamente que la key nunca aparece en la
+  URL de la request real.
 
 ---
 
@@ -311,7 +321,7 @@ Tool Gateway) siguen siendo stubs de scaffolding o TODO — ver filas abajo.
 | MDL-001 | Model Gateway (capability profiles, adapters, fallback, routing) | `DONE` | `TestModelGatewayRoutingFallback` en verde | go/internal/modelgateway/gateway_test.go |
 | MDL-003 | Adaptador `anthropic` | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestAnthropicAdapterDecideNormalizesRequestAndResponse` | go/internal/providers/anthropic/anthropic_test.go |
 | MDL-004 | Adaptador `openai` | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestOpenAIAdapterDecideNormalizesResponse` | go/internal/providers/openai/openai_test.go |
-| MDL-005 | Adaptador `gemini` | `TODO` | pasa `provider_conformance` | — |
+| MDL-005 | Adaptador `gemini` | `IN_PROGRESS` | pasa `provider_conformance` (suite mínima pendiente, ver nota F0); cliente real en verde: `TestGeminiAdapterDecideTranslatesRolesAndSystemInstruction` | go/internal/providers/gemini/gemini_test.go |
 | MDL-006 | Adaptador `prometheus_inference` (LLM local) | `IN_PROGRESS` | pasa `provider_conformance` (suite no existe aún, llega con EVAL-002/F2); mientras tanto: `TestPrometheusInferenceRetriesOnceWithFreshTokenAfter401` y el resto de `prometheus_inference_test.go` en verde | go/internal/providers/prometheus_inference/prometheus_inference_test.go |
 | MDL-007 | Adaptador `openai_compatible` (vLLM/Ollama/TGI genérico) | `TODO` | pasa `provider_conformance` | — |
 | TOOL-001 | Tool Registry/Gateway (typed schemas, risk classification, scopes) | `DONE` | `TestToolRegistryCRUDAndRiskClassification` (registry) + `TestToolPolicyDeniesOutOfManifestToolCall` (gateway ejecuta con policy check real) | go/internal/store/tool_registry_test.go, go/internal/api/tool_gateway_handlers_test.go |
