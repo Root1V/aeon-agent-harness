@@ -9,6 +9,8 @@ import (
 	"os"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/aeon-ai/aeon/go/internal/store"
 )
 
@@ -44,6 +46,23 @@ func newMemoryTestServer(t *testing.T) *httptest.Server {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// tamperTestRecordContent mutates a record's content directly via a raw connection, bypassing
+// MemoryStore entirely — simulating something other than this store writing to the table (a
+// compromised process, a hand-run SQL statement), which is exactly what RepairIfTampered/
+// VerifyProvenance must be able to detect (SEC-004).
+func tamperTestRecordContent(t *testing.T, memoryID, newContent string) {
+	t.Helper()
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, memoryTestDSN(t))
+	if err != nil {
+		t.Fatalf("connect for tampering: %v", err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `UPDATE memory_records SET content = $1 WHERE memory_id = $2`, newContent, memoryID); err != nil {
+		t.Fatalf("tamper: %v", err)
+	}
 }
 
 func doJSON(t *testing.T, method, url string, body any) (status int, parsed map[string]any) {
@@ -148,13 +167,25 @@ func TestMemoryHandlersFullPipelineOverHTTP(t *testing.T) {
 
 func TestMemoryHandlersGetUnknownIs404(t *testing.T) {
 	srv := newMemoryTestServer(t)
-	resp, err := http.Get(srv.URL + "/memory/00000000-0000-0000-0000-000000000000")
+	resp, err := http.Get(srv.URL + "/memory/00000000-0000-0000-0000-000000000000?tenant_id=whatever")
 	if err != nil {
 		t.Fatalf("GET: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestMemoryHandlersGetRequiresTenantID(t *testing.T) {
+	srv := newMemoryTestServer(t)
+	resp, err := http.Get(srv.URL + "/memory/00000000-0000-0000-0000-000000000000")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
 	}
 }
 
@@ -167,5 +198,102 @@ func TestMemoryHandlersListActiveRequiresScope(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestMemoryHandlersGetIsIsolatedByTenant is SEC-004's isolation check on the HTTP surface: a real
+// memory_id belonging to tenant A returns 404 — not the record — when fetched with tenant B's
+// tenant_id, even though the id itself is perfectly valid.
+func TestMemoryHandlersGetIsIsolatedByTenant(t *testing.T) {
+	srv := newMemoryTestServer(t)
+	status, created := doJSON(t, http.MethodPost, srv.URL+"/memory/candidates", map[string]any{
+		"type": "SEMANTIC", "scope": "project", "tenant_id": "tenant-A", "content": "tenant A's secret",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create: status = %d, body = %v", status, created)
+	}
+	memoryID := created["memory_id"].(string)
+
+	resp, err := http.Get(srv.URL + "/memory/" + memoryID + "?tenant_id=tenant-B")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("cross-tenant GET: status = %d, want 404 (must not leak that the record exists)", resp.StatusCode)
+	}
+
+	resp2, err := http.Get(srv.URL + "/memory/" + memoryID + "?tenant_id=tenant-A")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("same-tenant GET: status = %d, want 200", resp2.StatusCode)
+	}
+}
+
+// TestMemoryHandlersRevokeIsIsolatedByTenant proves the same isolation holds on the write side:
+// a caller claiming the wrong tenant cannot revoke (or confirm the existence of) another
+// tenant's memory.
+func TestMemoryHandlersRevokeIsIsolatedByTenant(t *testing.T) {
+	srv := newMemoryTestServer(t)
+	status, created := doJSON(t, http.MethodPost, srv.URL+"/memory/candidates", map[string]any{
+		"type": "SEMANTIC", "scope": "project", "tenant_id": "tenant-A", "content": "x",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create: status = %d, body = %v", status, created)
+	}
+	memoryID := created["memory_id"].(string)
+	for _, step := range []string{"/quarantine", "/validate", "/promote"} {
+		body := map[string]any{}
+		if step != "/quarantine" {
+			body["allowed"] = true
+		}
+		if status, resp := doJSON(t, http.MethodPost, srv.URL+"/memory/"+memoryID+step, body); status != http.StatusOK {
+			t.Fatalf("%s: status = %d, body = %v", step, status, resp)
+		}
+	}
+
+	status, body := doJSON(t, http.MethodPost, srv.URL+"/memory/"+memoryID+"/revoke", map[string]any{"tenant_id": "tenant-B"})
+	if status != http.StatusNotFound {
+		t.Fatalf("cross-tenant revoke: status = %d, want 404; body = %v", status, body)
+	}
+
+	status, body = doJSON(t, http.MethodPost, srv.URL+"/memory/"+memoryID+"/revoke", map[string]any{"tenant_id": "tenant-A"})
+	if status != http.StatusOK || body["status"] != "REVOKED" {
+		t.Fatalf("same-tenant revoke: status = %d, body = %v", status, body)
+	}
+}
+
+// TestMemoryHandlersRepairDetectsTamperingAndRevokes drives SEC-004's poisoning defense over the
+// real HTTP surface: content mutated directly in storage (as if by something other than this
+// MemoryStore) is detected by /repair, which revokes the record rather than trust it.
+func TestMemoryHandlersRepairDetectsTamperingAndRevokes(t *testing.T) {
+	srv := newMemoryTestServer(t)
+	status, created := doJSON(t, http.MethodPost, srv.URL+"/memory/candidates", map[string]any{
+		"type": "SEMANTIC", "scope": "project", "content": "the real, untampered content",
+	})
+	if status != http.StatusCreated {
+		t.Fatalf("create: status = %d, body = %v", status, created)
+	}
+	memoryID := created["memory_id"].(string)
+
+	status, clean := doJSON(t, http.MethodPost, srv.URL+"/memory/"+memoryID+"/repair", nil)
+	if status != http.StatusOK || clean["tampered"] != false {
+		t.Fatalf("repair on untampered record: status = %d, body = %v, want tampered=false", status, clean)
+	}
+
+	// Simulate tampering: mutate content directly, the way a compromised process with raw DB
+	// access (not this MemoryStore) would — hash/provenance_hmac are now stale.
+	tamperTestRecordContent(t, memoryID, "attacker-controlled content")
+
+	status, repaired := doJSON(t, http.MethodPost, srv.URL+"/memory/"+memoryID+"/repair", nil)
+	if status != http.StatusOK || repaired["tampered"] != true {
+		t.Fatalf("repair on tampered record: status = %d, body = %v, want tampered=true", status, repaired)
+	}
+	memory, ok := repaired["memory"].(map[string]any)
+	if !ok || memory["status"] != "REVOKED" {
+		t.Errorf("expected the tampered record to come back REVOKED, got %v", repaired["memory"])
 	}
 }
