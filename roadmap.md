@@ -11,7 +11,8 @@
 > verificado con el paquete `openai` de verdad. El MVP como narrativa compuesta ("traza navegable"
 > para runs Python, "coste por run", `replay --assert-identical`) todavía tiene huecos reales, ver
 > la nota de F2 abajo y `backlog.md` — no bloquean pasar a F3, pero son honestos de nombrar. F3
-> arrancó con `MEM-001` (Memory Store), real y Postgres-backed).
+> arrancó con `MEM-001` (Memory Store) y `MEM-002` (Memory Candidate Pipeline), ambos reales y
+> Postgres-backed).
 
 ## Resumen ejecutivo
 
@@ -193,7 +194,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
-| F3 | Memoria gobernada | ~17% (1/6) | `IN_PROGRESS` |
+| F3 | Memoria gobernada | ~33% (2/6) | `IN_PROGRESS` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
 
@@ -598,7 +599,7 @@ cloud o local.
 | ID | Feature | Estado | Criterio de DONE | PR |
 |---|---|---|---|---|
 | MEM-001 | Memory Store (typed/scoped/versioned, provenance/TTL/status) | `DONE` | `TestMemoryRecordSchemaValid` en verde — un `MemoryRecord` escrito por el `MemoryStore` real (Postgres real) contra `hash`/`provenance_hmac` calculados por el propio store (nunca confiados de quien llama) valida contra `memory_record.schema.json`. Además `TestMemoryStoreCreateRejectsDirectActiveWrite` (sólo `CANDIDATE`/`QUARANTINED` son escribibles al crear — la promoción a `ACTIVE` es MEM-002), `TestMemoryStoreListActiveRespectsScopeTenantAndTTL` (lectura gobernada por scope/tenant/TTL real) y `TestMemoryStoreVerifyProvenanceDetectsTampering` (detección real de manipulación de contenido/HMAC). Sin superficie HTTP todavía — eso llega con MEM-002, igual que DR-001..004 fueron módulos puros antes de DX-001 | go/internal/store/memory_store.go, go/internal/store/memory_store_test.go |
-| MEM-002 | Memory Candidate Pipeline (quarantine→validate→promote/reject) | `TODO` | `test_memory_write_mode_candidate_only` en verde | — |
+| MEM-002 | Memory Candidate Pipeline (quarantine→validate→promote/reject) | `DONE` | `TestMemoryWriteModeCandidateOnly` en verde — `WriteCandidate` (la única vía de escritura de un agente/run) fuerza `status=CANDIDATE` sin importar qué status intente colar quien llama; `AgentManifest.spec.memoryPolicy.writeMode: candidate_only` queda aplicado, no sólo documentado. Además la máquina de estados real `quarantine→validate→promote/reject` (`TestMemoryPipelineHappyPathQuarantineValidatePromote`, `TestMemoryPipelineValidateBlockedWithoutDecision`, `TestMemoryPipelinePromoteBlockedWithoutDecision`, `TestMemoryPipelineRejectFromEachPreActiveStatus`, `TestMemoryPipelineInvalidTransitionsAreRejected`) contra Postgres real | go/internal/store/memory_pipeline.go, go/internal/store/memory_pipeline_test.go |
 | MEM-003 | Reflection (post-run candidate extraction) | `TODO` | `test_reflection_extracts_candidates` en verde | — |
 | MEM-005 | Utility/Forgetting (decay, prune, supersede/revoke) | `TODO` | `test_memory_decay_prunes_stale` en verde | — |
 | SEC-004 | Memory security (isolation, poisoning tests, repair/revocation) | `TODO` | `memory_poisoning` suite en verde | — |
@@ -620,6 +621,22 @@ explícitamente para F3: el propio pipeline `quarantine→validate→promote/rej
 única vía real hacia `ACTIVE`, y una superficie HTTP/SDK para que un run Python pueda leer/escribir
 memoria — ninguna de las dos bloquea llamar a MEM-001 `DONE` (mismo criterio que se aplicó a
 DR-001..004 en F2).
+
+MEM-002 añade la máquina de estados real sobre el store de MEM-001
+(`memoryValidTransitions`, mismo patrón que `validTransitions` del Agent Registry): CANDIDATE →
+QUARANTINED → VALIDATED → ACTIVE, con REVOKED alcanzable desde cualquier estado pre-ACTIVE
+(`Reject`). Dos gates, no una sola transición libre: `Validate` requiere una `ValidationDecision`
+externa (replay/seguridad/negative-transfer — el mismo hueco que llenará `EVAL-004`), y `Promote`
+requiere una `PromotionDecision` externa — la expresión real de
+`AgentManifest.spec.memoryPolicy.promotionGate: eval_required`. Ninguna transición muta el estado
+si el gate no la permite (verificado explícitamente: un `Validate`/`Promote` bloqueado dejan el
+`status` intacto). `WriteCandidate` es deliberadamente la única función que un agente/run puede
+llamar para escribir memoria — nunca expone `Quarantine`/`Validate`/`Promote`/`Reject` como algo que
+el contenido de un run pueda invocar por sí mismo; ésas son operaciones de curación/pipeline. Fuera
+de alcance, igual que en MEM-001: superficie HTTP/SDK (sigue en `backlog.md`, entry point ahora es
+`MEM-003` que necesitará escribir candidatos desde Reflection) y el contenido real de
+`ValidationDecision`/`PromotionDecision` (hoy tipos aplicados, no calculados — ninguna suite de eval
+o replay los produce todavía; eso es `EVAL-004`).
 
 ## F4 — Trust e interoperabilidad (semanas 18-23)
 
