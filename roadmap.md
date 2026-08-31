@@ -6,11 +6,12 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-31 (F0 cerrado salvo la nota de `local-llm`; **las 13 features de
+> Última actualización: 2026-08-30 (F0 cerrado salvo la nota de `local-llm`; **las 13 features de
 > F2 están `DONE`** — `INT-002` cierra el Model Gateway como endpoint OpenAI-compatible real,
 > verificado con el paquete `openai` de verdad. El MVP como narrativa compuesta ("traza navegable"
 > para runs Python, "coste por run", `replay --assert-identical`) todavía tiene huecos reales, ver
-> la nota de F2 abajo y `backlog.md` — no bloquean pasar a F3, pero son honestos de nombrar).
+> la nota de F2 abajo y `backlog.md` — no bloquean pasar a F3, pero son honestos de nombrar. F3
+> arrancó con `MEM-001` (Memory Store), real y Postgres-backed).
 
 ## Resumen ejecutivo
 
@@ -192,7 +193,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
-| F3 | Memoria gobernada | 0% | `TODO` |
+| F3 | Memoria gobernada | ~17% (1/6) | `IN_PROGRESS` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
 
@@ -596,12 +597,29 @@ cloud o local.
 
 | ID | Feature | Estado | Criterio de DONE | PR |
 |---|---|---|---|---|
-| MEM-001 | Memory Store (typed/scoped/versioned, provenance/TTL/status) | `TODO` | `test_memory_record_schema_valid` en verde | — |
+| MEM-001 | Memory Store (typed/scoped/versioned, provenance/TTL/status) | `DONE` | `TestMemoryRecordSchemaValid` en verde — un `MemoryRecord` escrito por el `MemoryStore` real (Postgres real) contra `hash`/`provenance_hmac` calculados por el propio store (nunca confiados de quien llama) valida contra `memory_record.schema.json`. Además `TestMemoryStoreCreateRejectsDirectActiveWrite` (sólo `CANDIDATE`/`QUARANTINED` son escribibles al crear — la promoción a `ACTIVE` es MEM-002), `TestMemoryStoreListActiveRespectsScopeTenantAndTTL` (lectura gobernada por scope/tenant/TTL real) y `TestMemoryStoreVerifyProvenanceDetectsTampering` (detección real de manipulación de contenido/HMAC). Sin superficie HTTP todavía — eso llega con MEM-002, igual que DR-001..004 fueron módulos puros antes de DX-001 | go/internal/store/memory_store.go, go/internal/store/memory_store_test.go |
 | MEM-002 | Memory Candidate Pipeline (quarantine→validate→promote/reject) | `TODO` | `test_memory_write_mode_candidate_only` en verde | — |
 | MEM-003 | Reflection (post-run candidate extraction) | `TODO` | `test_reflection_extracts_candidates` en verde | — |
 | MEM-005 | Utility/Forgetting (decay, prune, supersede/revoke) | `TODO` | `test_memory_decay_prunes_stale` en verde | — |
 | SEC-004 | Memory security (isolation, poisoning tests, repair/revocation) | `TODO` | `memory_poisoning` suite en verde | — |
 | EVAL-004 | Learning Eval (forward/negative transfer, usefulness, staleness) | `TODO` | reporte de `evals/suites/learning_eval` | — |
+
+MEM-001 se implementó en Go (`go/internal/store`), siguiendo el mismo patrón que el Agent/Tool
+Registry (FND-001/TOOL-001): Postgres real, CHECK constraints por enum, y validación estructural en
+código antes de tocar la base. Dos decisiones deliberadas: (1) `hash` (integridad del contenido) y
+`provenance_hmac` (integridad de la procedencia, con una clave real vía `AEON_MEMORY_HMAC_KEY`) los
+calcula siempre el propio `MemoryStore`, nunca quien llama — igual que `provenance_hmac` ya decía en
+el comentario del schema desde F0 — de forma que `VerifyProvenance` puede detectar más tarde
+contenido alterado fuera del store, sentando la base real de SEC-004; (2) `Create` sólo admite
+`status` `CANDIDATE` o `QUARANTINED` — escribir directamente `ACTIVE`/`VALIDATED`/`SUPERSEDED`/
+`REVOKED` se rechaza con `ErrDirectActiveWriteRejected`, tal como el propio
+`memory_record.schema.json` prometía desde que se creó el fichero. La lectura gobernada
+(`ListActive`) filtra por `scope`+`tenant_id`+`status=ACTIVE`+TTL no expirado — cierra el ciclo de
+"provenance/TTL/status" del criterio, no sólo los campos existiendo en una tabla. Lo que falta
+explícitamente para F3: el propio pipeline `quarantine→validate→promote/reject` (MEM-002) que es la
+única vía real hacia `ACTIVE`, y una superficie HTTP/SDK para que un run Python pueda leer/escribir
+memoria — ninguna de las dos bloquea llamar a MEM-001 `DONE` (mismo criterio que se aplicó a
+DR-001..004 en F2).
 
 ## F4 — Trust e interoperabilidad (semanas 18-23)
 

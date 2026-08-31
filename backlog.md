@@ -256,3 +256,18 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   (usar el SDK de OTel para Python dentro de las Activities de `aeon_worker`, con los mismos
   atributos `gen_ai.*`).
 - **Coste:** M.
+
+### Superficie HTTP/SDK para el Memory Store (MEM-001)
+
+- **Descripción:** `MEM-001` implementó el `MemoryStore` (Postgres real, `go/internal/store`) con
+  `Create`/`Get`/`ListActive`/`VerifyProvenance`, pero sin ningún handler HTTP en
+  `aeon-controlplane` ni cliente Python — igual que `DR-001`..`004` fueron módulos puros antes de
+  que `DX-001` los conectara a un workflow real. Un run de `aeon_worker` no puede hoy leer ni
+  escribir memoria; sólo los tests de Go ejercitan el store directamente.
+- **Fase objetivo:** junto con `MEM-002` (Memory Candidate Pipeline) — el pipeline
+  quarantine→validate→promote/reject necesita de todas formas una API real para que Reflection
+  (`MEM-003`) escriba candidatos y para que un run lea memoria `ACTIVE` vía
+  `AgentManifest.spec.memoryPolicy.readScopes`; construir el handler HTTP dos veces (uno "sólo
+  MEM-001" y otro con el pipeline) sería trabajo duplicado.
+- **Criterio de entrada:** empezar `MEM-002`.
+- **Coste:** S (el store ya expone los métodos necesarios; falta el handler + wiring).
