@@ -272,16 +272,20 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Criterio de entrada:** ninguno especial — es la extensión directa de `DX-001`.
 - **Coste:** M.
 
-### Contenido real de `ValidationDecision`/`PromotionDecision` (MEM-002)
+### Conectar `aeon_evalops.learning_eval` al pipeline vivo de MEM-002
 
-- **Descripción:** `MEM-002` aplica las decisiones (mismo patrón que `ReleaseGateDecision` de
-  `EVAL-003`) pero nada las calcula todavía — no hay replay/seguridad/negative-transfer check ni
-  suite de eval que produzca un `ValidationDecision`/`PromotionDecision` real. Hoy sólo los tests
-  los construyen a mano.
-- **Fase objetivo:** `EVAL-004` (Learning Eval) es quien debería producir estas decisiones a partir
-  de resultados reales de evaluación, igual que `evaluate_release_gate` (`EVAL-003`) las produce
-  para agentes.
-- **Criterio de entrada:** empezar `EVAL-004`.
+- **Descripción:** `EVAL-004` ya calcula `ValidationDecision`/`PromotionDecision` reales
+  (`compute_validation_decision`/`compute_promotion_decision`, con forward/negative transfer y
+  staleness real, no construidos a mano) — eso cierra la mitad de este hueco. La mitad que queda:
+  nada llama a `evaluate_learning` desde un run real ni pasa su resultado a
+  `POST /memory/{id}/validate`/`promote`; hoy es una librería lista para usar, sin ningún
+  Activity/workflow que la invoque. Tampoco hay de dónde sacar `decayed_utility` automáticamente —
+  el llamador debe calcularlo (vía `MemoryStore.DecayedUtility`, Go) y pasarlo.
+- **Fase objetivo:** junto con la entrada de arriba sobre conectar Reflection (`MEM-003`) a un
+  workflow real — ambos son la misma clase de trabajo (Python↔Go wiring para memoria) y compartirían
+  la mismas Activities nuevas.
+- **Criterio de entrada:** un consumidor real (`aeon_worker`) que necesite promover una memoria
+  automáticamente en vez de a mano.
 - **Coste:** M.
 
 ### `Prune` (MEM-005) no tiene wiring ni política propia todavía
