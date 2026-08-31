@@ -316,3 +316,19 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   identidad/autorización más general (Secret Broker, SPIFFE) que lo cubra de forma unificada.
 - **Criterio de entrada:** un caller real no confiable de estas rutas.
 - **Coste:** S.
+
+### Conectar el MCP Adapter (`TOOL-002`) al Tool Gateway real
+
+- **Descripción:** `go/internal/mcp/adapter.go` es real y probado (conformidad contra un servidor
+  MCP real, incluyendo el fallback legacy 2025-11-25), pero ningún `ToolDescriptor` lo invoca
+  todavía — el Tool Gateway (`go/internal/toolexec`) no tiene hoy un backend "mcp" que abra una
+  `Session` y llame `ListTools`/`CallTool`. Un tool servido por un servidor MCP externo no puede
+  registrarse ni ejecutarse en Aeon todavía.
+- **Fase objetivo:** junto con `INT-003` (servidor MCP de salida) — ambos tocan la misma pregunta
+  de cómo un `ToolDescriptor` declara que su implementación es MCP en vez de nativa, y compartirían
+  el mismo `go/internal/mcp`.
+- **Criterio de entrada:** decidir cómo se declara un tool respaldado por MCP en
+  `tool_descriptor.schema.json` (¿un `backend: {type: mcp, endpoint: ...}`?) y cómo se asigna
+  `side_effect`/`risk` a algo que Aeon no implementó — un tool descubierto vía `ListTools` no trae
+  esa clasificación consigo.
+- **Coste:** M.

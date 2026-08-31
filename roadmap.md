@@ -14,8 +14,9 @@
 > **F3 (Memoria gobernada) está `DONE`, 6/6**: `MEM-001`/`MEM-002` (Memory Store + Candidate
 > Pipeline, Postgres-backed), `MEM-003` (Reflection + superficie HTTP), `MEM-005`
 > (Utility/Forgetting), `SEC-004` (Memory security) y `EVAL-004` (Learning Eval, que además cierra
-> el hueco de `ValidationDecision`/`PromotionDecision` que MEM-002 había dejado abierto). Siguiente
-> fase: F4 — Trust e interoperabilidad).
+> el hueco de `ValidationDecision`/`PromotionDecision` que MEM-002 había dejado abierto). F4 (Trust
+> e interoperabilidad) arrancó con `TOOL-002` (MCP Adapter, real sobre el SDK Go oficial de MCP,
+> conformidad probada contra la spec 2026-07-28 y contra un fallback legacy 2025-11-25 real)).
 
 ## Resumen ejecutivo
 
@@ -198,7 +199,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | 0% | `TODO` |
+| F4 | Trust e interoperabilidad | ~7% (1/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -743,7 +744,7 @@ explícitamente en `backlog.md`, no oculto.
 
 | ID | Feature | Estado | Criterio de DONE | PR |
 |---|---|---|---|---|
-| TOOL-002 | MCP Adapter (core stateless 2026-07-28 + legacy adapter) | `TODO` | conformidad contra un servidor MCP de referencia | — |
+| TOOL-002 | MCP Adapter (core stateless 2026-07-28 + legacy adapter) | `DONE` | `TestAdapterStatelessConformance20260728` y `TestAdapterLegacyFallback20251125` en verde — Aeon como cliente MCP real (`github.com/modelcontextprotocol/go-sdk`, dependencia real, no reinventada) negociando contra un servidor MCP real (mismo SDK): stateless 2026-07-28 por defecto, con fallback real al handshake legacy `initialize` 2025-11-25 cuando el servidor sólo anuncia esa versión vía `server/discover`. Un único adaptador, no dos — el fallback es el `Client.Connect` real del SDK, no una rama de código separada | go/internal/mcp/adapter.go, go/internal/mcp/adapter_test.go |
 | INT-003 | Servidor MCP de salida (catálogo de tools gobernado) | `TODO` | un cliente MCP externo lista y llama tools de Aeon | — |
 | A2A-001 | A2A Gateway (Agent Card, identity/authz, task exchange) | `TODO` | `test_a2a_task_lifecycle` en verde | — |
 | INT-004 | `FrameworkAdapter` CrewAI | `TODO` | ejemplo equivalente a `langgraph-interop` | — |
@@ -757,6 +758,28 @@ explícitamente en `backlog.md`, no oculto.
 | OBS-002 | Agent Console (trace explorer, context inspector, evidence graph) | `TODO` | UI muestra un run real de punta a punta | — |
 | OBS-003 | FinOps (cost per run/success/agent/model/tool) | `TODO` | dashboard con `cost_model: token_based|compute_based` | — |
 | MDL-002 | Quality-aware routing (eval scores como condición de routing) | `TODO` | routing cambia con score degradado en fixture | — |
+
+F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
+(`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y
+`https://modelcontextprotocol.io/specification/2026-07-28`, citadas por la spec original en
+`[R16]`) en vez de asumir el contenido de la nota A3 del plan — todos los detalles técnicos
+(headers `Mcp-Method`/`Mcp-Name`, statelessness real vía `_meta`, `resultType`/MRTR, CIMD
+reemplazando DCR, los nuevos códigos de error `-32020`/`-32021`/`-32022`) se confirmaron reales, no
+inventados. Se encontró que existe un SDK Go oficial y real
+(`github.com/modelcontextprotocol/go-sdk`, v1.7.0) que ya implementa exactamente esta versión del
+protocolo — incluyendo la negociación real `server/discover` → fallback a `initialize` legacy — así
+que `go/internal/mcp/adapter.go` es una capa de traducción fina sobre ese SDK (mismo criterio que
+`go.temporal.io/sdk`/`go.opentelemetry.io/otel`/`github.com/jackc/pgx`: usar el SDK oficial real, no
+reimplementar el wire format). "Core stateless 2026-07-28 + legacy adapter" es deliberadamente **un
+solo** adaptador: el fallback a 2025-11-25 es el propio `Client.Connect` del SDK negociando con un
+servidor real que sólo anuncia esa versión — verificado forzando exactamente ese escenario con el
+mismo truco de `AddReceivingMiddleware` que usa la propia suite de tests del SDK
+(`TestInMemory_E2E_DiscoverFallback_NoOverlap`), no una rama de código propia sin probar. Ambos
+extremos de la conformidad (cliente Aeon y servidor de referencia) corren sobre HTTP real
+(`httptest.Server`), nunca in-process/fake. Fuera de alcance, documentado en `backlog.md`: conectar
+este adaptador al Tool Gateway real (hoy es una librería lista para usar, sin ningún
+`ToolDescriptor` que la invoque todavía) — mismo patrón que Reflection (`MEM-003`) o
+`aeon_evalops.learning_eval` (`EVAL-004`) antes de su propio wiring.
 
 ## F5 — Learning Lab (semanas 24+)
 
