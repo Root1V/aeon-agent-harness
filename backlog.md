@@ -257,17 +257,28 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   atributos `gen_ai.*`).
 - **Coste:** M.
 
-### Superficie HTTP/SDK para el Memory Store (MEM-001)
+### Superficie HTTP/SDK para el Memory Store (MEM-001/MEM-002)
 
-- **Descripción:** `MEM-001` implementó el `MemoryStore` (Postgres real, `go/internal/store`) con
-  `Create`/`Get`/`ListActive`/`VerifyProvenance`, pero sin ningún handler HTTP en
+- **Descripción:** `MEM-001`/`MEM-002` implementaron el `MemoryStore` completo (Postgres real,
+  `go/internal/store`: `WriteCandidate`/`Get`/`ListActive`/`VerifyProvenance`/
+  `Quarantine`/`Validate`/`Promote`/`Reject`), pero sin ningún handler HTTP en
   `aeon-controlplane` ni cliente Python — igual que `DR-001`..`004` fueron módulos puros antes de
   que `DX-001` los conectara a un workflow real. Un run de `aeon_worker` no puede hoy leer ni
   escribir memoria; sólo los tests de Go ejercitan el store directamente.
-- **Fase objetivo:** junto con `MEM-002` (Memory Candidate Pipeline) — el pipeline
-  quarantine→validate→promote/reject necesita de todas formas una API real para que Reflection
-  (`MEM-003`) escriba candidatos y para que un run lea memoria `ACTIVE` vía
-  `AgentManifest.spec.memoryPolicy.readScopes`; construir el handler HTTP dos veces (uno "sólo
-  MEM-001" y otro con el pipeline) sería trabajo duplicado.
-- **Criterio de entrada:** empezar `MEM-002`.
-- **Coste:** S (el store ya expone los métodos necesarios; falta el handler + wiring).
+- **Fase objetivo:** junto con `MEM-003` (Reflection) — Reflection necesita escribir candidatos
+  post-run vía `WriteCandidate`, y un run necesita leer memoria `ACTIVE` vía
+  `AgentManifest.spec.memoryPolicy.readScopes`; ambos requieren la misma API real.
+- **Criterio de entrada:** empezar `MEM-003`.
+- **Coste:** S (el store ya expone todos los métodos necesarios; falta el handler + wiring).
+
+### Contenido real de `ValidationDecision`/`PromotionDecision` (MEM-002)
+
+- **Descripción:** `MEM-002` aplica las decisiones (mismo patrón que `ReleaseGateDecision` de
+  `EVAL-003`) pero nada las calcula todavía — no hay replay/seguridad/negative-transfer check ni
+  suite de eval que produzca un `ValidationDecision`/`PromotionDecision` real. Hoy sólo los tests
+  los construyen a mano.
+- **Fase objetivo:** `EVAL-004` (Learning Eval) es quien debería producir estas decisiones a partir
+  de resultados reales de evaluación, igual que `evaluate_release_gate` (`EVAL-003`) las produce
+  para agentes.
+- **Criterio de entrada:** empezar `EVAL-004`.
+- **Coste:** M.
