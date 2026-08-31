@@ -17,6 +17,7 @@ import (
 	"time"
 
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 	"gopkg.in/yaml.v3"
 )
@@ -224,6 +225,15 @@ func runReplay(w io.Writer, runID string) error {
 	for iter.HasNext() {
 		event, err := iter.Next()
 		if err != nil {
+			// A run_id that never started any workflow isn't a real replay failure — Temporal's
+			// server reports it as NotFound (surfaced with a raw "sql: no rows in result set"
+			// message from its own persistence layer, not a clean not-found message), so this
+			// must be treated the same as "iterated and found zero events", not propagated as an
+			// error.
+			var notFound *serviceerror.NotFound
+			if errors.As(err, &notFound) {
+				break
+			}
 			return fmt.Errorf("reading workflow history for %s: %w", runID, err)
 		}
 		count++
