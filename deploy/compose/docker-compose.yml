@@ -172,6 +172,12 @@ services:
     environment:
       <<: *common-env
       AEON_PG_DSN: postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable
+      # MEM-001's provenance_hmac key. Insecure dev-only default so `make dev` works out of the
+      # box — set a real AEON_MEMORY_HMAC_KEY in .env for anything beyond local development.
+      AEON_MEMORY_HMAC_KEY: "${AEON_MEMORY_HMAC_KEY:-dev-only-insecure-memory-hmac-key-change-me}"
+    env_file:
+      - path: ../../.env
+        required: false
     ports:
       - "9401:9401"
 

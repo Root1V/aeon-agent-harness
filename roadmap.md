@@ -11,8 +11,8 @@
 > verificado con el paquete `openai` de verdad. El MVP como narrativa compuesta ("traza navegable"
 > para runs Python, "coste por run", `replay --assert-identical`) todavía tiene huecos reales, ver
 > la nota de F2 abajo y `backlog.md` — no bloquean pasar a F3, pero son honestos de nombrar. F3
-> arrancó con `MEM-001` (Memory Store) y `MEM-002` (Memory Candidate Pipeline), ambos reales y
-> Postgres-backed).
+> arrancó con `MEM-001`/`MEM-002` (Memory Store + Candidate Pipeline, Postgres-backed) y `MEM-003`
+> (Reflection), que además cerró la superficie HTTP pendiente del Memory Store).
 
 ## Resumen ejecutivo
 
@@ -194,7 +194,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
-| F3 | Memoria gobernada | ~33% (2/6) | `IN_PROGRESS` |
+| F3 | Memoria gobernada | 50% (3/6) | `IN_PROGRESS` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
 
@@ -600,7 +600,7 @@ cloud o local.
 |---|---|---|---|---|
 | MEM-001 | Memory Store (typed/scoped/versioned, provenance/TTL/status) | `DONE` | `TestMemoryRecordSchemaValid` en verde — un `MemoryRecord` escrito por el `MemoryStore` real (Postgres real) contra `hash`/`provenance_hmac` calculados por el propio store (nunca confiados de quien llama) valida contra `memory_record.schema.json`. Además `TestMemoryStoreCreateRejectsDirectActiveWrite` (sólo `CANDIDATE`/`QUARANTINED` son escribibles al crear — la promoción a `ACTIVE` es MEM-002), `TestMemoryStoreListActiveRespectsScopeTenantAndTTL` (lectura gobernada por scope/tenant/TTL real) y `TestMemoryStoreVerifyProvenanceDetectsTampering` (detección real de manipulación de contenido/HMAC). Sin superficie HTTP todavía — eso llega con MEM-002, igual que DR-001..004 fueron módulos puros antes de DX-001 | go/internal/store/memory_store.go, go/internal/store/memory_store_test.go |
 | MEM-002 | Memory Candidate Pipeline (quarantine→validate→promote/reject) | `DONE` | `TestMemoryWriteModeCandidateOnly` en verde — `WriteCandidate` (la única vía de escritura de un agente/run) fuerza `status=CANDIDATE` sin importar qué status intente colar quien llama; `AgentManifest.spec.memoryPolicy.writeMode: candidate_only` queda aplicado, no sólo documentado. Además la máquina de estados real `quarantine→validate→promote/reject` (`TestMemoryPipelineHappyPathQuarantineValidatePromote`, `TestMemoryPipelineValidateBlockedWithoutDecision`, `TestMemoryPipelinePromoteBlockedWithoutDecision`, `TestMemoryPipelineRejectFromEachPreActiveStatus`, `TestMemoryPipelineInvalidTransitionsAreRejected`) contra Postgres real | go/internal/store/memory_pipeline.go, go/internal/store/memory_pipeline_test.go |
-| MEM-003 | Reflection (post-run candidate extraction) | `TODO` | `test_reflection_extracts_candidates` en verde | — |
+| MEM-003 | Reflection (post-run candidate extraction) | `DONE` | `test_reflection_extracts_candidates` en verde — un `RunSummary` (outcome + evidence_refs reales del run, nunca chain-of-thought) produce candidatos vía `decide` falso, grounding forzado (`test_reflection_rejects_a_candidate_citing_an_evidence_ref_the_run_never_produced`, mismo principio que el Citation Verifier de DR-005 aplicado a memoria). Además la superficie HTTP del Memory Store (MEM-001/002) quedó expuesta en `aeon-controlplane` (`TestMemoryHandlersFullPipelineOverHTTP`, verificado también a mano contra un contenedor real: candidates→quarantine→validate→promote→active sobre HTTP real) — cierra el hueco de `backlog.md` que decía "empezar MEM-003" | python/aeon_memory/reflection.py, python/tests/unit/test_reflection.py, go/internal/api/memory_handlers.go, go/internal/api/memory_handlers_test.go |
 | MEM-005 | Utility/Forgetting (decay, prune, supersede/revoke) | `TODO` | `test_memory_decay_prunes_stale` en verde | — |
 | SEC-004 | Memory security (isolation, poisoning tests, repair/revocation) | `TODO` | `memory_poisoning` suite en verde | — |
 | EVAL-004 | Learning Eval (forward/negative transfer, usefulness, staleness) | `TODO` | reporte de `evals/suites/learning_eval` | — |
@@ -621,6 +621,30 @@ explícitamente para F3: el propio pipeline `quarantine→validate→promote/rej
 única vía real hacia `ACTIVE`, y una superficie HTTP/SDK para que un run Python pueda leer/escribir
 memoria — ninguna de las dos bloquea llamar a MEM-001 `DONE` (mismo criterio que se aplicó a
 DR-001..004 en F2).
+
+MEM-003 (Reflection) es un módulo Python puro (`python/aeon_memory/reflection.py`), sin import de
+Temporal, con el mismo patrón que Planner/Researcher/Reporter: `decide` inyectado, directamente
+testeable con un doble. Su contrato de entrada (`RunSummary`) es deliberadamente estrecho — sólo
+`run_id`/`query`/`outcome`/`report_text`/`evidence_refs`, nunca una transcripción completa —
+cumpliendo roadmap.md §6 ("sin almacenar chain-of-thought") desde el primer campo, no como filtro
+posterior. El grounding es la misma disciplina que DR-004/DR-005 aplican a citas: un candidato que
+referencia un `evidence_ref` que el run nunca produjo se rechaza entero (`ReflectionError`), nunca
+se repara ni se deja pasar parcialmente.
+
+También en este PR: la superficie HTTP que MEM-001/MEM-002 habían dejado pendiente
+(`go/internal/api/memory_handlers.go`, montada en `aeon-controlplane`) — `POST /memory/candidates`
+(fuerza `status=CANDIDATE` sin importar qué status pida el cuerpo, mismo principio que
+`WriteCandidate`), `GET /memory/active`, `GET /memory/{memory_id}`, y
+`POST /memory/{memory_id}/{quarantine,validate,promote,reject}`. `aeon-controlplane` ahora requiere
+`AEON_MEMORY_HMAC_KEY` (con un default inseguro sólo para `make dev`, ver `.env.example`).
+Verificado con Postgres real vía `TestMemoryHandlersFullPipelineOverHTTP` y, a mano, con `curl` real
+contra un contenedor `aeon-controlplane` real: un intento de colar `status: ACTIVE` en el `POST`
+inicial volvió como `CANDIDATE`, y el pipeline completo (`quarantine`→`validate`→`promote` bloqueado
+sin decisión→`promote` permitido→visible en `/memory/active`) funcionó de punta a punta sobre HTTP
+real. Reflection en sí todavía no está conectada a ningún workflow (nadie llama todavía a
+`Reflector.reflect` desde `DeepResearchWorkflow` ni escribe sus candidatos vía
+`POST /memory/candidates`) — eso es la extensión natural de `DX-001` a un run real, ver
+`backlog.md`.
 
 MEM-002 añade la máquina de estados real sobre el store de MEM-001
 (`memoryValidTransitions`, mismo patrón que `validTransitions` del Agent Registry): CANDIDATE →
