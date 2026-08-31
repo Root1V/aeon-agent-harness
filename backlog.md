@@ -226,3 +226,33 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Criterio de entrada:** decidir de dónde sale el "baseline": ¿el último agente `Released` con
   el mismo `name`? ¿un `SuiteReport` guardado explícitamente en el publish anterior?
 - **Coste:** M.
+
+### Enforcement de budgets en el endpoint OpenAI-compatible (INT-002)
+
+- **Descripción:** `POST /v1/chat/completions` (INT-002) resuelve routing real contra un
+  `ModelPolicyBundle` real, pero no aplica ningún límite de coste/tokens por-agente — no hay hoy
+  ningún sitio en el Model Gateway que contabilice presupuesto consumido por llamada. La
+  descripción original de INT-002 en la spec incluye "routing, budgets, redaction y FinOps
+  cambiando una base_url"; sólo "routing" es real hoy.
+- **Fase objetivo:** F4, junto con `OBS-003` (FinOps) y `MDL-002` (quality-aware routing) — los
+  tres comparten la necesidad de que el Model Gateway sepa qué agente/run está haciendo la
+  llamada, algo que este endpoint no recibe hoy (un cliente OpenAI genérico no manda ese contexto).
+- **Criterio de entrada:** decidir cómo un cliente externo identifica el run/agente que hace la
+  llamada — ¿un header custom? ¿parte del `model` string (`profile:run_id`)? — antes de poder
+  contabilizar nada contra un presupuesto real.
+- **Coste:** M.
+
+### Tracing real de punta a punta para runs Python (`DeepResearchWorkflow`, `LangGraphInteropWorkflow`)
+
+- **Descripción:** `OBS-001` instrumentó los servicios Go (`invoke_agent`/`chat`/`execute_tool`)
+  pero nunca se extendió al lado Python — `DeepResearchWorkflow` (`DX-001`) y
+  `LangGraphInteropWorkflow` (`INT-001`) no emiten ningún span propio. `aeon trace <run_id>`
+  (`DX-002`) por tanto no encuentra nada para un run de Deep Research real, sólo para runs que
+  pasan por el Run Controller Go. Esto es el hueco más visible entre "las 13 features de F2 están
+  DONE" y "el MVP como narrativa compuesta (informe + traza navegable + coste + replay) es 100%
+  cierto" — ver la nota al final de la sección F2 en `roadmap.md`.
+- **Fase objetivo:** cierre real del MVP, antes o durante F3.
+- **Criterio de entrada:** ninguno especial — es la extensión directa de `OBS-001` al lado Python
+  (usar el SDK de OTel para Python dentro de las Activities de `aeon_worker`, con los mismos
+  atributos `gen_ai.*`).
+- **Coste:** M.

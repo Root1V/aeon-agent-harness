@@ -6,9 +6,11 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-31 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha —
-> `INT-001` prueba Modo B por primera vez: un `langgraph.graph.StateGraph` real corre dentro de
-> una Activity, con sus nodos llamando a los clientes reales del Model/Tool Gateway).
+> Última actualización: 2026-08-31 (F0 cerrado salvo la nota de `local-llm`; **las 13 features de
+> F2 están `DONE`** — `INT-002` cierra el Model Gateway como endpoint OpenAI-compatible real,
+> verificado con el paquete `openai` de verdad. El MVP como narrativa compuesta ("traza navegable"
+> para runs Python, "coste por run", `replay --assert-identical`) todavía tiene huecos reales, ver
+> la nota de F2 abajo y `backlog.md` — no bloquean pasar a F3, pero son honestos de nombrar).
 
 ## Resumen ejecutivo
 
@@ -164,11 +166,32 @@ Temporal efímero real + worker en proceso separado real, sólo el Model Gateway
 (mismo patrón que `DX-001`); también se reconstruyó y arrancó el `worker` real de compose con la
 nueva dependencia para confirmar que no rompe nada.
 
+`INT-002` (Endpoint OpenAI-compatible) añadió `POST /v1/chat/completions` a `aeon-modelgw`
+(`go/internal/api/openai_compatible_handlers.go`): "model" en el request se interpreta como un
+*capability profile* (nunca un modelo concreto, ADR-004), resuelto contra un `ModelPolicyBundle`
+real cargado en Go (`modelgateway.ModelPolicyBundleDoc`, mismo patrón de carga config-as-code que
+`aeon-toolgw`). La traducción de vuelta es casi trivial porque `NormalizedChatResponse` ya tiene
+forma OpenAI por diseño — sólo hace falta envolver `id`/`object`/`created`. Verificado a mano con el
+paquete **real** `openai` de Python apuntando a un `aeon-modelgw` real (`OpenAI(base_url=".../v1")`
+→ `client.chat.completions.create(model="reasoning-test", ...)`), con un proveedor local falso
+detrás — la respuesta se parseó como un `ChatCompletion` real, sin ningún cambio de código del lado
+del cliente. "Routing" (incluyendo el filtro `data_sensitivity=restricted`) es real y probado;
+"budgets" (aplicar límites de coste/tokens en este endpoint específico) queda pendiente — no hay
+hoy ningún sitio en el Model Gateway que contabilice presupuesto por-agente, ver `backlog.md`.
+
+**Con esto, las 13 features de F2 están `DONE`.** Pero el MVP como narrativa compuesta (roadmap
+§7 original: informe con citas + traza navegable + coste por run + replay idéntico) todavía tiene
+huecos honestos, ninguno bloqueante para pasar a F3: `DeepResearchWorkflow` (Python, `DX-001`) no
+emite spans todavía — sólo los servicios Go (`OBS-001`) lo hacen, así que `aeon trace` no encuentra
+nada para un run de Deep Research real; no hay coste-por-run (eso es `OBS-003`/FinOps, F4); y
+`aeon replay` (`DX-002`) muestra historial real pero no reejecuta ni compara (`--assert-identical`,
+en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos silenciosos.
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | ~92% (12/13) | `IN_PROGRESS` |
+| F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -180,6 +203,11 @@ sin GPU — incluyendo el Mac Apple Silicon de este proyecto, verificado al leva
 verificado y sano — es lo que este equipo usa día a día, con Prometheus como inferencia local real,
 no vLLM. El supuesto sobre la API de Prometheus ya no está pendiente — resuelto con los hechos
 reales, ver ADR-004 y la nota de `MDL-006` en F0 abajo.
+
+`*` en F2: las 13 features con ID propio están `DONE` con test real. El MVP como narrativa
+*compuesta* (informe + traza navegable + coste por run + replay idéntico, contra proveedor cloud o
+local indistintamente) todavía no es 100% cierto en ese sentido más amplio — ver la nota al final
+de la sección F2 abajo para el detalle exacto de qué falta y por qué no bloquea F3.
 
 **Progreso real verificado hoy:**
 - `RUN-004` (Checkpoint & replay) — [test_crash_resume_no_duplicate_write](python/tests/integration/test_crash_resume.py)
@@ -558,7 +586,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 | DX-002 | CLI (init/validate/run/eval/trace/replay/publish) | `DONE` | los 7 subcomandos ejecutan sin error contra el compose real — verificado a mano (`init`/`validate`/`publish` contra Postgres real, `trace` contra Tempo real, `replay` contra Temporal real) más `TestAeonInit`/`TestAeonRun`/`TestAeonTrace`/`TestAeonReplay`/`TestAeonPublish` en verde | go/cmd/aeon/dx002.go, go/cmd/aeon/dx002_test.go |
 | DX-003 | Template Deep Research | `DONE` | válido (`TestAeonValidateAcceptsAndRejectsExampleManifests`) y ejecutable (`test_examples_deep_research_run_script_produces_a_report`, DX-002) — más `test_every_allowed_tool_has_a_matching_cedar_permit` y familia: los 4 ficheros de config-as-code del template (agent/policy/model_policy/evalGates) se validan mutuamente entre sí, no sólo cada uno contra su propio schema | python/tests/unit/test_deep_research_template.py, examples/deep-research/README.md |
 | INT-001 | `FrameworkAdapter` LangGraph (Modo B) | `DONE` | `test_langgraph_interop_graph_runs_inside_a_real_activity` en verde — un `langgraph.graph.StateGraph` real (dependencia real, no un stand-in) corre dentro de una única Activity real, sus dos nodos llamando a los clientes reales del Model/Tool Gateway | python/tests/integration/test_langgraph_interop_workflow.py, python/aeon_adapters/langgraph/adapter.py |
-| INT-002 | Endpoint OpenAI-compatible del Model Gateway (Modo C) | `TODO` | un cliente `openai` apuntando a `base_url` local obtiene routing/budgets | — |
+| INT-002 | Endpoint OpenAI-compatible del Model Gateway (Modo C) | `DONE` | `TestOpenAICompatibleChatCompletions` en verde — verificado también a mano con el paquete real `openai` de Python apuntando a un `aeon-modelgw` real, resuelto vía un `ModelPolicyBundle` real. "Routing" es real; "budgets" (aplicar límites en este endpoint) queda pendiente, ver `backlog.md` | go/internal/api/openai_compatible_handlers.go, go/internal/api/openai_compatible_handlers_test.go |
 
 **MVP:** `make dev && aeon run examples/deep-research --query "…"` produce informe con citas
 verificadas, traza navegable, coste por run y `aeon replay <run_id>` idéntico — contra proveedor
