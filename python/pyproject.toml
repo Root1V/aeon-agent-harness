@@ -9,6 +9,8 @@ dependencies = [
     "jsonschema>=4.23",
     # aeon_evalops.runner (EVAL-002, not a test) parses evals/suites/*.yaml at runtime — not dev-only.
     "pyyaml>=6.0",
+    # aeon_adapters.langgraph (INT-001, Modo B) runs a real compiled LangGraph graph.
+    "langgraph>=1.0",
 ]
 
 [project.optional-dependencies]
