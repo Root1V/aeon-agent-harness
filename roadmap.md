@@ -7,8 +7,8 @@
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
 > Última actualización: 2026-08-30 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha —
-> `DX-002` completa la CLI y de paso destapó un bug real: el `worker` de compose no arrancaba
-> desde `DX-001`, ver más abajo).
+> `DX-003` cierra el template de Deep Research con una prueba de cohesión entre sus 4 ficheros de
+> config-as-code).
 
 ## Resumen ejecutivo
 
@@ -143,11 +143,20 @@ la CLI Go (`AEON_SCHEMAS_DIR`): ambos módulos Python la consultan primero, y `d
 monta `proto/` de sólo lectura en el `worker` y la define. Verificado arrancando el `worker` real y
 completando un run real de punta a punta.
 
+`DX-003` (Template Deep Research) añadió `python/tests/unit/test_deep_research_template.py`: los 4
+ficheros de config-as-code del template (`agent.yaml`, `policy_bundle.yaml`,
+`model_policy_bundle.yaml`, `evals/suites/*.yaml`) se validan entre sí, no sólo cada uno contra su
+propio schema — cada tool en `tools.allow` tiene un permit Cedar real que lo cubre, cada perfil de
+`modelPolicy` (incluyendo fallbacks) existe en el bundle, y cada `evalGates` nombra un suite
+realmente registrado. "Válido" y "ejecutable" ya estaban probados por `FND-003`/`DX-002`; esto
+cierra el hueco de cohesión ENTRE ficheros que ninguno de los dos cubría. Se añadió también
+`examples/deep-research/README.md`.
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | ~77% (10/13) | `IN_PROGRESS` |
+| F2 | Deep Research + EvalOps (**MVP**) | ~85% (11/13) | `IN_PROGRESS` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -535,7 +544,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 | EVAL-003 | Release Gates (bloquear promoción por regresión) | `DONE` | `test_release_gate_blocks_regression_even_when_still_above_threshold` en verde (motor) + `TestAgentRegistryReleaseGateBlocksPromotion` en verde (aplicación real en el registry) | python/tests/unit/test_release_gate.py, go/internal/store/agent_registry_test.go |
 | DX-001 | SDK Python (`start_deep_research_run`, primer workflow real DR-001..DR-005) | `DONE` | `test_deep_research_workflow_produces_a_verified_report_end_to_end` en verde — pipeline completo real contra Temporal + worker real, sólo el Model Gateway es un doble HTTP. Alcance: `aeon_sdk.deep_research`/`aeon_sdk.model_policy` (Deep Research únicamente); un `start_run(manifest)` genérico y tools/context/memory/traces/approvals como superficie SDK propia quedan en `backlog.md` | python/tests/integration/test_deep_research_workflow.py, examples/deep-research/run.py |
 | DX-002 | CLI (init/validate/run/eval/trace/replay/publish) | `DONE` | los 7 subcomandos ejecutan sin error contra el compose real — verificado a mano (`init`/`validate`/`publish` contra Postgres real, `trace` contra Tempo real, `replay` contra Temporal real) más `TestAeonInit`/`TestAeonRun`/`TestAeonTrace`/`TestAeonReplay`/`TestAeonPublish` en verde | go/cmd/aeon/dx002.go, go/cmd/aeon/dx002_test.go |
-| DX-003 | Template Deep Research | `TODO` | `examples/deep-research/agent.yaml` válido y ejecutable | — |
+| DX-003 | Template Deep Research | `DONE` | válido (`TestAeonValidateAcceptsAndRejectsExampleManifests`) y ejecutable (`test_examples_deep_research_run_script_produces_a_report`, DX-002) — más `test_every_allowed_tool_has_a_matching_cedar_permit` y familia: los 4 ficheros de config-as-code del template (agent/policy/model_policy/evalGates) se validan mutuamente entre sí, no sólo cada uno contra su propio schema | python/tests/unit/test_deep_research_template.py, examples/deep-research/README.md |
 | INT-001 | `FrameworkAdapter` LangGraph (Modo B) | `TODO` | `examples/langgraph-interop` corre dentro de una Activity | — |
 | INT-002 | Endpoint OpenAI-compatible del Model Gateway (Modo C) | `TODO` | un cliente `openai` apuntando a `base_url` local obtiene routing/budgets | — |
 
