@@ -59,7 +59,20 @@ type Decision struct {
 // toolName. This is the entire authorization surface SEC-001 promises: the model never sees or
 // influences this decision, and it runs after argument generation, before execution (ADR-001/ADR-002).
 func (e *Engine) IsAllowed(agentManifestRef, toolName string) Decision {
-	principal := types.NewEntityUID(types.EntityType("Agent"), types.String(agentManifestRef))
+	return e.isAllowedFor("Agent", agentManifestRef, toolName)
+}
+
+// IsAllowedForPrincipal evaluates authorization for a caller that isn't an Aeon Agent — e.g. an
+// external MCP client (INT-003) reaching Aeon's governed tool catalog directly, with no
+// AgentManifest of its own. principalType names the Cedar entity type (e.g. "McpClient");
+// principalID is the specific identity within that type. A policy bundle authorizes this exactly
+// like an Agent: an explicit `permit` naming this principal, evaluated by the same Cedar engine.
+func (e *Engine) IsAllowedForPrincipal(principalType, principalID, toolName string) Decision {
+	return e.isAllowedFor(principalType, principalID, toolName)
+}
+
+func (e *Engine) isAllowedFor(principalType, principalID, toolName string) Decision {
+	principal := types.NewEntityUID(types.EntityType(principalType), types.String(principalID))
 	action := types.NewEntityUID(types.EntityType("Action"), types.String(toolName))
 	resourceUID := types.NewEntityUID(types.EntityType("Tool"), types.String(toolName))
 

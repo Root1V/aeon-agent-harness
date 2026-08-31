@@ -65,3 +65,48 @@ func TestPolicyEngineDeniesOutOfManifestToolCall(t *testing.T) {
 		t.Fatalf("unrelated agent calling search.web: expected denied, got allowed")
 	}
 }
+
+// TestPolicyEngineIsAllowedForPrincipalSupportsNonAgentPrincipals is INT-003's underlying
+// requirement: an external MCP client isn't an Agent::"name@version" — it needs its own Cedar
+// entity type, and a policy bundle must be able to permit it independently of any Agent policy.
+func TestPolicyEngineIsAllowedForPrincipalSupportsNonAgentPrincipals(t *testing.T) {
+	bundle := testBundle + `
+permit(
+  principal == McpClient::"external-mcp-client",
+  action,
+  resource
+) when {
+  ["search.web"].contains(resource.name)
+};
+`
+	e, err := LoadEngine(PolicyBundleDoc{Policies: []PolicyBundleItem{{ID: "test", CedarSource: bundle}}})
+	if err != nil {
+		t.Fatalf("LoadEngine: %v", err)
+	}
+
+	allowed := e.IsAllowedForPrincipal("McpClient", "external-mcp-client", "search.web")
+	if !allowed.Allowed {
+		t.Fatalf("search.web for the permitted McpClient: expected allowed, got denied (policy=%s)", allowed.PolicyID)
+	}
+
+	// The universal forbid still applies to a non-Agent principal — forbid is principal-agnostic.
+	forbidden := e.IsAllowedForPrincipal("McpClient", "external-mcp-client", "shell.exec")
+	if forbidden.Allowed {
+		t.Fatal("shell.exec for McpClient: expected denied by explicit forbid, got allowed")
+	}
+
+	// A different McpClient identity, not named by any permit, is denied by default — same
+	// per-principal isolation IsAllowed already gives Agent callers.
+	otherClientDenied := e.IsAllowedForPrincipal("McpClient", "some-other-client", "search.web")
+	if otherClientDenied.Allowed {
+		t.Fatal("unrelated McpClient calling search.web: expected denied, got allowed")
+	}
+
+	// IsAllowed (Agent-scoped) and IsAllowedForPrincipal("Agent", ...) must agree — they're the
+	// same evaluation, just reached through the convenience wrapper vs. the general one.
+	viaWrapper := e.IsAllowed("deep-research-general@0.1.0", "search.web")
+	viaGeneral := e.IsAllowedForPrincipal("Agent", "deep-research-general@0.1.0", "search.web")
+	if viaWrapper.Allowed != viaGeneral.Allowed {
+		t.Errorf("IsAllowed/IsAllowedForPrincipal(\"Agent\",...) disagree: %v vs %v", viaWrapper.Allowed, viaGeneral.Allowed)
+	}
+}
