@@ -16,9 +16,10 @@
 > (Utility/Forgetting), `SEC-004` (Memory security) y `EVAL-004` (Learning Eval, que además cierra
 > el hueco de `ValidationDecision`/`PromotionDecision` que MEM-002 había dejado abierto). F4 (Trust
 > e interoperabilidad) arrancó con `TOOL-002` (MCP Adapter cliente, real sobre el SDK Go oficial de
-> MCP, conformidad probada contra la spec 2026-07-28 y contra un fallback legacy 2025-11-25 real) y
+> MCP, conformidad probada contra la spec 2026-07-28 y contra un fallback legacy 2025-11-25 real),
 > `INT-003` (servidor MCP de salida exponiendo el catálogo real de `aeon-toolgw`, verificado también
-> con el paquete oficial `mcp` de Python, un cliente independiente del SDK Go)).
+> con el paquete oficial `mcp` de Python, un cliente independiente del SDK Go) y `A2A-001` (A2A
+> Gateway, real sobre el SDK Go oficial de A2A, task lifecycle respaldado por un run Temporal real)).
 
 ## Resumen ejecutivo
 
@@ -201,7 +202,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | ~14% (2/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | ~21% (3/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -748,7 +749,7 @@ explícitamente en `backlog.md`, no oculto.
 |---|---|---|---|---|
 | TOOL-002 | MCP Adapter (core stateless 2026-07-28 + legacy adapter) | `DONE` | `TestAdapterStatelessConformance20260728` y `TestAdapterLegacyFallback20251125` en verde — Aeon como cliente MCP real (`github.com/modelcontextprotocol/go-sdk`, dependencia real, no reinventada) negociando contra un servidor MCP real (mismo SDK): stateless 2026-07-28 por defecto, con fallback real al handshake legacy `initialize` 2025-11-25 cuando el servidor sólo anuncia esa versión vía `server/discover`. Un único adaptador, no dos — el fallback es el `Client.Connect` real del SDK, no una rama de código separada | go/internal/mcp/adapter.go, go/internal/mcp/adapter_test.go |
 | INT-003 | Servidor MCP de salida (catálogo de tools gobernado) | `DONE` | `TestToolGatewayServerEndToEndWithRealAdapter` en verde — el catálogo real del Tool Registry (Postgres real, TOOL-001) expuesto como servidor MCP real, con cada `tools/call` pasando por el mismo Cedar `Policy.IsAllowedForPrincipal` que `/execute` ya aplicaba. Verificado también a mano con el paquete **real** `mcp` de Python (independiente del SDK Go usado en el servidor) contra un `aeon-toolgw` real: listó 36 tools reales del registro y llamó `search.web` (permitido) y `shell.exec` (denegado por policy, nunca llega al executor) | go/internal/mcp/server.go, go/internal/mcp/server_test.go, go/internal/policy/cedar.go |
-| A2A-001 | A2A Gateway (Agent Card, identity/authz, task exchange) | `TODO` | `test_a2a_task_lifecycle` en verde | — |
+| A2A-001 | A2A Gateway (Agent Card, identity/authz, task exchange) | `DONE` | `TestA2ATaskLifecycle` en verde — un `AgentCard` real construido desde un `AgentManifest` real (FND-001, Postgres real), un cliente A2A real (`github.com/a2aproject/a2a-go`) resolviéndolo, enviando un mensaje y observando la tarea recorrer `submitted`→`working`→`completed`, respaldado por un run Temporal real (RUN-001) — no un estado sintético. Un segundo escenario cancela una tarea en curso y confirma tanto el estado A2A `canceled` como la cancelación real del run subyacente | go/internal/a2a/agentcard.go, go/internal/a2a/executor.go, go/internal/a2a/executor_test.go |
 | INT-004 | `FrameworkAdapter` CrewAI | `TODO` | ejemplo equivalente a `langgraph-interop` | — |
 | INT-005 | `FrameworkAdapter` OpenAI Agents SDK | `TODO` | ídem | — |
 | INT-006 | `FrameworkAdapter` Microsoft Agent Framework | `TODO` | ídem | — |
@@ -789,6 +790,37 @@ Python usa) nunca negocia más allá de `2025-11-25` por diseño de la especific
 `server/discover` (SEP-2575) alcanza `2026-07-28`. Esto en realidad confirma el objetivo de
 TOOL-002/INT-003 desde el otro lado: un cliente que todavía no habla el flujo nuevo interopera
 igualmente bien vía el fallback legacy.
+
+A2A-001 sigue el mismo patrón que TOOL-002/INT-003: SDK oficial real
+(`github.com/a2aproject/a2a-go` v0.3.15, verificado primero contra la spec real —
+`https://a2a-protocol.org/dev/specification/`, la misma `[R17]` que cita la spec original — antes
+de escribir nada), nunca una reimplementación de protocolo propia. `go/internal/a2a/agentcard.go`
+mapea un `AgentManifest` real del Agent Registry (FND-001) a un `AgentCard` real — los `Skills`
+salen literalmente de `spec.tools.allow`, así que lo que un caller A2A ve que el agente puede hacer
+nunca puede divergir de lo que su propia policy Cedar ya gobierna. `go/internal/a2a/executor.go`
+implementa `a2asrv.AgentExecutor` como un puente real al Run Controller (RUN-001): `Execute` arranca
+un run Temporal real vía `runcontroller.Controller.Start`, emite `working` de inmediato y luego
+sondea el estado real del run, traduciendo `SUCCEEDED`/`FAILED`/`CANCELLED` a los `TaskState` de A2A
+— nunca un estado sintético desconectado de lo que el run realmente hizo. `Cancel` cancela el run
+Temporal real (no sólo cambia un estado A2A) y confía en el propio contrato documentado del SDK
+(escribir el evento `canceled` cancela el contexto de un `Execute` todavía en curso, evitando una
+doble escritura del evento terminal) — verificado de verdad, no asumido: el test de cancelación usa
+un grafo con un `loop` de 50 iteraciones para que quede tiempo real de observar `working` antes de
+cancelar.
+
+Identidad/authz: mismo hueco reconocido honestamente que en INT-003 — A2A permite declarar
+`securitySchemes` en el `AgentCard`, pero Aeon no aplica ninguno todavía (necesita `SEC-002`,
+Secret Broker). No inventado aquí; documentado en `backlog.md`.
+
+Hallazgo real durante la verificación (no relacionado con A2A en sí): correr la suite completa de Go
+con `AEON_TEST_TEMPORAL_ADDRESS` puesto (necesario para este feature) hizo que `TestAeonReplay`
+(DX-002) — que hasta ahora sólo se había *auto-saltado* en cada verificación anterior — corriera de
+verdad por primera vez, y falló: `runReplay` para un `run_id` inexistente propagaba el error crudo
+de Temporal (`sql: no rows in result set`, una fuga del propio almacén de persistencia de Temporal)
+en vez de tratarlo como "no hay eventos de historial". Arreglado detectando
+`serviceerror.NotFound` explícitamente (`go/cmd/aeon/dx002.go`) — un bug real de DX-002 que el
+"auto-saltarse" había mantenido invisible en cada verificación anterior, encontrado y corregido
+aquí, no ignorado, al pasar esta suite por primera vez con Temporal realmente disponible.
 
 F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
 (`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y

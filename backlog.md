@@ -349,3 +349,28 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   `ToolRegistry.List()` periódicamente o en `tools/list_changed`). Para identidad real, que
   `SEC-002` exista.
 - **Coste:** S (refresco) / M (identidad real, depende de SEC-002).
+
+### A2A Gateway (`A2A-001`) no está montado en ningún binario real todavía
+
+- **Descripción:** `go/internal/a2a` (`BuildAgentCard`/`AeonAgentExecutor`) es real y probado
+  contra Temporal real, pero ningún `cmd/aeon-*` lo expone sobre HTTP — a diferencia de INT-003
+  (donde extender `aeon-toolgw` fue directo), montar esto en `aeon-runcontroller` exige antes
+  decidir qué agente(s)/grafo(s) concretos publica un gateway A2A en vivo y cómo el contenido de un
+  `Message` A2A entrante se traduce en el input de un grafo — hoy `AeonAgentExecutor` siempre
+  ejecuta el mismo grafo fijado en construcción, ignorando el contenido real del mensaje.
+- **Fase objetivo:** cuando exista un caso de uso real que necesite invocar un agente Aeon
+  concreto desde una red A2A externa.
+- **Criterio de entrada:** decidir el mapeo Message→grafo (¿un grafo por skill anunciada en el
+  `AgentCard`? ¿el texto del mensaje como único input de un nodo `tool_call`?) y qué
+  agente(s) expone cada instancia del gateway.
+- **Coste:** M.
+
+### A2A: sin identidad/autorización real de caller (`A2A-001`)
+
+- **Descripción:** el `AgentCard` puede declarar `securitySchemes`, pero `AeonAgentExecutor` no
+  aplica ninguno — cualquier caller que alcance el endpoint puede enviar un mensaje. Mismo hueco
+  que `INT-003` con MCP: hace falta autenticación real de caller antes de poder autorizar por
+  identidad real en vez de tratar a todo el mundo igual.
+- **Fase objetivo:** junto con `SEC-002` (Secret Broker).
+- **Criterio de entrada:** que `SEC-002` exista.
+- **Coste:** M.

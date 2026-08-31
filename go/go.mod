@@ -3,6 +3,7 @@ module github.com/aeon-ai/aeon/go
 go 1.25.4
 
 require (
+	github.com/a2aproject/a2a-go v0.3.15
 	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
