@@ -317,18 +317,35 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Criterio de entrada:** un caller real no confiable de estas rutas.
 - **Coste:** S.
 
-### Conectar el MCP Adapter (`TOOL-002`) al Tool Gateway real
+### Conectar el MCP Adapter cliente (`TOOL-002`) al Tool Gateway real
 
-- **Descripción:** `go/internal/mcp/adapter.go` es real y probado (conformidad contra un servidor
-  MCP real, incluyendo el fallback legacy 2025-11-25), pero ningún `ToolDescriptor` lo invoca
-  todavía — el Tool Gateway (`go/internal/toolexec`) no tiene hoy un backend "mcp" que abra una
-  `Session` y llame `ListTools`/`CallTool`. Un tool servido por un servidor MCP externo no puede
-  registrarse ni ejecutarse en Aeon todavía.
-- **Fase objetivo:** junto con `INT-003` (servidor MCP de salida) — ambos tocan la misma pregunta
-  de cómo un `ToolDescriptor` declara que su implementación es MCP en vez de nativa, y compartirían
-  el mismo `go/internal/mcp`.
+- **Descripción:** `go/internal/mcp/adapter.go` (cliente — Aeon consumiendo servidores MCP
+  externos) es real y probado, pero ningún `ToolDescriptor` lo invoca todavía — el Tool Gateway
+  (`go/internal/toolexec`) no tiene un backend "mcp" que abra una `Session` y llame
+  `ListTools`/`CallTool` contra un servidor de terceros. Un tool servido por un servidor MCP
+  externo no puede registrarse ni ejecutarse en Aeon todavía. Nótese que esto es distinto de
+  `INT-003` (ya `DONE`), que resolvió el sentido contrario — Aeon como *servidor* MCP exponiendo su
+  propio catálogo — no este.
+- **Fase objetivo:** cuando exista un caso de uso real que necesite un tool respaldado por un
+  servidor MCP externo concreto (LangGraph/CrewAI/Claude Code ya expone algunos vía MCP).
 - **Criterio de entrada:** decidir cómo se declara un tool respaldado por MCP en
-  `tool_descriptor.schema.json` (¿un `backend: {type: mcp, endpoint: ...}`?) y cómo se asigna
-  `side_effect`/`risk` a algo que Aeon no implementó — un tool descubierto vía `ListTools` no trae
-  esa clasificación consigo.
+  `tool_descriptor.schema.json` (`mcp_origin: {server, spec_version}` ya existe en el schema desde
+  F0, pendiente de usarse) y cómo se asigna `side_effect`/`risk` a algo que Aeon no implementó — un
+  tool descubierto vía `ListTools` no trae esa clasificación consigo.
 - **Coste:** M.
+
+### Catálogo MCP de salida (`INT-003`) es estático por proceso y sin identidad real de cliente
+
+- **Descripción:** `aeon-toolgw` lee el Tool Registry (Postgres) una sola vez al arrancar para
+  construir el servidor MCP (`/mcp`) — un tool registrado o modificado en `aeon-controlplane`
+  después no aparece hasta reiniciar `aeon-toolgw` (verificado a mano: hizo falta un `docker compose
+  restart toolgw` real para ver un tool recién registrado). Además, todo llamador MCP externo se
+  autoriza hoy como un único principal Cedar compartido (`McpClient::"external-mcp-client"`) porque
+  no existe autenticación real de cliente MCP — ver la nota de diseño en `roadmap.md` INT-003.
+- **Fase objetivo:** el refresco en vivo del catálogo encaja con `OBS-002`/Agent Console (F4, ya
+  que ambos necesitan una vista actualizada del registro); la identidad real de cliente MCP
+  necesita `SEC-002` (Secret Broker) primero.
+- **Criterio de entrada:** para el refresco en vivo, ninguno especial (extensión directa: recargar
+  `ToolRegistry.List()` periódicamente o en `tools/list_changed`). Para identidad real, que
+  `SEC-002` exista.
+- **Coste:** S (refresco) / M (identidad real, depende de SEC-002).

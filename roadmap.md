@@ -15,8 +15,10 @@
 > Pipeline, Postgres-backed), `MEM-003` (Reflection + superficie HTTP), `MEM-005`
 > (Utility/Forgetting), `SEC-004` (Memory security) y `EVAL-004` (Learning Eval, que además cierra
 > el hueco de `ValidationDecision`/`PromotionDecision` que MEM-002 había dejado abierto). F4 (Trust
-> e interoperabilidad) arrancó con `TOOL-002` (MCP Adapter, real sobre el SDK Go oficial de MCP,
-> conformidad probada contra la spec 2026-07-28 y contra un fallback legacy 2025-11-25 real)).
+> e interoperabilidad) arrancó con `TOOL-002` (MCP Adapter cliente, real sobre el SDK Go oficial de
+> MCP, conformidad probada contra la spec 2026-07-28 y contra un fallback legacy 2025-11-25 real) y
+> `INT-003` (servidor MCP de salida exponiendo el catálogo real de `aeon-toolgw`, verificado también
+> con el paquete oficial `mcp` de Python, un cliente independiente del SDK Go)).
 
 ## Resumen ejecutivo
 
@@ -199,7 +201,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | ~7% (1/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | ~14% (2/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -745,7 +747,7 @@ explícitamente en `backlog.md`, no oculto.
 | ID | Feature | Estado | Criterio de DONE | PR |
 |---|---|---|---|---|
 | TOOL-002 | MCP Adapter (core stateless 2026-07-28 + legacy adapter) | `DONE` | `TestAdapterStatelessConformance20260728` y `TestAdapterLegacyFallback20251125` en verde — Aeon como cliente MCP real (`github.com/modelcontextprotocol/go-sdk`, dependencia real, no reinventada) negociando contra un servidor MCP real (mismo SDK): stateless 2026-07-28 por defecto, con fallback real al handshake legacy `initialize` 2025-11-25 cuando el servidor sólo anuncia esa versión vía `server/discover`. Un único adaptador, no dos — el fallback es el `Client.Connect` real del SDK, no una rama de código separada | go/internal/mcp/adapter.go, go/internal/mcp/adapter_test.go |
-| INT-003 | Servidor MCP de salida (catálogo de tools gobernado) | `TODO` | un cliente MCP externo lista y llama tools de Aeon | — |
+| INT-003 | Servidor MCP de salida (catálogo de tools gobernado) | `DONE` | `TestToolGatewayServerEndToEndWithRealAdapter` en verde — el catálogo real del Tool Registry (Postgres real, TOOL-001) expuesto como servidor MCP real, con cada `tools/call` pasando por el mismo Cedar `Policy.IsAllowedForPrincipal` que `/execute` ya aplicaba. Verificado también a mano con el paquete **real** `mcp` de Python (independiente del SDK Go usado en el servidor) contra un `aeon-toolgw` real: listó 36 tools reales del registro y llamó `search.web` (permitido) y `shell.exec` (denegado por policy, nunca llega al executor) | go/internal/mcp/server.go, go/internal/mcp/server_test.go, go/internal/policy/cedar.go |
 | A2A-001 | A2A Gateway (Agent Card, identity/authz, task exchange) | `TODO` | `test_a2a_task_lifecycle` en verde | — |
 | INT-004 | `FrameworkAdapter` CrewAI | `TODO` | ejemplo equivalente a `langgraph-interop` | — |
 | INT-005 | `FrameworkAdapter` OpenAI Agents SDK | `TODO` | ídem | — |
@@ -758,6 +760,35 @@ explícitamente en `backlog.md`, no oculto.
 | OBS-002 | Agent Console (trace explorer, context inspector, evidence graph) | `TODO` | UI muestra un run real de punta a punta | — |
 | OBS-003 | FinOps (cost per run/success/agent/model/tool) | `TODO` | dashboard con `cost_model: token_based|compute_based` | — |
 | MDL-002 | Quality-aware routing (eval scores como condición de routing) | `TODO` | routing cambia con score degradado en fixture | — |
+
+INT-003 expone el catálogo real de `store.ToolRegistry` (TOOL-001) como servidor MCP real,
+montado en `aeon-toolgw` bajo `/mcp` (opcional: sin `AEON_PG_DSN` simplemente no se monta). Cada
+`tools/call` reutiliza exactamente la misma comprobación de policy que `ToolGatewayHandlers.execute`
+ya aplicaba (`go/internal/api/tool_gateway_handlers.go`) — nunca una ruta paralela sin política.
+Decisión de diseño real, no un atajo: un cliente MCP se identifica a sí mismo vía `clientInfo`, pero
+la especificación 2026-07-28 dice explícitamente que ese campo es auto-reportado y "SHOULD NOT
+[be relied on] for security decisions" — así que, hasta que exista autenticación real de cliente
+MCP (`SEC-002`, Secret Broker), todo llamador MCP externo se autoriza como un único principal Cedar
+compartido (`McpClient::"external-mcp-client"`, `go/internal/mcp/server.go`), nunca con más
+privilegio del que un operador conceda explícitamente a ese principal en el `PolicyBundle`
+(`examples/deep-research/policy_bundle.yaml` ganó un permiso nuevo para ese principal, con el mismo
+conjunto read-only que el agente de referencia). Esto requirió generalizar
+`policy.Engine.IsAllowed` (antes fijado a `Agent::"..."`) en un método nuevo
+`IsAllowedForPrincipal(principalType, principalID, toolName)` — `IsAllowed` sigue existiendo sin
+cambios, delegando al nuevo método, así que ningún llamador existente ni test de SEC-001 se tocó.
+
+Verificación real cruzada, no sólo mismo-SDK: además del test Go (`TestToolGatewayServerEndToEndWithRealAdapter`,
+cliente y servidor ambos sobre `github.com/modelcontextprotocol/go-sdk`), se verificó a mano con el
+paquete **oficial `mcp` de Python** (`ClientSession`/`streamable_http_client`, independiente del SDK
+Go) contra un `aeon-toolgw` real: registrar un tool real vía `aeon-controlplane`, reiniciar
+`aeon-toolgw`, listar 36 tools reales, llamar `search.web` (permitido, resultado real del
+executor) y `shell.exec` (denegado, nunca llega a `toolexec.Executor`). Hallazgo real y honesto: el
+cliente Python de esta verificación negoció protocolo `2025-11-25`, no `2026-07-28` — no es un bug
+del servidor Go: el propio SDK Go documenta que el RPC legacy `initialize` (el que este cliente
+Python usa) nunca negocia más allá de `2025-11-25` por diseño de la especificación; sólo
+`server/discover` (SEP-2575) alcanza `2026-07-28`. Esto en realidad confirma el objetivo de
+TOOL-002/INT-003 desde el otro lado: un cliente que todavía no habla el flujo nuevo interopera
+igualmente bien vía el fallback legacy.
 
 F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
 (`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y

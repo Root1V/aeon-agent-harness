@@ -12,6 +12,16 @@ policies:
       ) when {
         ["search.web", "search.rag", "repository.read", "artifact.read"].contains(resource.name)
       };
+  - id: allow-mcp-client-read-only-tools
+    effect: permit
+    cedarSource: |
+      permit(
+        principal == McpClient::"external-mcp-client",
+        action,
+        resource
+      ) when {
+        ["search.web", "search.rag", "repository.read", "artifact.read"].contains(resource.name)
+      };
   - id: forbid-shell-for-everyone
     effect: forbid
     cedarSource: |
