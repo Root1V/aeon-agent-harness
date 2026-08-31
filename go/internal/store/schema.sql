@@ -59,3 +59,9 @@ CREATE TABLE IF NOT EXISTS memory_records (
 );
 
 CREATE INDEX IF NOT EXISTS memory_records_scope_status_idx ON memory_records (scope, tenant_id, status);
+
+-- MEM-005 (Utility/Forgetting): additive migration. CREATE TABLE IF NOT EXISTS above is a no-op
+-- against a memory_records table that already exists from an earlier deploy, so these new columns
+-- need their own idempotent ALTER — the first real schema history this table has had.
+ALTER TABLE memory_records ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;
+ALTER TABLE memory_records ADD COLUMN IF NOT EXISTS superseded_by UUID REFERENCES memory_records(memory_id);

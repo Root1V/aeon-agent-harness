@@ -283,3 +283,19 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   para agentes.
 - **Criterio de entrada:** empezar `EVAL-004`.
 - **Coste:** M.
+
+### `Prune` (MEM-005) no tiene wiring ni política propia todavía
+
+- **Descripción:** `MemoryStore.Prune`/`RecordUsage`/`Supersede`/`Revoke` son reales y probados
+  contra Postgres real, pero nada los llama en producción todavía: ningún cron/job periódico
+  ejecuta `Prune`, ningún run llama a `RecordUsage` tras consultar memoria, y `halfLifeDays`/
+  `threshold` se pasan como argumentos directos a la llamada — no hay ningún
+  `AgentManifest.spec.memoryPolicy` ni config-as-code que los declare por scope/tenant.
+- **Fase objetivo:** F4 (Agent Console/FinOps) para el job periódico; el config-as-code de
+  decaimiento podría vivir en el mismo `ModelPolicyBundle`-style YAML o uno propio, a decidir junto
+  con `SEC-004`/`EVAL-004` (F3, todavía pendientes) ya que ambos también tocan cómo se gobierna una
+  memoria `ACTIVE`.
+- **Criterio de entrada:** un consumidor real (`aeon_worker` leyendo memoria vía
+  `GET /memory/active` y llamando `RecordUsage`) que haga evidente qué parámetros de decaimiento
+  hacen falta.
+- **Coste:** M.

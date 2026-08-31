@@ -61,7 +61,7 @@ func (s *MemoryStore) WriteCandidate(ctx context.Context, rec MemoryRecord) (*Me
 // Quarantine moves a CANDIDATE record to QUARANTINED — the pipeline's first curator-driven step,
 // flagging a candidate for review before it can ever be validated.
 func (s *MemoryStore) Quarantine(ctx context.Context, memoryID string) (*MemoryRecord, error) {
-	return s.transitionStatus(ctx, memoryID, MemoryStatusQuarantined)
+	return s.transitionStatus(ctx, memoryID, MemoryStatusQuarantined, memoryValidTransitions)
 }
 
 // Validate moves a QUARANTINED record to VALIDATED, but only if decision.Allowed — the gate a
@@ -74,7 +74,7 @@ func (s *MemoryStore) Validate(ctx context.Context, memoryID string, decision Va
 		}
 		return nil, fmt.Errorf("%w: %s: %s", ErrValidationGateBlocked, memoryID, reason)
 	}
-	return s.transitionStatus(ctx, memoryID, MemoryStatusValidated)
+	return s.transitionStatus(ctx, memoryID, MemoryStatusValidated, memoryValidTransitions)
 }
 
 // Promote moves a VALIDATED record to ACTIVE, but only if decision.Allowed — this is the only path
@@ -88,22 +88,28 @@ func (s *MemoryStore) Promote(ctx context.Context, memoryID string, decision Pro
 		}
 		return nil, fmt.Errorf("%w: %s: %s", ErrPromotionGateBlocked, memoryID, reason)
 	}
-	return s.transitionStatus(ctx, memoryID, MemoryStatusActive)
+	return s.transitionStatus(ctx, memoryID, MemoryStatusActive, memoryValidTransitions)
 }
 
 // Reject moves a CANDIDATE, QUARANTINED, or VALIDATED record to REVOKED — the pipeline's terminal
 // "reject" outcome. An already-ACTIVE record is out of scope here: superseding/revoking a promoted
 // memory is MEM-005 (Utility/Forgetting), not this pipeline.
 func (s *MemoryStore) Reject(ctx context.Context, memoryID string) (*MemoryRecord, error) {
-	return s.transitionStatus(ctx, memoryID, MemoryStatusRevoked)
+	return s.transitionStatus(ctx, memoryID, MemoryStatusRevoked, memoryValidTransitions)
 }
 
-func (s *MemoryStore) transitionStatus(ctx context.Context, memoryID, target string) (*MemoryRecord, error) {
+// transitionStatus applies target if it's an allowed next step for memoryID's current status
+// under transitions — a map shared by MEM-002's pre-ACTIVE pipeline (memoryValidTransitions) and
+// MEM-005's post-ACTIVE forgetting transitions (memoryPostActiveTransitions), kept as two
+// separate maps so each feature's transitions stay independently reasoned about (e.g. MEM-002's
+// Reject intentionally never reaches an ACTIVE record — see memory_forgetting.go for why that's
+// a distinct, separate operation).
+func (s *MemoryStore) transitionStatus(ctx context.Context, memoryID, target string, transitions map[string]map[string]bool) (*MemoryRecord, error) {
 	current, err := s.Get(ctx, memoryID)
 	if err != nil {
 		return nil, err
 	}
-	allowed, ok := memoryValidTransitions[current.Status]
+	allowed, ok := transitions[current.Status]
 	if !ok || !allowed[target] {
 		return nil, fmt.Errorf("%w: %s is %s, cannot move to %s", ErrInvalidMemoryTransition, memoryID, current.Status, target)
 	}

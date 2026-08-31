@@ -84,6 +84,11 @@ type MemoryRecord struct {
 	ProvenanceHMAC string     `json:"provenance_hmac"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+	// LastUsedAt and SupersededBy are MEM-005 bookkeeping, not part of
+	// memory_record.schema.json (additionalProperties: false) — same reasoning as CreatedAt/
+	// UpdatedAt above: real columns a schema-validity check must strip before validating.
+	LastUsedAt   *time.Time `json:"last_used_at"`
+	SupersededBy string     `json:"superseded_by,omitempty"`
 }
 
 // MemoryStore is the Postgres-backed store for MemoryRecords. hash and provenance_hmac are
@@ -167,7 +172,7 @@ func (s *MemoryStore) Get(ctx context.Context, memoryID string) (*MemoryRecord, 
 	row := s.pool.QueryRow(ctx,
 		`SELECT memory_id, type, scope, tenant_id, content, source_run_ids, evidence_refs,
 		        trust_level, confidence, utility_score, status, expires_at, version, hash,
-		        provenance_hmac, created_at, updated_at
+		        provenance_hmac, created_at, updated_at, last_used_at, superseded_by
 		 FROM memory_records WHERE memory_id = $1`,
 		memoryID,
 	)
@@ -185,7 +190,7 @@ func (s *MemoryStore) ListActive(ctx context.Context, scopes []string, tenantID 
 	rows, err := s.pool.Query(ctx,
 		`SELECT memory_id, type, scope, tenant_id, content, source_run_ids, evidence_refs,
 		        trust_level, confidence, utility_score, status, expires_at, version, hash,
-		        provenance_hmac, created_at, updated_at
+		        provenance_hmac, created_at, updated_at, last_used_at, superseded_by
 		 FROM memory_records
 		 WHERE status = $1 AND tenant_id = $2 AND scope = ANY($3) AND (expires_at IS NULL OR expires_at > now())
 		 ORDER BY created_at DESC`,
@@ -275,11 +280,11 @@ func nullableString(s string) any {
 func scanMemoryRow(row rowScanner) (*MemoryRecord, error) {
 	var rec MemoryRecord
 	var sourceRunIDsJSON, evidenceRefsJSON []byte
-	var trustLevel *string
+	var trustLevel, supersededBy *string
 	err := row.Scan(
 		&rec.MemoryID, &rec.Type, &rec.Scope, &rec.TenantID, &rec.Content, &sourceRunIDsJSON, &evidenceRefsJSON,
 		&trustLevel, &rec.Confidence, &rec.UtilityScore, &rec.Status, &rec.ExpiresAt, &rec.Version, &rec.Hash,
-		&rec.ProvenanceHMAC, &rec.CreatedAt, &rec.UpdatedAt,
+		&rec.ProvenanceHMAC, &rec.CreatedAt, &rec.UpdatedAt, &rec.LastUsedAt, &supersededBy,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -289,6 +294,9 @@ func scanMemoryRow(row rowScanner) (*MemoryRecord, error) {
 	}
 	if trustLevel != nil {
 		rec.TrustLevel = *trustLevel
+	}
+	if supersededBy != nil {
+		rec.SupersededBy = *supersededBy
 	}
 	if err := json.Unmarshal(sourceRunIDsJSON, &rec.SourceRunIDs); err != nil {
 		return nil, fmt.Errorf("store: unmarshal source_run_ids: %w", err)

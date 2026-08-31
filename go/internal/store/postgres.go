@@ -35,9 +35,29 @@ func Connect(ctx context.Context, dsn string) (*Store, error) {
 	return s, nil
 }
 
-// Migrate applies schema.sql. Idempotent: every statement is CREATE TABLE IF NOT EXISTS.
+// migrationLockID is a fixed Postgres advisory lock key serializing schema application. Without
+// it, many processes calling Connect() concurrently (routine under `go test ./...`, which runs
+// each package's tests as a separate process against the same real Postgres) can run schema.sql's
+// DDL — CREATE TABLE and, since MEM-005, ALTER TABLE ADD COLUMN with a self-referencing FOREIGN
+// KEY — at the same time and deadlock (observed directly: SQLSTATE 40P01 from concurrent Migrate
+// calls). The lock makes every Connect() apply schema.sql one at a time instead.
+const migrationLockID = 727272727001
+
+// Migrate applies schema.sql. Idempotent (CREATE TABLE/ADD COLUMN IF NOT EXISTS throughout) and
+// safe under concurrent callers — see migrationLockID.
 func (s *Store) Migrate(ctx context.Context) error {
-	if _, err := s.pool.Exec(ctx, schemaSQL); err != nil {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("store: acquire connection for migration: %w", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, int64(migrationLockID)); err != nil {
+		return fmt.Errorf("store: acquire migration lock: %w", err)
+	}
+	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, int64(migrationLockID))
+
+	if _, err := conn.Exec(ctx, schemaSQL); err != nil {
 		return fmt.Errorf("store: migrate: %w", err)
 	}
 	return nil
