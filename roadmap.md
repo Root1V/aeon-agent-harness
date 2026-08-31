@@ -6,9 +6,9 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-30 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha —
-> `DX-003` cierra el template de Deep Research con una prueba de cohesión entre sus 4 ficheros de
-> config-as-code).
+> Última actualización: 2026-08-31 (F0 cerrado salvo la nota de `local-llm`; F2 en marcha —
+> `INT-001` prueba Modo B por primera vez: un `langgraph.graph.StateGraph` real corre dentro de
+> una Activity, con sus nodos llamando a los clientes reales del Model/Tool Gateway).
 
 ## Resumen ejecutivo
 
@@ -152,11 +152,23 @@ realmente registrado. "Válido" y "ejecutable" ya estaban probados por `FND-003`
 cierra el hueco de cohesión ENTRE ficheros que ninguno de los dos cubría. Se añadió también
 `examples/deep-research/README.md`.
 
+`INT-001` (`FrameworkAdapter` LangGraph) añadió `langgraph` como dependencia real (no un stand-in)
+y `python/aeon_adapters/langgraph/adapter.py`: `run_langgraph_graph` construye un
+`ModelGatewayChatClient`/`ToolGatewayCaller` — los únicos clientes que un nodo LangGraph recibe —
+y corre el grafo compilado dentro de una única Activity (`run_langgraph_interop_activity`), nunca
+en código de workflow, porque el bucle interno de LangGraph no es determinista (ADR-001, la misma
+limitación documentada de Modo B: se replica el input/output de la Activity, no la trayectoria
+interna del framework). `examples/langgraph-interop/` trae un grafo real de 2 nodos (`plan`→
+`research`) que llama a esos clientes, nunca a un proveedor o tool directamente. Verificado con
+Temporal efímero real + worker en proceso separado real, sólo el Model Gateway como doble HTTP
+(mismo patrón que `DX-001`); también se reconstruyó y arrancó el `worker` real de compose con la
+nueva dependencia para confirmar que no rompe nada.
+
 | Fase | Nombre | % DONE | Estado |
 |---|---|---|---|
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
-| F2 | Deep Research + EvalOps (**MVP**) | ~85% (11/13) | `IN_PROGRESS` |
+| F2 | Deep Research + EvalOps (**MVP**) | ~92% (12/13) | `IN_PROGRESS` |
 | F3 | Memoria gobernada | 0% | `TODO` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
@@ -545,7 +557,7 @@ budgeter, offload, recall, integrity) y `aeon_evidence/` (retrieval, extractor, 
 | DX-001 | SDK Python (`start_deep_research_run`, primer workflow real DR-001..DR-005) | `DONE` | `test_deep_research_workflow_produces_a_verified_report_end_to_end` en verde — pipeline completo real contra Temporal + worker real, sólo el Model Gateway es un doble HTTP. Alcance: `aeon_sdk.deep_research`/`aeon_sdk.model_policy` (Deep Research únicamente); un `start_run(manifest)` genérico y tools/context/memory/traces/approvals como superficie SDK propia quedan en `backlog.md` | python/tests/integration/test_deep_research_workflow.py, examples/deep-research/run.py |
 | DX-002 | CLI (init/validate/run/eval/trace/replay/publish) | `DONE` | los 7 subcomandos ejecutan sin error contra el compose real — verificado a mano (`init`/`validate`/`publish` contra Postgres real, `trace` contra Tempo real, `replay` contra Temporal real) más `TestAeonInit`/`TestAeonRun`/`TestAeonTrace`/`TestAeonReplay`/`TestAeonPublish` en verde | go/cmd/aeon/dx002.go, go/cmd/aeon/dx002_test.go |
 | DX-003 | Template Deep Research | `DONE` | válido (`TestAeonValidateAcceptsAndRejectsExampleManifests`) y ejecutable (`test_examples_deep_research_run_script_produces_a_report`, DX-002) — más `test_every_allowed_tool_has_a_matching_cedar_permit` y familia: los 4 ficheros de config-as-code del template (agent/policy/model_policy/evalGates) se validan mutuamente entre sí, no sólo cada uno contra su propio schema | python/tests/unit/test_deep_research_template.py, examples/deep-research/README.md |
-| INT-001 | `FrameworkAdapter` LangGraph (Modo B) | `TODO` | `examples/langgraph-interop` corre dentro de una Activity | — |
+| INT-001 | `FrameworkAdapter` LangGraph (Modo B) | `DONE` | `test_langgraph_interop_graph_runs_inside_a_real_activity` en verde — un `langgraph.graph.StateGraph` real (dependencia real, no un stand-in) corre dentro de una única Activity real, sus dos nodos llamando a los clientes reales del Model/Tool Gateway | python/tests/integration/test_langgraph_interop_workflow.py, python/aeon_adapters/langgraph/adapter.py |
 | INT-002 | Endpoint OpenAI-compatible del Model Gateway (Modo C) | `TODO` | un cliente `openai` apuntando a `base_url` local obtiene routing/budgets | — |
 
 **MVP:** `make dev && aeon run examples/deep-research --query "…"` produce informe con citas

@@ -27,10 +27,11 @@ from aeon_sdk.deep_research import start_deep_research_run
 REPO_PYTHON_DIR = Path(__file__).resolve().parents[2]
 
 
-def _normalized(content: dict) -> dict:
+def _normalized(content: dict | str) -> dict:
+    text = content if isinstance(content, str) else json.dumps(content)
     return {
         "model": "fake-model",
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": json.dumps(content)}, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     }
 
@@ -59,6 +60,10 @@ class _FakeModelGatewayHandler(BaseHTTPRequestHandler):
             content = self._researcher_response(messages)
         elif "Reporter" in system_prompt:
             content = self._reporter_response(system_prompt)
+        elif "research planner for a LangGraph interop example" in system_prompt:
+            # examples/langgraph-interop (INT-001): this node reads the model's content as plain
+            # prose, not JSON — unlike DR-001's Planner, it never parses/validates it.
+            content = f"Plan: investigate {messages[-1]['content']!r} via a single web search."
         else:
             content = {"error": f"fake gateway does not recognize this system prompt: {system_prompt!r}"}
 
