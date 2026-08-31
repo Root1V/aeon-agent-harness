@@ -11,8 +11,9 @@
 > verificado con el paquete `openai` de verdad. El MVP como narrativa compuesta ("traza navegable"
 > para runs Python, "coste por run", `replay --assert-identical`) todavía tiene huecos reales, ver
 > la nota de F2 abajo y `backlog.md` — no bloquean pasar a F3, pero son honestos de nombrar. F3
-> arrancó con `MEM-001`/`MEM-002` (Memory Store + Candidate Pipeline, Postgres-backed) y `MEM-003`
-> (Reflection), que además cerró la superficie HTTP pendiente del Memory Store).
+> arrancó con `MEM-001`/`MEM-002` (Memory Store + Candidate Pipeline, Postgres-backed), `MEM-003`
+> (Reflection, que además cerró la superficie HTTP pendiente del Memory Store) y `MEM-005`
+> (Utility/Forgetting) — quedan `SEC-004` y `EVAL-004` para cerrar F3).
 
 ## Resumen ejecutivo
 
@@ -194,7 +195,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
-| F3 | Memoria gobernada | 50% (3/6) | `IN_PROGRESS` |
+| F3 | Memoria gobernada | ~67% (4/6) | `IN_PROGRESS` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
 
@@ -601,7 +602,7 @@ cloud o local.
 | MEM-001 | Memory Store (typed/scoped/versioned, provenance/TTL/status) | `DONE` | `TestMemoryRecordSchemaValid` en verde — un `MemoryRecord` escrito por el `MemoryStore` real (Postgres real) contra `hash`/`provenance_hmac` calculados por el propio store (nunca confiados de quien llama) valida contra `memory_record.schema.json`. Además `TestMemoryStoreCreateRejectsDirectActiveWrite` (sólo `CANDIDATE`/`QUARANTINED` son escribibles al crear — la promoción a `ACTIVE` es MEM-002), `TestMemoryStoreListActiveRespectsScopeTenantAndTTL` (lectura gobernada por scope/tenant/TTL real) y `TestMemoryStoreVerifyProvenanceDetectsTampering` (detección real de manipulación de contenido/HMAC). Sin superficie HTTP todavía — eso llega con MEM-002, igual que DR-001..004 fueron módulos puros antes de DX-001 | go/internal/store/memory_store.go, go/internal/store/memory_store_test.go |
 | MEM-002 | Memory Candidate Pipeline (quarantine→validate→promote/reject) | `DONE` | `TestMemoryWriteModeCandidateOnly` en verde — `WriteCandidate` (la única vía de escritura de un agente/run) fuerza `status=CANDIDATE` sin importar qué status intente colar quien llama; `AgentManifest.spec.memoryPolicy.writeMode: candidate_only` queda aplicado, no sólo documentado. Además la máquina de estados real `quarantine→validate→promote/reject` (`TestMemoryPipelineHappyPathQuarantineValidatePromote`, `TestMemoryPipelineValidateBlockedWithoutDecision`, `TestMemoryPipelinePromoteBlockedWithoutDecision`, `TestMemoryPipelineRejectFromEachPreActiveStatus`, `TestMemoryPipelineInvalidTransitionsAreRejected`) contra Postgres real | go/internal/store/memory_pipeline.go, go/internal/store/memory_pipeline_test.go |
 | MEM-003 | Reflection (post-run candidate extraction) | `DONE` | `test_reflection_extracts_candidates` en verde — un `RunSummary` (outcome + evidence_refs reales del run, nunca chain-of-thought) produce candidatos vía `decide` falso, grounding forzado (`test_reflection_rejects_a_candidate_citing_an_evidence_ref_the_run_never_produced`, mismo principio que el Citation Verifier de DR-005 aplicado a memoria). Además la superficie HTTP del Memory Store (MEM-001/002) quedó expuesta en `aeon-controlplane` (`TestMemoryHandlersFullPipelineOverHTTP`, verificado también a mano contra un contenedor real: candidates→quarantine→validate→promote→active sobre HTTP real) — cierra el hueco de `backlog.md` que decía "empezar MEM-003" | python/aeon_memory/reflection.py, python/tests/unit/test_reflection.py, go/internal/api/memory_handlers.go, go/internal/api/memory_handlers_test.go |
-| MEM-005 | Utility/Forgetting (decay, prune, supersede/revoke) | `TODO` | `test_memory_decay_prunes_stale` en verde | — |
+| MEM-005 | Utility/Forgetting (decay, prune, supersede/revoke) | `DONE` | `TestMemoryDecayPrunesStale` en verde — un `MemoryStore.Prune` real revoca una memoria `ACTIVE` real cuyo `utility_score` decaído (`DecayedUtility`, decaimiento exponencial real desde `last_used_at`) cae bajo el umbral, y deja de aparecer en `ListActive`. Además `RecordUsage` (ajusta `utility_score` con uso real, nunca negativo), `Supersede` (ACTIVE→SUPERSEDED, enlaza `superseded_by`) y `Revoke` (ACTIVE→REVOKED explícito) — una máquina de estados separada de la de MEM-002 (`memoryPostActiveTransitions`), a propósito: `Reject` de MEM-002 sigue sin poder tocar un `ACTIVE` | go/internal/store/memory_forgetting.go, go/internal/store/memory_forgetting_test.go |
 | SEC-004 | Memory security (isolation, poisoning tests, repair/revocation) | `TODO` | `memory_poisoning` suite en verde | — |
 | EVAL-004 | Learning Eval (forward/negative transfer, usefulness, staleness) | `TODO` | reporte de `evals/suites/learning_eval` | — |
 
@@ -645,6 +646,29 @@ real. Reflection en sí todavía no está conectada a ningún workflow (nadie ll
 `Reflector.reflect` desde `DeepResearchWorkflow` ni escribe sus candidatos vía
 `POST /memory/candidates`) — eso es la extensión natural de `DX-001` a un run real, ver
 `backlog.md`.
+
+MEM-005 (Utility/Forgetting) añade una segunda máquina de estados post-ACTIVE
+(`memoryPostActiveTransitions`) deliberadamente separada de la de MEM-002 (`memoryValidTransitions`)
+— `transitionStatus` ahora recibe qué mapa aplicar, en vez de ser una única tabla global. Esto
+preserva intacta una garantía que MEM-002 ya probaba (`Reject` nunca toca un registro `ACTIVE`,
+sigue en verde sin cambios) mientras `Supersede`/`Revoke` (nuevos, MEM-005) sólo aceptan un origen
+`ACTIVE`. `DecayedUtility` es una función pura (decaimiento exponencial con vida media
+configurable) que `Prune` usa sobre `last_used_at` (columna nueva, poblada por `RecordUsage`, no
+por ninguna transición de pipeline) — así que "olvidar" está gobernado por uso real, no por edad
+del registro en sí. `Prune` nunca borra una fila: revoca (`REVOKED`), preservando el registro para
+auditoría, igual que todo lo demás en este store.
+
+Nota técnica real encontrada durante la verificación: añadir `last_used_at`/`superseded_by` a
+`memory_records` requirió una migración aditiva real (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`,
+`schema.sql`) porque `CREATE TABLE IF NOT EXISTS` es un no-op sobre una tabla que ya existía en el
+volumen Postgres persistente de sesiones anteriores — la primera vez que este schema necesitó
+historia real, no sólo creación inicial. Verificar esto expuso un bug de concurrencia genuino:
+`go test ./...` corre cada paquete como proceso separado contra el mismo Postgres, y varios
+`Migrate()` concurrentes ejecutando ALTER TABLE con una FK auto-referenciada produjeron un
+deadlock real (`SQLSTATE 40P01`), reproducido y confirmado. Arreglado con un
+`pg_advisory_lock`/`pg_advisory_unlock` real alrededor de `Migrate()`, sobre una única conexión
+tomada explícitamente del pool (`go/internal/store/postgres.go`) — verificado estable en 4
+ejecuciones consecutivas de la suite completa tras el fix.
 
 MEM-002 añade la máquina de estados real sobre el store de MEM-001
 (`memoryValidTransitions`, mismo patrón que `validTransitions` del Agent Registry): CANDIDATE →

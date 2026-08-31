@@ -62,9 +62,9 @@ func memoryRecordSchema(t *testing.T) *jsonschema.Schema {
 }
 
 // validateAgainstMemoryRecordSchema checks rec against memory_record.schema.json. The schema
-// (additionalProperties: false) only knows the wire contract's fields, not created_at/updated_at
-// (registry-only bookkeeping the schema never declared), so those two are stripped before
-// validating — the same shape MEM-002's promotion API would actually hand to a caller.
+// (additionalProperties: false) only knows the wire contract's fields, not created_at/updated_at/
+// last_used_at/superseded_by (registry-only bookkeeping the schema never declared), so those are
+// stripped before validating — the same shape MEM-002's promotion API would actually hand to a caller.
 func validateAgainstMemoryRecordSchema(t *testing.T, rec *MemoryRecord) error {
 	t.Helper()
 	raw, err := json.Marshal(rec)
@@ -77,6 +77,8 @@ func validateAgainstMemoryRecordSchema(t *testing.T, rec *MemoryRecord) error {
 	}
 	delete(asMap, "created_at")
 	delete(asMap, "updated_at")
+	delete(asMap, "last_used_at")
+	delete(asMap, "superseded_by")
 	raw, err = json.Marshal(asMap)
 	if err != nil {
 		t.Fatalf("re-marshal: %v", err)
