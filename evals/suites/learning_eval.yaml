@@ -1,0 +1,16 @@
+apiVersion: harness.ai/v1
+kind: EvalSuite
+metadata:
+  name: learning_eval
+  version: 0.1.0
+  owner: aeon-platform-team
+spec:
+  # Real, offline harness: aeon_evalops.runner._run_learning_eval_case runs the actual
+  # aeon_evalops.learning_eval logic (EVAL-004) — forward/negative transfer + staleness — against
+  # scripted probes built from each dataset case, no live LLM. See evals/datasets/learning_eval.jsonl.
+  dataset: evals/datasets/learning_eval.jsonl
+  graders: [forward_transfer_grader, negative_transfer_grader]
+  thresholds:
+    forward_transfer: 1.0
+    negative_transfer: 1.0
+  gateOn: [release, nightly]

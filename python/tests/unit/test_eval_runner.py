@@ -22,6 +22,21 @@ async def test_eval_run_produces_a_report_for_deep_research_core():
         assert g.threshold is not None
 
 
+async def test_eval_run_produces_a_report_for_learning_eval():
+    """EVAL-004's acceptance test: the real `learning_eval` suite (evals/suites/learning_eval.yaml)
+    runs aeon_evalops.learning_eval's forward/negative-transfer logic offline and reports a real,
+    passing result for its checked-in dataset."""
+    report = await run_suite("learning_eval", trials=1)
+
+    assert report.suite_name == "learning_eval"
+    assert {g.name for g in report.graders} == {"forward_transfer_grader", "negative_transfer_grader"}
+    assert report.passed is True
+    for g in report.graders:
+        assert g.status == "PASS"
+        assert g.score == 1.0
+        assert g.threshold is not None
+
+
 async def test_eval_run_report_is_human_readable():
     report = await run_suite("deep_research_core", trials=1)
     text = format_report(report)

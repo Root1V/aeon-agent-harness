@@ -6,14 +6,16 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-30 (F0 cerrado salvo la nota de `local-llm`; **las 13 features de
+> Última actualización: 2026-08-31 (F0 cerrado salvo la nota de `local-llm`; **las 13 features de
 > F2 están `DONE`** — `INT-002` cierra el Model Gateway como endpoint OpenAI-compatible real,
 > verificado con el paquete `openai` de verdad. El MVP como narrativa compuesta ("traza navegable"
 > para runs Python, "coste por run", `replay --assert-identical`) todavía tiene huecos reales, ver
-> la nota de F2 abajo y `backlog.md` — no bloquean pasar a F3, pero son honestos de nombrar. F3
-> arrancó con `MEM-001`/`MEM-002` (Memory Store + Candidate Pipeline, Postgres-backed), `MEM-003`
-> (Reflection, que además cerró la superficie HTTP pendiente del Memory Store), `MEM-005`
-> (Utility/Forgetting) y `SEC-004` (Memory security) — sólo queda `EVAL-004` para cerrar F3).
+> la nota de F2 abajo y `backlog.md` — no bloquean pasar a F3, pero son honestos de nombrar.
+> **F3 (Memoria gobernada) está `DONE`, 6/6**: `MEM-001`/`MEM-002` (Memory Store + Candidate
+> Pipeline, Postgres-backed), `MEM-003` (Reflection + superficie HTTP), `MEM-005`
+> (Utility/Forgetting), `SEC-004` (Memory security) y `EVAL-004` (Learning Eval, que además cierra
+> el hueco de `ValidationDecision`/`PromotionDecision` que MEM-002 había dejado abierto). Siguiente
+> fase: F4 — Trust e interoperabilidad).
 
 ## Resumen ejecutivo
 
@@ -195,7 +197,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
-| F3 | Memoria gobernada | ~83% (5/6) | `IN_PROGRESS` |
+| F3 | Memoria gobernada | 100% (6/6) | `DONE` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
 
@@ -604,7 +606,7 @@ cloud o local.
 | MEM-003 | Reflection (post-run candidate extraction) | `DONE` | `test_reflection_extracts_candidates` en verde — un `RunSummary` (outcome + evidence_refs reales del run, nunca chain-of-thought) produce candidatos vía `decide` falso, grounding forzado (`test_reflection_rejects_a_candidate_citing_an_evidence_ref_the_run_never_produced`, mismo principio que el Citation Verifier de DR-005 aplicado a memoria). Además la superficie HTTP del Memory Store (MEM-001/002) quedó expuesta en `aeon-controlplane` (`TestMemoryHandlersFullPipelineOverHTTP`, verificado también a mano contra un contenedor real: candidates→quarantine→validate→promote→active sobre HTTP real) — cierra el hueco de `backlog.md` que decía "empezar MEM-003" | python/aeon_memory/reflection.py, python/tests/unit/test_reflection.py, go/internal/api/memory_handlers.go, go/internal/api/memory_handlers_test.go |
 | MEM-005 | Utility/Forgetting (decay, prune, supersede/revoke) | `DONE` | `TestMemoryDecayPrunesStale` en verde — un `MemoryStore.Prune` real revoca una memoria `ACTIVE` real cuyo `utility_score` decaído (`DecayedUtility`, decaimiento exponencial real desde `last_used_at`) cae bajo el umbral, y deja de aparecer en `ListActive`. Además `RecordUsage` (ajusta `utility_score` con uso real, nunca negativo), `Supersede` (ACTIVE→SUPERSEDED, enlaza `superseded_by`) y `Revoke` (ACTIVE→REVOKED explícito) — una máquina de estados separada de la de MEM-002 (`memoryPostActiveTransitions`), a propósito: `Reject` de MEM-002 sigue sin poder tocar un `ACTIVE` | go/internal/store/memory_forgetting.go, go/internal/store/memory_forgetting_test.go |
 | SEC-004 | Memory security (isolation, poisoning tests, repair/revocation) | `DONE` | `TestMemoryPoisoningSuite` en verde — 6 escenarios de ataque reales cargados desde `evals/datasets/memory_poisoning.jsonl` (la misma `memory_poisoning` `EvalSuite` real que `aeon eval list` ya muestra), cada uno contra Postgres real: escritura directa a `ACTIVE` forzada a `CANDIDATE`; contenido manipulado fuera del store detectado (`RepairIfTampered`) y revocado automáticamente; aislamiento cruzado de tenant en lectura por id, `ListActive` y revocación; una memoria revocada desaparece de `ListActive`. Aislamiento e integridad verificados también sobre HTTP real (`TestMemoryHandlersGetIsIsolatedByTenant`, `TestMemoryHandlersRevokeIsIsolatedByTenant`, `TestMemoryHandlersRepairDetectsTamperingAndRevokes`) y a mano contra un `aeon-controlplane` real: contenido tamperado directamente en Postgres (`UPDATE` vía `psql`, sin pasar por la API) fue detectado y revocado por `/memory/{id}/repair` | go/internal/store/memory_security.go, go/internal/store/memory_poisoning_test.go, go/internal/api/memory_handlers.go, go/internal/api/memory_handlers_test.go, evals/suites/memory_poisoning.yaml, evals/datasets/memory_poisoning.jsonl |
-| EVAL-004 | Learning Eval (forward/negative transfer, usefulness, staleness) | `TODO` | reporte de `evals/suites/learning_eval` | — |
+| EVAL-004 | Learning Eval (forward/negative transfer, usefulness, staleness) | `DONE` | `test_eval_run_produces_a_report_for_learning_eval` en verde — la suite real `learning_eval` (config-as-code, `aeon eval list` la muestra) corre offline y produce un reporte real `PASS` (`forward_transfer_grader`/`negative_transfer_grader`, ambos 1.000), verificado también a mano vía `make eval-run SUITE=learning_eval`. La lógica pura (`aeon_evalops/learning_eval.py`) cubre las 4 dimensiones del criterio: forward/negative transfer (probes con y sin memoria inyectada) y usefulness/staleness (`DecayedUtility` de MEM-005 como entrada, con un piso de staleness que anula el transfer aunque el probe "mejorara"). Además calcula `ValidationDecision`/`PromotionDecision` reales — cierra el hueco que MEM-002 dejó abierto (antes sólo los tests los construían a mano) | python/aeon_evalops/learning_eval.py, python/tests/unit/test_learning_eval.py, python/tests/unit/test_eval_runner.py, evals/suites/learning_eval.yaml, evals/datasets/learning_eval.jsonl |
 
 MEM-001 se implementó en Go (`go/internal/store`), siguiendo el mismo patrón que el Agent/Tool
 Registry (FND-001/TOOL-001): Postgres real, CHECK constraints por enum, y validación estructural en
@@ -691,6 +693,27 @@ salvar el contenido. `emergencyRevoke` puede mover cualquier estado a `REVOKED` 
 deliberadamente fuera de las máquinas de estados de MEM-002/MEM-005 — una respuesta de seguridad
 real no puede esperar a que un registro llegue a la etapa "correcta" de su propio pipeline.
 
+**Con EVAL-004, las 6 features de F3 están `DONE`.** `aeon_evalops/learning_eval.py` sigue el mismo
+patrón que `DR-001..005`/`aeon_evalops.release_gate`: módulo Python puro, sin import de Temporal,
+`decide` inyectado, directamente testeable con dobles. Reutiliza deliberadamente el contrato
+`(bool, bool)` que ya usa `CaseRunner`/`GRADER_RUNNERS` en `aeon_evalops/runner.py` (en vez de
+generalizarlo a un tipo más rico) — `forward_transfer_ok`/`negative_transfer_ok` encajan
+exactamente en la misma forma que `(sufficient, citation_ok)` de `deep_research_core`, así que
+`EVAL-002` no necesitó ningún cambio de tipo ni se tocó ningún test existente. El dataset real
+(`evals/datasets/learning_eval.jsonl`) contiene únicamente candidatos "limpios" (como
+`deep_research_core`/`citation_integrity`: casos que deben pasar en producción); los escenarios
+negativos (staleness, negative transfer real) se prueban directamente contra la lógica pura en
+`test_learning_eval.py`, no a través del dataset de la suite — mismo patrón que
+`test_release_gate.py` frente a `EVAL-003`.
+
+Huecos honestos que quedan, ninguno bloqueante para F3: `compute_validation_decision`/
+`compute_promotion_decision` son reales y probados, pero nada los conecta todavía al pipeline vivo
+de MEM-002 — ningún Activity/workflow llama a `evaluate_learning` y pasa el resultado a
+`POST /memory/{id}/validate`/`promote`; hoy son una librería lista para usar, no un lazo cerrado.
+El "usefulness/staleness" del criterio depende de un `decayed_utility` que el llamador debe
+calcular y pasar (normalmente vía `MemoryStore.DecayedUtility`, Go) — este módulo nunca toca
+Postgres directamente. Ambos quedan en `backlog.md`.
+
 MEM-002 añade la máquina de estados real sobre el store de MEM-001
 (`memoryValidTransitions`, mismo patrón que `validTransitions` del Agent Registry): CANDIDATE →
 QUARANTINED → VALIDATED → ACTIVE, con REVOKED alcanzable desde cualquier estado pre-ACTIVE
@@ -706,6 +729,15 @@ de alcance, igual que en MEM-001: superficie HTTP/SDK (sigue en `backlog.md`, en
 `MEM-003` que necesitará escribir candidatos desde Reflection) y el contenido real de
 `ValidationDecision`/`PromotionDecision` (hoy tipos aplicados, no calculados — ninguna suite de eval
 o replay los produce todavía; eso es `EVAL-004`).
+
+**F3 completa: 6/6 features, todas con test de aceptación real en verde.** `go/internal/store`
+tiene el Memory Store + su máquina de estados completa (`MEM-001`/`MEM-002`/`MEM-005`/`SEC-004`),
+expuesta sobre HTTP real en `aeon-controlplane`; `python/aeon_memory`/`aeon_evalops` tienen la
+lógica de aprendizaje (`MEM-003` Reflection, `EVAL-004` Learning Eval) que produce lo que ese
+pipeline necesita para decidir. Lo que falta para que sea un lazo cerrado de punta a punta —
+Reflection escribiendo candidatos desde un workflow real, Learning Eval alimentando
+`Validate`/`Promote` automáticamente, un job de `Prune` programado — está documentado
+explícitamente en `backlog.md`, no oculto.
 
 ## F4 — Trust e interoperabilidad (semanas 18-23)
 

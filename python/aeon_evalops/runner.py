@@ -26,6 +26,7 @@ from typing import Any
 import yaml
 from jsonschema import Draft202012Validator
 
+from aeon_evalops.learning_eval import MemoryCandidateUnderTest, TransferProbe, evaluate_learning
 from aeon_evidence.ledger import EvidenceLedger
 from aeon_profiles.deep_research.citation_verifier import verify_and_repair
 from aeon_profiles.deep_research.planner import MAX_SUBTASKS, MIN_SUBTASKS, Planner
@@ -96,6 +97,16 @@ def _normalized(content: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalized_text(text: str) -> dict[str, Any]:
+    """Same NormalizedChatResponse envelope as _normalized, but for a plain-text answer (learning_eval's
+    probes compare answers directly, not JSON-decoded content)."""
+    return {
+        "model": "eval-fixture-model",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+
 async def _run_deep_research_core_case(case: dict[str, Any]) -> tuple[bool, bool]:
     """Runs the real DR-001..DR-005 pipeline for one dataset case against scripted, offline
     decide/execute_tool fixtures — every subtask's Researcher calls one tool, gets a canned but
@@ -161,6 +172,40 @@ async def _run_deep_research_core_case(case: dict[str, Any]) -> tuple[bool, bool
     return decision.sufficient, verification.verified
 
 
+async def _run_learning_eval_case(case: dict[str, Any]) -> tuple[bool, bool]:
+    """Runs the real aeon_evalops.learning_eval logic (EVAL-004) for one dataset case — a memory
+    candidate plus a set of scripted transfer probes — against a fully offline, deterministic
+    decide() built straight from the case's own fields (same technique as
+    _run_deep_research_core_case's planner_decide/researcher_decide closures). Returns
+    (forward_transfer_ok, negative_transfer_ok), the same (bool, bool) shape every other case
+    runner here produces, so GRADER_RUNNERS needs no special-casing for this suite."""
+    candidate = MemoryCandidateUnderTest(
+        content=case["candidate"]["content"],
+        utility_score=case["candidate"]["utility_score"],
+        decayed_utility=case["candidate"]["decayed_utility"],
+        staleness_floor=case["candidate"].get("staleness_floor", 0.2),
+    )
+    probes = [
+        TransferProbe(
+            probe_id=p["probe_id"],
+            kind=p["kind"],
+            query=p["query"],
+            answer_without_memory=p["answer_without_memory"],
+            answer_with_memory=p["answer_with_memory"],
+        )
+        for p in case["probes"]
+    ]
+
+    async def scripted_decide(rendered_context: dict[str, Any]) -> dict[str, Any]:
+        has_memory = any(m["role"] == "system" and "Known fact:" in m["content"] for m in rendered_context["messages"])
+        query = rendered_context["messages"][-1]["content"]
+        probe = next(p for p in probes if p.query == query)
+        return _normalized_text(probe.answer_with_memory if has_memory else probe.answer_without_memory)
+
+    report = await evaluate_learning(candidate, probes, scripted_decide)
+    return report.forward_transfer_ok, report.negative_transfer_ok
+
+
 CaseRunner = Callable[[dict[str, Any]], Awaitable[tuple[bool, bool]]]
 
 # Which suites this Runner can actually exercise offline today, and how. A suite named in
@@ -168,12 +213,18 @@ CaseRunner = Callable[[dict[str, Any]], Awaitable[tuple[bool, bool]]]
 # harness yet) reports every grader SKIPPED rather than a fabricated score.
 CASE_RUNNERS: dict[str, CaseRunner] = {
     "deep_research_core": _run_deep_research_core_case,
+    "learning_eval": _run_learning_eval_case,
 }
 
-# Each grader scores the (sufficiency_ok, citation_ok) tuples every case in a suite's run produced.
+# Each grader scores the (bool, bool) tuples every case in a suite's run produced — for
+# deep_research_core that's (sufficiency_ok, citation_ok); for learning_eval it's
+# (forward_transfer_ok, negative_transfer_ok). Both are "does every case's first/second flag hold",
+# so the same two lambda shapes cover every suite registered so far.
 GRADER_RUNNERS: dict[str, Callable[[list[tuple[bool, bool]]], float]] = {
     "coverage_grader": lambda outcomes: sum(1 for ok, _ in outcomes if ok) / len(outcomes),
     "citation_integrity_grader": lambda outcomes: sum(1 for _, ok in outcomes if ok) / len(outcomes),
+    "forward_transfer_grader": lambda outcomes: sum(1 for ok, _ in outcomes if ok) / len(outcomes),
+    "negative_transfer_grader": lambda outcomes: sum(1 for _, ok in outcomes if ok) / len(outcomes),
 }
 
 
