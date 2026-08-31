@@ -184,9 +184,15 @@ services:
     profiles: ["core", "obs", "local-llm", "full"]
     environment:
       <<: *common-env
+      # INT-002 (Modo C): resolves POST /v1/chat/completions's "model" (a capability profile) to
+      # real candidates — config-as-code, same file aeon_sdk.model_policy resolves on the Python
+      # side. Optional: without it /decide still works, only /v1/chat/completions is affected.
+      AEON_MODEL_POLICY_BUNDLE_PATH: /examples/deep-research/model_policy_bundle.yaml
     env_file:
       - path: ../../.env
         required: false
+    volumes:
+      - ../../examples:/examples:ro
     ports:
       - "9402:9402"
 

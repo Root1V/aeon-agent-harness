@@ -1,9 +1,10 @@
 // Command aeon-modelgw is the Model Gateway (MDL-001): the only component in the platform allowed
 // to talk to a model provider directly. It resolves a capability profile to a concrete
 // provider/model pair via a ModelPolicyBundle, tries candidates in priority order with fallback,
-// and exposes that over HTTP (POST /decide, go/internal/api/model_gateway_handlers.go) — the
-// Python worker's model.decide Activity (DR-001 onward) is this endpoint's first real caller. See
-// docs/adr/0004-model-gateway-provider-abstraction.md.
+// and exposes that over HTTP: POST /decide (go/internal/api/model_gateway_handlers.go, DR-001's
+// own Model Gateway contract) and POST /v1/chat/completions (go/internal/api/
+// openai_compatible_handlers.go, INT-002/Modo C — a real OpenAI-wire-format endpoint any existing
+// framework can point its base_url at). See docs/adr/0004-model-gateway-provider-abstraction.md.
 //
 // Each of the 5 adapters (go/internal/providers/*) is registered only when its required
 // configuration is present in the environment (see .env.example) — a candidate naming an
@@ -16,6 +17,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/aeon-ai/aeon/go/internal/api"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
@@ -49,12 +52,39 @@ func main() {
 	registered := registerProvidersFromEnv(gw)
 	log.Printf("aeon-modelgw: registered providers: %v", registered)
 
+	bundle := loadModelPolicyBundle()
+
 	mux := http.NewServeMux()
 	(&api.ModelGatewayHandlers{Gateway: gw}).Register(mux)
+	(&api.OpenAICompatibleHandlers{Gateway: gw, Bundle: bundle}).Register(mux)
 
 	srv := httpserver.New("aeon-modelgw", mux)
 	log.Println("aeon-modelgw starting")
 	httpserver.MustListenAndServe(srv)
+}
+
+// loadModelPolicyBundle loads the real, config-as-code ModelPolicyBundle (FND-003) that
+// POST /v1/chat/completions (INT-002) resolves profile names against. Optional: without
+// AEON_MODEL_POLICY_BUNDLE_PATH set, /decide still works exactly as before — only the
+// OpenAI-compatible endpoint is affected, and it reports a clear "profile not found" for every
+// request until one is configured, rather than refusing to start.
+func loadModelPolicyBundle() modelgateway.ModelPolicyBundleDoc {
+	path := os.Getenv("AEON_MODEL_POLICY_BUNDLE_PATH")
+	if path == "" {
+		log.Println("aeon-modelgw: AEON_MODEL_POLICY_BUNDLE_PATH not set — /v1/chat/completions will report every profile as not found until one is configured")
+		return modelgateway.ModelPolicyBundleDoc{}
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatalf("aeon-modelgw: reading ModelPolicyBundle %s: %v", path, err)
+	}
+	var doc modelgateway.ModelPolicyBundleDoc
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		log.Fatalf("aeon-modelgw: parsing ModelPolicyBundle %s: %v", path, err)
+	}
+	log.Printf("aeon-modelgw: loaded %d profile(s) from ModelPolicyBundle %s", len(doc.Profiles), path)
+	return doc
 }
 
 // registerProvidersFromEnv wires each adapter whose required credentials/endpoints are present in
