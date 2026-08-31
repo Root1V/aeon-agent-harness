@@ -293,9 +293,22 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   `AgentManifest.spec.memoryPolicy` ni config-as-code que los declare por scope/tenant.
 - **Fase objetivo:** F4 (Agent Console/FinOps) para el job periódico; el config-as-code de
   decaimiento podría vivir en el mismo `ModelPolicyBundle`-style YAML o uno propio, a decidir junto
-  con `SEC-004`/`EVAL-004` (F3, todavía pendientes) ya que ambos también tocan cómo se gobierna una
-  memoria `ACTIVE`.
+  con `EVAL-004` (F3, todavía pendiente) ya que también toca cómo se gobierna una memoria `ACTIVE`.
 - **Criterio de entrada:** un consumidor real (`aeon_worker` leyendo memoria vía
   `GET /memory/active` y llamando `RecordUsage`) que haga evidente qué parámetros de decaimiento
   hacen falta.
 - **Coste:** M.
+
+### Aislamiento por tenant en el lado de escritura del pipeline (`SEC-004`)
+
+- **Descripción:** `SEC-004` cerró el aislamiento cruzado de tenant en lectura (`GET
+  /memory/{id}`) y en `revoke`, pero `quarantine`/`validate`/`promote`/`reject` (MEM-002) siguen
+  sin ninguna comprobación de `tenant_id` — hoy son operaciones de operador/pipeline, no
+  expuestas a llamadas de un tenant concreto, pero si `aeon_worker` empieza a invocarlas
+  directamente (ver la entrada de arriba sobre `Prune`) haría falta la misma comprobación que ya
+  tienen `GET`/`revoke`.
+- **Fase objetivo:** junto con el primer consumidor real del pipeline vía HTTP (mismo criterio de
+  entrada que la entrada de `Prune` de arriba), o F4 si para entonces ya existe un modelo de
+  identidad/autorización más general (Secret Broker, SPIFFE) que lo cubra de forma unificada.
+- **Criterio de entrada:** un caller real no confiable de estas rutas.
+- **Coste:** S.

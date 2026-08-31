@@ -12,8 +12,8 @@
 > para runs Python, "coste por run", `replay --assert-identical`) todavía tiene huecos reales, ver
 > la nota de F2 abajo y `backlog.md` — no bloquean pasar a F3, pero son honestos de nombrar. F3
 > arrancó con `MEM-001`/`MEM-002` (Memory Store + Candidate Pipeline, Postgres-backed), `MEM-003`
-> (Reflection, que además cerró la superficie HTTP pendiente del Memory Store) y `MEM-005`
-> (Utility/Forgetting) — quedan `SEC-004` y `EVAL-004` para cerrar F3).
+> (Reflection, que además cerró la superficie HTTP pendiente del Memory Store), `MEM-005`
+> (Utility/Forgetting) y `SEC-004` (Memory security) — sólo queda `EVAL-004` para cerrar F3).
 
 ## Resumen ejecutivo
 
@@ -195,7 +195,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F0 | Foundation durable | ~94% (16/17) | `IN_PROGRESS` |
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
-| F3 | Memoria gobernada | ~67% (4/6) | `IN_PROGRESS` |
+| F3 | Memoria gobernada | ~83% (5/6) | `IN_PROGRESS` |
 | F4 | Trust e interoperabilidad | 0% | `TODO` |
 | F5 | Learning Lab | 0% | `TODO` |
 
@@ -603,7 +603,7 @@ cloud o local.
 | MEM-002 | Memory Candidate Pipeline (quarantine→validate→promote/reject) | `DONE` | `TestMemoryWriteModeCandidateOnly` en verde — `WriteCandidate` (la única vía de escritura de un agente/run) fuerza `status=CANDIDATE` sin importar qué status intente colar quien llama; `AgentManifest.spec.memoryPolicy.writeMode: candidate_only` queda aplicado, no sólo documentado. Además la máquina de estados real `quarantine→validate→promote/reject` (`TestMemoryPipelineHappyPathQuarantineValidatePromote`, `TestMemoryPipelineValidateBlockedWithoutDecision`, `TestMemoryPipelinePromoteBlockedWithoutDecision`, `TestMemoryPipelineRejectFromEachPreActiveStatus`, `TestMemoryPipelineInvalidTransitionsAreRejected`) contra Postgres real | go/internal/store/memory_pipeline.go, go/internal/store/memory_pipeline_test.go |
 | MEM-003 | Reflection (post-run candidate extraction) | `DONE` | `test_reflection_extracts_candidates` en verde — un `RunSummary` (outcome + evidence_refs reales del run, nunca chain-of-thought) produce candidatos vía `decide` falso, grounding forzado (`test_reflection_rejects_a_candidate_citing_an_evidence_ref_the_run_never_produced`, mismo principio que el Citation Verifier de DR-005 aplicado a memoria). Además la superficie HTTP del Memory Store (MEM-001/002) quedó expuesta en `aeon-controlplane` (`TestMemoryHandlersFullPipelineOverHTTP`, verificado también a mano contra un contenedor real: candidates→quarantine→validate→promote→active sobre HTTP real) — cierra el hueco de `backlog.md` que decía "empezar MEM-003" | python/aeon_memory/reflection.py, python/tests/unit/test_reflection.py, go/internal/api/memory_handlers.go, go/internal/api/memory_handlers_test.go |
 | MEM-005 | Utility/Forgetting (decay, prune, supersede/revoke) | `DONE` | `TestMemoryDecayPrunesStale` en verde — un `MemoryStore.Prune` real revoca una memoria `ACTIVE` real cuyo `utility_score` decaído (`DecayedUtility`, decaimiento exponencial real desde `last_used_at`) cae bajo el umbral, y deja de aparecer en `ListActive`. Además `RecordUsage` (ajusta `utility_score` con uso real, nunca negativo), `Supersede` (ACTIVE→SUPERSEDED, enlaza `superseded_by`) y `Revoke` (ACTIVE→REVOKED explícito) — una máquina de estados separada de la de MEM-002 (`memoryPostActiveTransitions`), a propósito: `Reject` de MEM-002 sigue sin poder tocar un `ACTIVE` | go/internal/store/memory_forgetting.go, go/internal/store/memory_forgetting_test.go |
-| SEC-004 | Memory security (isolation, poisoning tests, repair/revocation) | `TODO` | `memory_poisoning` suite en verde | — |
+| SEC-004 | Memory security (isolation, poisoning tests, repair/revocation) | `DONE` | `TestMemoryPoisoningSuite` en verde — 6 escenarios de ataque reales cargados desde `evals/datasets/memory_poisoning.jsonl` (la misma `memory_poisoning` `EvalSuite` real que `aeon eval list` ya muestra), cada uno contra Postgres real: escritura directa a `ACTIVE` forzada a `CANDIDATE`; contenido manipulado fuera del store detectado (`RepairIfTampered`) y revocado automáticamente; aislamiento cruzado de tenant en lectura por id, `ListActive` y revocación; una memoria revocada desaparece de `ListActive`. Aislamiento e integridad verificados también sobre HTTP real (`TestMemoryHandlersGetIsIsolatedByTenant`, `TestMemoryHandlersRevokeIsIsolatedByTenant`, `TestMemoryHandlersRepairDetectsTamperingAndRevokes`) y a mano contra un `aeon-controlplane` real: contenido tamperado directamente en Postgres (`UPDATE` vía `psql`, sin pasar por la API) fue detectado y revocado por `/memory/{id}/repair` | go/internal/store/memory_security.go, go/internal/store/memory_poisoning_test.go, go/internal/api/memory_handlers.go, go/internal/api/memory_handlers_test.go, evals/suites/memory_poisoning.yaml, evals/datasets/memory_poisoning.jsonl |
 | EVAL-004 | Learning Eval (forward/negative transfer, usefulness, staleness) | `TODO` | reporte de `evals/suites/learning_eval` | — |
 
 MEM-001 se implementó en Go (`go/internal/store`), siguiendo el mismo patrón que el Agent/Tool
@@ -669,6 +669,27 @@ deadlock real (`SQLSTATE 40P01`), reproducido y confirmado. Arreglado con un
 `pg_advisory_lock`/`pg_advisory_unlock` real alrededor de `Migrate()`, sobre una única conexión
 tomada explícitamente del pool (`go/internal/store/postgres.go`) — verificado estable en 4
 ejecuciones consecutivas de la suite completa tras el fix.
+
+SEC-004 (Memory security) diseñó su propio suite de forma distinta a `injection_suite`
+(EVAL-001/002): como la lógica de defensa real vive en Go (`go/internal/store`,
+`go/internal/api`), no en Python, `evals/suites/memory_poisoning.yaml` documenta el suite como
+config-as-code de la forma habitual (dataset, graders, thresholds, `gateOn`) pero su implementación
+real y en verde es un test de integración Go (`memory_poisoning_test.go`) que **carga el mismo
+`evals/datasets/memory_poisoning.jsonl`** como fuente de sus casos — así el dataset y su
+verificación nunca pueden divergir en silencio: si el dataset nombra un `case_id` sin defensa
+implementada, el test falla con un mensaje explícito en vez de saltarse el caso calladamente
+(la misma regla de "no silent caps" que ya se sigue en otros sitios del roadmap). Dos hallazgos
+reales durante el diseño: (1) `MemoryStore.Get`/`Revoke` no tenían ninguna verificación de
+`tenant_id` — cualquiera que conociera un `memory_id` (un UUID, pero no un secreto) podía leerlo o
+revocarlo sin importar el tenant; arreglado en la capa HTTP (`go/internal/api/memory_handlers.go`,
+que es donde de verdad se establece la identidad de quien llama), devolviendo 404 —nunca 403— en un
+cruce de tenant, para no confirmar siquiera que el registro existe; (2) "repair" para memoria
+envenenada significa revocar, nunca reconstruir contenido de confianza — mismo principio que el
+Citation Verifier de DR-005 (nunca inventa una cita, repara desde el ledger), aplicado aquí a
+integridad de memoria: `RepairIfTampered` recalcula hash/HMAC y revoca si no coinciden, sin intentar
+salvar el contenido. `emergencyRevoke` puede mover cualquier estado a `REVOKED` directamente,
+deliberadamente fuera de las máquinas de estados de MEM-002/MEM-005 — una respuesta de seguridad
+real no puede esperar a que un registro llegue a la etapa "correcta" de su propio pipeline.
 
 MEM-002 añade la máquina de estados real sobre el store de MEM-001
 (`memoryValidTransitions`, mismo patrón que `validTransitions` del Agent Registry): CANDIDATE →

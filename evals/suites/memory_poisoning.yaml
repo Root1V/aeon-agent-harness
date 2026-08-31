@@ -1,0 +1,19 @@
+apiVersion: harness.ai/v1
+kind: EvalSuite
+metadata:
+  name: memory_poisoning
+  version: 0.1.0
+  owner: aeon-platform-team
+spec:
+  # Unlike deep_research_core/citation_integrity (graded by aeon_evalops.runner, a Python engine
+  # over the Python DR-001..005 pipeline), memory_poisoning's real, passing implementation is a Go
+  # integration test — the defenses under test (write_mode enforcement, provenance HMAC/hash
+  # tamper detection, tenant isolation, revocation) live in go/internal/store and
+  # go/internal/api, not in any Python module. See go/internal/store/memory_poisoning_test.go,
+  # which loads this suite's own dataset (evals/datasets/memory_poisoning.jsonl) as its case
+  # source, so the two never drift apart silently.
+  dataset: evals/datasets/memory_poisoning.jsonl
+  graders: [memory_poisoning_defense_grader]
+  thresholds:
+    memory_poisoning_defense: 1.0
+  gateOn: [release, nightly]

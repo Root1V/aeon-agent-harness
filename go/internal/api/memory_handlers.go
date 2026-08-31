@@ -28,6 +28,8 @@ func (h *MemoryHandlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /memory/{memory_id}/validate", h.validate)
 	mux.HandleFunc("POST /memory/{memory_id}/promote", h.promote)
 	mux.HandleFunc("POST /memory/{memory_id}/reject", h.reject)
+	mux.HandleFunc("POST /memory/{memory_id}/revoke", h.revoke)
+	mux.HandleFunc("POST /memory/{memory_id}/repair", h.repair)
 }
 
 func (h *MemoryHandlers) writeCandidate(w http.ResponseWriter, r *http.Request) {
@@ -66,13 +68,66 @@ func (h *MemoryHandlers) listActive(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, recs)
 }
 
+// getMemory requires a tenant_id query value and returns 404 — not the record — when it doesn't
+// match the record's own tenant_id (SEC-004 isolation): knowing a memory_id (a UUID, but not a
+// secret) must never be enough to read another tenant's memory content, and a wrong tenant_id
+// must look identical to "doesn't exist" rather than confirming the record is real.
 func (h *MemoryHandlers) getMemory(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.URL.Query().Get("tenant_id")
+	if tenantID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("api: a 'tenant_id' query value is required"))
+		return
+	}
 	rec, err := h.MemoryStore.Get(r.Context(), r.PathValue("memory_id"))
 	if err != nil {
 		writeMemoryStoreError(w, err)
 		return
 	}
+	if rec.TenantID != tenantID {
+		writeMemoryStoreError(w, store.ErrNotFound)
+		return
+	}
 	writeJSON(w, http.StatusOK, rec)
+}
+
+// revoke requires the caller to name the tenant_id it believes owns memoryID, and refuses (as a
+// 404, same isolation reasoning as getMemory) if it doesn't match — a cross-tenant caller cannot
+// revoke, or even confirm the existence of, another tenant's memory.
+func (h *MemoryHandlers) revoke(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TenantID string `json:"tenant_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	memoryID := r.PathValue("memory_id")
+	current, err := h.MemoryStore.Get(r.Context(), memoryID)
+	if err != nil {
+		writeMemoryStoreError(w, err)
+		return
+	}
+	if current.TenantID != body.TenantID {
+		writeMemoryStoreError(w, store.ErrNotFound)
+		return
+	}
+	rec, err := h.MemoryStore.Revoke(r.Context(), memoryID)
+	if err != nil {
+		writeMemoryStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rec)
+}
+
+// repair runs SEC-004's tamper check/response (MemoryStore.RepairIfTampered) and reports whether
+// a repair (revocation) happened.
+func (h *MemoryHandlers) repair(w http.ResponseWriter, r *http.Request) {
+	tampered, rec, err := h.MemoryStore.RepairIfTampered(r.Context(), r.PathValue("memory_id"))
+	if err != nil {
+		writeMemoryStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tampered": tampered, "memory": rec})
 }
 
 func (h *MemoryHandlers) quarantine(w http.ResponseWriter, r *http.Request) {
