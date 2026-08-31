@@ -257,19 +257,20 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   atributos `gen_ai.*`).
 - **Coste:** M.
 
-### Superficie HTTP/SDK para el Memory Store (MEM-001/MEM-002)
+### Conectar Reflection (MEM-003) a un workflow real
 
-- **Descripción:** `MEM-001`/`MEM-002` implementaron el `MemoryStore` completo (Postgres real,
-  `go/internal/store`: `WriteCandidate`/`Get`/`ListActive`/`VerifyProvenance`/
-  `Quarantine`/`Validate`/`Promote`/`Reject`), pero sin ningún handler HTTP en
-  `aeon-controlplane` ni cliente Python — igual que `DR-001`..`004` fueron módulos puros antes de
-  que `DX-001` los conectara a un workflow real. Un run de `aeon_worker` no puede hoy leer ni
-  escribir memoria; sólo los tests de Go ejercitan el store directamente.
-- **Fase objetivo:** junto con `MEM-003` (Reflection) — Reflection necesita escribir candidatos
-  post-run vía `WriteCandidate`, y un run necesita leer memoria `ACTIVE` vía
-  `AgentManifest.spec.memoryPolicy.readScopes`; ambos requieren la misma API real.
-- **Criterio de entrada:** empezar `MEM-003`.
-- **Coste:** S (el store ya expone todos los métodos necesarios; falta el handler + wiring).
+- **Descripción:** `python/aeon_memory/reflection.py` es un módulo puro, testeado con un `decide`
+  falso (`test_reflection_extracts_candidates`), pero nada lo llama todavía desde un run real:
+  `DeepResearchWorkflow` (`DX-001`) no invoca `Reflector.reflect` al terminar, y sus candidatos
+  (si los hubiera) no se escriben vía `POST /memory/candidates` (la superficie HTTP que este mismo
+  PR expuso en `go/internal/api/memory_handlers.go`). Mismo patrón que DR-001..004 antes de
+  `DX-001`: la lógica es real y testeada, la integración end-to-end todavía no.
+- **Fase objetivo:** F3, una vez que el patrón de Activity Python→HTTP Go que usan
+  `model_activities.py`/`tool_activities.py` se replique para memoria (una
+  `write_memory_candidate_activity` + una llamada a `Reflector.reflect` al final de
+  `DeepResearchWorkflow.run`).
+- **Criterio de entrada:** ninguno especial — es la extensión directa de `DX-001`.
+- **Coste:** M.
 
 ### Contenido real de `ValidationDecision`/`PromotionDecision` (MEM-002)
 

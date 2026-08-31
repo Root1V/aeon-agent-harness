@@ -1,10 +1,10 @@
 // Command aeon-controlplane serves the Agent/Tool/Prompt/Skill/Eval/Policy registries, approvals,
 // ABOM generation and release gates (FND-001, RUN-005, EVAL-003 — see roadmap.md F0/F2/F4).
 //
-// STATUS: the Agent Registry (FND-001) and Tool Registry (TOOL-001 CRUD portion) are real,
-// Postgres-backed, and exposed over HTTP — see go/internal/store and go/internal/api. Cedar policy
-// evaluation (ADR-002), approvals (RUN-005) and ABOM (FND-002) are not yet implemented — see
-// roadmap.md, still `TODO`.
+// STATUS: the Agent Registry (FND-001), Tool Registry (TOOL-001 CRUD portion), and Memory Store +
+// Candidate Pipeline (MEM-001/MEM-002) are real, Postgres-backed, and exposed over HTTP — see
+// go/internal/store and go/internal/api. Cedar policy evaluation (ADR-002), approvals (RUN-005)
+// and ABOM (FND-002) are not yet implemented — see roadmap.md, still `TODO`.
 package main
 
 import (
@@ -32,6 +32,10 @@ func main() {
 	if dsn == "" {
 		log.Fatal("aeon-controlplane: AEON_PG_DSN is required")
 	}
+	memoryHMACKey := os.Getenv("AEON_MEMORY_HMAC_KEY")
+	if memoryHMACKey == "" {
+		log.Fatal("aeon-controlplane: AEON_MEMORY_HMAC_KEY is required (MEM-001 provenance_hmac)")
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -46,11 +50,18 @@ func main() {
 	defer s.Close()
 	log.Println("aeon-controlplane: connected to Postgres, schema migrated")
 
+	memoryStore, err := s.MemoryStore([]byte(memoryHMACKey))
+	if err != nil {
+		log.Fatalf("aeon-controlplane: building memory store: %v", err)
+	}
+
 	mux := http.NewServeMux()
 	handlers := &api.RegistryHandlers{Store: s}
 	handlers.Register(mux)
+	memoryHandlers := &api.MemoryHandlers{MemoryStore: memoryStore}
+	memoryHandlers.Register(mux)
 
 	srv := httpserver.New("aeon-controlplane", mux)
-	log.Println("aeon-controlplane starting (Agent/Tool registries live; policy/approvals/ABOM not yet implemented — see roadmap.md F0/F4)")
+	log.Println("aeon-controlplane starting (Agent/Tool registries + Memory Store/Candidate Pipeline live; policy/approvals/ABOM not yet implemented — see roadmap.md F0/F4)")
 	httpserver.MustListenAndServe(srv)
 }
