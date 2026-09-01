@@ -13,6 +13,11 @@ dependencies = [
     "langgraph>=1.0",
     # aeon_adapters.crewai (INT-004, Modo B) runs a real crewai.Crew.
     "crewai>=1.15",
+    # aeon_adapters.openai_agents (INT-005, Modo B) runs a real agents.Agent/agents.Runner loop.
+    # Pinned below 0.21 deliberately: openai-agents jumped its own "openai" dependency from <3 to
+    # >=3.0.0 at 0.21.0, which conflicts with crewai's own openai<3 pin above — a real, currently
+    # unresolvable version conflict between these two frameworks' dependency trees (see backlog.md).
+    "openai-agents>=0.20,<0.21",
 ]
 
 [project.optional-dependencies]

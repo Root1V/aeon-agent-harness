@@ -19,9 +19,12 @@
 > MCP, conformidad probada contra la spec 2026-07-28 y contra un fallback legacy 2025-11-25 real),
 > `INT-003` (servidor MCP de salida exponiendo el catálogo real de `aeon-toolgw`, verificado también
 > con el paquete oficial `mcp` de Python, un cliente independiente del SDK Go), `A2A-001` (A2A
-> Gateway, real sobre el SDK Go oficial de A2A, task lifecycle respaldado por un run Temporal real)
-> e `INT-004` (`FrameworkAdapter` CrewAI, segundo Modo B real, con un puente sync/async real hacia
-> `crewai.BaseLLM`)).
+> Gateway, real sobre el SDK Go oficial de A2A, task lifecycle respaldado por un run Temporal real),
+> `INT-004` (`FrameworkAdapter` CrewAI, segundo Modo B real, con un puente sync/async real hacia
+> `crewai.BaseLLM`) e `INT-005` (`FrameworkAdapter` OpenAI Agents SDK, tercer Modo B real — sin
+> puente sync/async, y primera vez que el propio bucle de razonamiento del framework externo decide
+> cuándo llamar a una tool de Aeon, en vez de que la Activity conduzca una secuencia fija). F4 va
+> 5/14 (~36%).
 
 ## Resumen ejecutivo
 
@@ -204,7 +207,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | ~29% (4/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | ~36% (5/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -753,7 +756,7 @@ explícitamente en `backlog.md`, no oculto.
 | INT-003 | Servidor MCP de salida (catálogo de tools gobernado) | `DONE` | `TestToolGatewayServerEndToEndWithRealAdapter` en verde — el catálogo real del Tool Registry (Postgres real, TOOL-001) expuesto como servidor MCP real, con cada `tools/call` pasando por el mismo Cedar `Policy.IsAllowedForPrincipal` que `/execute` ya aplicaba. Verificado también a mano con el paquete **real** `mcp` de Python (independiente del SDK Go usado en el servidor) contra un `aeon-toolgw` real: listó 36 tools reales del registro y llamó `search.web` (permitido) y `shell.exec` (denegado por policy, nunca llega al executor) | go/internal/mcp/server.go, go/internal/mcp/server_test.go, go/internal/policy/cedar.go |
 | A2A-001 | A2A Gateway (Agent Card, identity/authz, task exchange) | `DONE` | `TestA2ATaskLifecycle` en verde — un `AgentCard` real construido desde un `AgentManifest` real (FND-001, Postgres real), un cliente A2A real (`github.com/a2aproject/a2a-go`) resolviéndolo, enviando un mensaje y observando la tarea recorrer `submitted`→`working`→`completed`, respaldado por un run Temporal real (RUN-001) — no un estado sintético. Un segundo escenario cancela una tarea en curso y confirma tanto el estado A2A `canceled` como la cancelación real del run subyacente | go/internal/a2a/agentcard.go, go/internal/a2a/executor.go, go/internal/a2a/executor_test.go |
 | INT-004 | `FrameworkAdapter` CrewAI | `DONE` | `test_crewai_interop_crew_runs_inside_a_real_activity` en verde — un `crewai.Crew` real (dependencia real, `crewai>=1.15`) corre dentro de una única Activity real, con su Agent llamando al cliente real del Model Gateway (`AeonLLM`, un `crewai.BaseLLM` real) — nunca un SDK de proveedor directamente. Mismo patrón que `INT-001` (LangGraph): `examples/crewai-interop`, verificado end-to-end contra un Temporal efímero real y un worker real separado | python/aeon_adapters/crewai/adapter.py, python/aeon_adapters/crewai/example_crew.py, python/tests/integration/test_crewai_interop_workflow.py |
-| INT-005 | `FrameworkAdapter` OpenAI Agents SDK | `TODO` | ídem | — |
+| INT-005 | `FrameworkAdapter` OpenAI Agents SDK | `DONE` | `test_openai_agents_interop_agent_runs_inside_a_real_activity` en verde — un `agents.Agent`/`agents.Runner` real (dependencia real, `openai-agents`) corre dentro de una única Activity real; su modelo es el propio `OpenAIChatCompletionsModel` del SDK apuntado a `aeon-modelgw`'s `POST /v1/chat/completions` (INT-002) — nunca un SDK de proveedor directamente — y su tool-calling nativo (`FunctionTool` real, no bypaseado como en `INT-004`) dispara una llamada real a `execute_tool` (RUN-004) decidida por el propio Agent, no por la Activity. Verificado end-to-end contra un Temporal efímero real y un worker real separado | python/aeon_adapters/openai_agents/adapter.py, python/aeon_adapters/openai_agents/example_agent.py, python/tests/integration/test_openai_agents_interop_workflow.py |
 | INT-006 | `FrameworkAdapter` Microsoft Agent Framework | `TODO` | ídem | — |
 | INT-007 | `FrameworkAdapter` Claude Agent SDK | `TODO` | ídem | — |
 | TOOL-003 | Sandbox (shell/code/browser, microVM/gVisor, egress allowlist) | `TODO` | `test_sandbox_egress_denied_by_default` en verde | — |
@@ -838,6 +841,29 @@ deliberadamente NO usa el mecanismo de tool-calling propio de CrewAI (evitar dep
 exacto de parseo ReAct de CrewAI, que no es un contrato público estable) — en su lugar, el mismo
 patrón "plan luego research" de LangGraph se reproduce llamando a `execute_tool` directamente
 después de que el crew termina, no durante su razonamiento interno.
+
+INT-005 (`FrameworkAdapter` OpenAI Agents SDK) es el tercer Modo B real, y trae dos diferencias
+técnicas genuinas frente a `INT-001`/`INT-004`, no una simple repetición del patrón. Primera: no
+hace falta ninguna subclase de `Model` propia — el SDK oficial ya trae `OpenAIChatCompletionsModel`,
+pensado para hablar con cualquier endpoint compatible con OpenAI Chat Completions, así que
+`build_aeon_model` (`aeon_adapters/openai_agents/adapter.py`) simplemente apunta el propio
+`AsyncOpenAI` del SDK al `POST /v1/chat/completions` real que `INT-002` ya expone en
+`aeon-modelgw` — el mismo camino de integración que el ejemplo oficial
+`examples/model_providers/custom_example_provider.py` del repo upstream documenta, no un atajo, y
+la primera vez que ese endpoint se ejerce contra un framework externo real (antes sólo se había
+verificado a mano con el paquete `openai` puro). Segunda: a diferencia de `INT-004`, aquí el
+tool-calling nativo del framework SÍ se conecta de verdad — `FunctionTool`/`@function_tool` del SDK
+son un contrato tipado y estable (JSON schema de parámetros, payload de argumentos en JSON, callback
+async), no el parseo ReAct interno de CrewAI que se evitó por frágil — así que
+`build_tool_gateway_tool` envuelve `execute_tool` (RUN-004) como una tool real, y es el propio
+`agents.Agent` quien decide cuándo llamarla; el test de aceptación lo prueba end-to-end: el modelo
+falso responde primero con `tool_calls`, el SDK ejecuta la tool real, y el resultado
+(`status: "written"` del ledger real, no un doble) vuelve al modelo para la respuesta final.
+`agents.Runner.run` es además una corrutina nativa (a diferencia de `Crew.kickoff`), así que no hizo
+falta ningún puente sync/async. Hueco real encontrado y documentado, no oculto: `crewai>=1.15`
+fija `openai<3`, mientras que `openai-agents` saltó a exigir `openai>=3.0.0` en su propia versión
+`0.21.0` (19 de agosto de 2026) — un conflicto de dependencias real entre ambos frameworks que obliga
+a fijar `openai-agents>=0.20,<0.21` en `pyproject.toml` hasta que se resuelva (ver `backlog.md`).
 
 F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
 (`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y
