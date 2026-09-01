@@ -374,3 +374,30 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Fase objetivo:** junto con `SEC-002` (Secret Broker).
 - **Criterio de entrada:** que `SEC-002` exista.
 - **Coste:** M.
+
+### CrewAI: el tool-calling nativo del framework no está integrado (`INT-004`)
+
+- **Descripción:** `AeonLLM` (Modo B) es real, pero el ejemplo deliberadamente evita el mecanismo
+  de tool-calling propio de CrewAI (`crewai.tools.BaseTool`) — la llamada a `search.web` ocurre
+  fuera del razonamiento del crew, como un paso `execute_tool` directo tras `kickoff()`, para no
+  depender del formato exacto de parseo (ReAct u otro) que CrewAI usa internamente para decidir
+  llamar a una tool, que no es un contrato público estable entre versiones. Un Agent CrewAI real no
+  puede hoy decidir por sí mismo invocar un tool gobernado por Aeon durante su propio razonamiento.
+- **Fase objetivo:** cuando un caso de uso real necesite que el Agent decida cuándo llamar una
+  tool, no sólo que la ejecute en un orden fijo.
+- **Criterio de entrada:** verificar el formato exacto que la versión de CrewAI en uso espera de
+  `BaseLLM.call` para expresar una tool-call, y construir `AeonTool(BaseTool)` en consecuencia.
+- **Coste:** M.
+
+### Huella de dependencias real de `crewai` (`INT-004`)
+
+- **Descripción:** `crewai>=1.15` trae ~110 paquetes transitivos reales (`chromadb`, `onnxruntime`,
+  `lancedb`, `kubernetes`, `pyarrow`, ...) pensados para sus propias features de memoria/RAG que
+  Aeon no usa — el worker Python ahora instala e importa todo eso sólo para tener acceso a
+  `crewai.BaseLLM`/`Agent`/`Task`/`Crew`. Real, no un problema de Aeon, pero infla la imagen del
+  worker de forma medible.
+- **Fase objetivo:** si el tamaño de imagen se vuelve un problema real (build/deploy más lentos).
+- **Criterio de entrada:** medir el impacto real en `deploy/compose/Dockerfile.python` una vez
+  construida con esta dependencia, y decidir si vale la pena un extra/optional-dependency separado
+  para Modo B en vez de instalarlo siempre.
+- **Coste:** S.

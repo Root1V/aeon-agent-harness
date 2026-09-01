@@ -64,6 +64,12 @@ class _FakeModelGatewayHandler(BaseHTTPRequestHandler):
             # examples/langgraph-interop (INT-001): this node reads the model's content as plain
             # prose, not JSON — unlike DR-001's Planner, it never parses/validates it.
             content = f"Plan: investigate {messages[-1]['content']!r} via a single web search."
+        elif "CrewAI interop example" in system_prompt:
+            # examples/crewai-interop (INT-004): CrewAI builds its own internal prompt from the
+            # Agent's role/goal/backstory and the Task's description — not a shape this fake
+            # controls or needs to parse. Read as plain prose (CrewOutput.raw), same as the
+            # LangGraph interop branch above.
+            content = "Plan: investigate the query via a single web search."
         else:
             content = {"error": f"fake gateway does not recognize this system prompt: {system_prompt!r}"}
 
