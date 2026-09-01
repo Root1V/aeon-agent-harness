@@ -13,13 +13,55 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 
 ---
 
-### Sandbox de shell/browser fuera del perfil Deep Research
+### Ningún perfil de agente usa todavía `shell.exec` real (`TOOL-003`)
 
-- **Descripción:** el perfil Deep Research del MVP es read-only (search/RAG/repo.read); ejecución de
-  shell/código/browser arbitrario queda fuera hasta F4 (`TOOL-003`).
-- **Fase objetivo:** F4.
-- **Criterio de entrada:** un segundo perfil de agente (acción) lo requiere explícitamente.
+- **Descripción:** `TOOL-003` construyó el motor de ejecución real (`go/internal/sandbox`), pero el
+  perfil Deep Research sigue siendo read-only y `policy_bundle.yaml` sigue prohibiendo `shell.*` para
+  todo agente — nada en el despliegue de referencia invoca `shell.exec` de verdad todavía.
+- **Fase objetivo:** cuando un segundo perfil de agente (acción) lo requiera explícitamente.
+- **Criterio de entrada:** existe un caso de uso real que necesita ejecutar shell/código arbitrario,
+  no sólo herramientas read-only.
+- **Coste:** M (perfil + política; el motor ya existe).
+
+### Allowlist de egress configurable para el Sandbox (`TOOL-003`)
+
+- **Descripción:** `go/internal/sandbox` sólo implementa deniega-por-defecto
+  (`NetworkMode("none")`, sin stack de red en absoluto) — la redacción original de la arquitectura
+  también pedía un *allowlist* de hosts permitidos por llamada, que no se implementó. Un mecanismo
+  real (probado en este mismo pase, no elegido a ciegas) sería una red Docker `--internal` (sin ruta
+  a internet, una garantía nativa de Docker) compartida sólo entre el contenedor sandboxed y un
+  contenedor-proxy con salida real, que aplique el allowlist por hostname antes de reenviar.
+- **Fase objetivo:** cuando un tool real necesite alcanzar un host externo específico (no cero, no
+  todos).
+- **Criterio de entrada:** un `ToolDescriptor` real declara una lista de hosts permitidos.
+- **Coste:** M.
+
+### Aislamiento microVM/gVisor real para el Sandbox (`TOOL-003`)
+
+- **Descripción:** `go/internal/sandbox` usa aislamiento de contenedores Docker (namespaces +
+  cgroups + capabilities eliminadas), no microVMs — gVisor (`runsc`) necesita ptrace/KVM sobre un
+  host Linux y Firecracker necesita KVM directamente, ninguno disponible a través del backend
+  virtualizado de Docker Desktop en el Mac de desarrollo de este proyecto. El aislamiento de
+  namespaces de Docker es real y con enforcement del kernel, pero no tiene la superficie de ataque
+  reducida de una microVM (comparte el kernel del host).
+- **Fase objetivo:** antes de ejecutar código no confiable de un tercero real en producción (no sólo
+  `shell.exec` gobernado por Cedar con argumentos controlados).
+- **Criterio de entrada:** un despliegue real corre sobre un host Linux con KVM/gVisor disponible —
+  probarlo primero ahí, no en este Mac.
 - **Coste:** L.
+
+### `aeon-toolgw` monta el socket de Docker del host (`TOOL-003`)
+
+- **Descripción:** `deploy/compose/docker-compose.yml` monta `/var/run/docker.sock` dentro de
+  `toolgw` para que `go/internal/sandbox` pueda lanzar contenedores hermanos reales — esto le da a
+  `toolgw` acceso equivalente a root sobre el host Docker, sin ningún aislamiento de credenciales
+  hoy (el Secret Broker de `SEC-002` sigue en este mismo `backlog.md`). Real, no un descuido: es el
+  tradeoff exacto de "contenedores Docker como motor de sandbox" (ver la nota de diseño de
+  `TOOL-003` en `roadmap.md`).
+- **Fase objetivo:** antes de exponer `aeon-toolgw` fuera de un entorno de confianza single-tenant.
+- **Criterio de entrada:** `SEC-002` (Secret Broker) existe, o se adopta un runtime rootless/daemonless
+  (ej. Podman sin socket compartido) para el sandbox.
+- **Coste:** M.
 
 ### A2A Gateway completo (más allá del Agent Card mínimo)
 

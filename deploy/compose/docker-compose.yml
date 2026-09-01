@@ -220,6 +220,11 @@ services:
       AEON_POLICY_BUNDLE_PATH: /examples/deep-research/policy_bundle.yaml
     volumes:
       - ../../examples:/examples:ro
+      # TOOL-003: go/internal/sandbox spawns real, isolated containers for shell.exec via the host
+      # Docker daemon (sibling containers, not nested Docker-in-Docker) — this grants toolgw
+      # root-equivalent access to the host. Real, current tradeoff, not a mistake: no credential
+      # isolation exists yet for this socket (see SEC-002, Secret Broker, still backlog.md).
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "9403:9403"
 
