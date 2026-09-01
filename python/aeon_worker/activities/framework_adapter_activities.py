@@ -14,6 +14,8 @@ from aeon_adapters.crewai.adapter import run_crewai_crew
 from aeon_adapters.crewai.example_crew import build_example_crew
 from aeon_adapters.langgraph.adapter import run_langgraph_graph
 from aeon_adapters.langgraph.example_graph import build_example_graph
+from aeon_adapters.microsoft_agent_framework.adapter import run_maf_agent
+from aeon_adapters.microsoft_agent_framework.example_agent import build_example_agent as build_example_maf_agent
 from aeon_adapters.openai_agents.adapter import run_openai_agent
 from aeon_adapters.openai_agents.example_agent import build_example_agent
 from aeon_worker.activities.model_activities import DecideCandidate
@@ -118,3 +120,35 @@ async def run_openai_agents_interop_activity(inp: OpenAIAgentsInteropInput) -> O
     tool_calls = result["tool_calls"]
     tool_result = tool_calls[-1].result if tool_calls else {}
     return OpenAIAgentsInteropOutput(query=inp.query, final_output=result["final_output"], tool_result=tool_result)
+
+
+@dataclass
+class MafInteropInput:
+    run_id: str
+    query: str
+    model: str
+
+
+@dataclass
+class MafInteropOutput:
+    query: str
+    final_output: str
+    tool_result: dict
+
+
+@activity.defn
+async def run_maf_interop_activity(inp: MafInteropInput) -> MafInteropOutput:
+    """Same shape as run_openai_agents_interop_activity: the tool call is driven entirely by the
+    Agent's own native reasoning loop (see aeon_adapters.microsoft_agent_framework.adapter's module
+    docstring), not a fixed plan-then-tool-call split."""
+    result = await run_maf_agent(
+        build_example_maf_agent,
+        inp.query,
+        run_id=inp.run_id,
+        node_id="maf-interop",
+        model=inp.model,
+    )
+
+    tool_calls = result["tool_calls"]
+    tool_result = tool_calls[-1].result if tool_calls else {}
+    return MafInteropOutput(query=inp.query, final_output=result["final_output"], tool_result=tool_result)
