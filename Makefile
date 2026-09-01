@@ -23,8 +23,11 @@ test: test-go test-python ## Run the full test suite, both languages, in contain
 
 test-go: ## Run Go tests in a throwaway container (registry Postgres tests self-skip without AEON_TEST_PG_DSN)
 	# Mounts the whole repo, not just go/: some tests (e.g. the policy-engine acceptance test)
-	# load config-as-code files from examples/ to exercise the real checked-in manifests.
-	docker run --rm -v "$(PWD):/repo" -w /repo/go golang:1.25-alpine go test ./...
+	# load config-as-code files from examples/ to exercise the real checked-in manifests. Also
+	# mounts the host's Docker socket: go/internal/sandbox's tests (TOOL-003) run real, sandboxed
+	# containers via the Docker Engine API — sibling containers on the host daemon, not nested
+	# Docker-in-Docker. They self-skip (like the Postgres tests) if the socket isn't reachable.
+	docker run --rm -v "$(PWD):/repo" -v /var/run/docker.sock:/var/run/docker.sock -w /repo/go golang:1.25-alpine go test ./...
 
 test-go-integration: ## Run Go tests against real Postgres + Temporal + a real worker + OTel/Tempo (starts/stops them around the run)
 	$(COMPOSE) --profile core --profile obs up -d --wait postgres temporal worker otel-collector tempo

@@ -6,7 +6,7 @@
 >
 > Estados: `TODO` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `DEFERRED` (→ movida a [backlog.md](backlog.md))
 >
-> Última actualización: 2026-08-31 (F0 cerrado salvo la nota de `local-llm`; **las 13 features de
+> Última actualización: 2026-09-01 (F0 cerrado salvo la nota de `local-llm`; **las 13 features de
 > F2 están `DONE`** — `INT-002` cierra el Model Gateway como endpoint OpenAI-compatible real,
 > verificado con el paquete `openai` de verdad. El MVP como narrativa compuesta ("traza navegable"
 > para runs Python, "coste por run", `replay --assert-identical`) todavía tiene huecos reales, ver
@@ -28,8 +28,10 @@
 > paquete `agent-framework` instalado, sólo `agent-framework-core`+`agent-framework-openai`) e
 > `INT-007` (`FrameworkAdapter` Claude Agent SDK, el último de la lista — estructuralmente distinto:
 > el modelo no se enruta por Aeon, pero cada tool que el agente puede llamar sí). Con `INT-007` las
-> **5 `FrameworkAdapter` (`INT-001`/`INT-004`/`INT-005`/`INT-006`/`INT-007`) están completas**. F4
-> va 7/14 (50%).
+> **5 `FrameworkAdapter` (`INT-001`/`INT-004`/`INT-005`/`INT-006`/`INT-007`) están completas**, y
+> `TOOL-003` (Sandbox) cierra el hueco de `shell.exec`: ya no es un stub falso, corre de verdad
+> dentro de un contenedor Docker real sin stack de red por defecto (motor de aislamiento real, no
+> gVisor/Firecracker — ver la nota de F4 abajo). F4 va ~57% (8/14).
 
 ## Resumen ejecutivo
 
@@ -212,7 +214,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | 50% (7/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | ~57% (8/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -764,7 +766,7 @@ explícitamente en `backlog.md`, no oculto.
 | INT-005 | `FrameworkAdapter` OpenAI Agents SDK | `DONE` | `test_openai_agents_interop_agent_runs_inside_a_real_activity` en verde — un `agents.Agent`/`agents.Runner` real (dependencia real, `openai-agents`) corre dentro de una única Activity real; su modelo es el propio `OpenAIChatCompletionsModel` del SDK apuntado a `aeon-modelgw`'s `POST /v1/chat/completions` (INT-002) — nunca un SDK de proveedor directamente — y su tool-calling nativo (`FunctionTool` real, no bypaseado como en `INT-004`) dispara una llamada real a `execute_tool` (RUN-004) decidida por el propio Agent, no por la Activity. Verificado end-to-end contra un Temporal efímero real y un worker real separado | python/aeon_adapters/openai_agents/adapter.py, python/aeon_adapters/openai_agents/example_agent.py, python/tests/integration/test_openai_agents_interop_workflow.py |
 | INT-006 | `FrameworkAdapter` Microsoft Agent Framework | `DONE` | `test_maf_interop_agent_runs_inside_a_real_activity` en verde — un `agent_framework.Agent` real (dependencias reales, `agent-framework-core`+`agent-framework-openai`, sin el meta-paquete `agent-framework`) corre dentro de una única Activity real; su chat client es el propio `OpenAIChatCompletionClient` del SDK (deliberadamente no el `OpenAIChatClient` por defecto, que habla la API Responses en vez de Chat Completions) apuntado a `aeon-modelgw`'s `POST /v1/chat/completions` (INT-002) — nunca un SDK de proveedor directamente — y su tool-calling nativo (`agent_framework.tool` real) dispara una llamada real a `execute_tool` (RUN-004) decidida por el propio Agent, no por la Activity. Mismo patrón que `INT-005`. Verificado end-to-end contra un Temporal efímero real y un worker real separado | python/aeon_adapters/microsoft_agent_framework/adapter.py, python/aeon_adapters/microsoft_agent_framework/example_agent.py, python/tests/integration/test_maf_interop_workflow.py |
 | INT-007 | `FrameworkAdapter` Claude Agent SDK | `DONE` | `test_claude_agent_interop_agent_runs_inside_a_real_activity` en verde — un `claude_agent_sdk.ClaudeSDKClient` real (dependencia real; envuelve el CLI real `claude`/Claude Code vía npm, no una reimplementación) corre dentro de una única Activity real. A diferencia de `INT-001`/`INT-004`/`INT-005`/`INT-006`, el modelo NO se enruta por el Model Gateway de Aeon — esta SDK no tiene ese punto de extensión, ver la nota de diseño abajo — pero `ClaudeAgentOptions(tools=[])` excluye por completo cada tool nativa de Claude Code (Bash, Read, Write, WebFetch, ...) y el único tool disponible es un MCP tool propio en proceso que llama a `execute_tool` (RUN-004) real, decidido por el propio bucle de razonamiento de Claude. Verificado end-to-end contra un Temporal efímero real y un worker real separado, con el CLI real redirigido vía `ANTHROPIC_BASE_URL` a un servidor Anthropic Messages API falso (sin coste, sin credenciales reales) | python/aeon_adapters/claude_agent_sdk/adapter.py, python/aeon_adapters/claude_agent_sdk/example_agent.py, python/tests/integration/test_claude_agent_interop_workflow.py |
-| TOOL-003 | Sandbox (shell/code/browser, microVM/gVisor, egress allowlist) | `TODO` | `test_sandbox_egress_denied_by_default` en verde | — |
+| TOOL-003 | Sandbox (shell/code/browser, microVM/gVisor, egress allowlist) | `DONE` | `TestSandboxEgressDeniedByDefault` en verde — un `shell.exec` real (ya no un stub falso) corre dentro de un contenedor Docker real sin stack de red (`NetworkMode("none")`), rootfs de sólo lectura, todas las capabilities eliminadas y `no-new-privileges`; una resolución DNS falla al instante, no por timeout. Motor de aislamiento real: contenedores Docker vía el cliente oficial de la Engine API (`github.com/moby/moby/client`), no gVisor/Firecracker — ver la nota de diseño abajo. Sólo deniega-por-defecto está implementado; el allowlist de egress configurable queda en `backlog.md` | go/internal/sandbox/sandbox.go, go/internal/sandbox/sandbox_test.go, go/internal/toolexec/executor.go |
 | SEC-002 | Secret Broker (short-lived credentials) | `TODO` | `test_no_secret_in_prompt` en verde | — |
 | FND-002 | ABOM (bill of materials firmado, reproducible) | `TODO` | `aeon publish` genera y firma el ABOM | — |
 | — | Circuit breaker + kill switch por agente (A5) | `TODO` | `test_circuit_breaker_quarantines_version` en verde | — |
@@ -923,6 +925,34 @@ credenciales de Anthropic reales montadas — nunca contra el propio entorno de 
 OpenAI Agents SDK, `INT-006` Microsoft Agent Framework, `INT-007` Claude Agent SDK) están
 completos** — cada uno con al menos un ejemplo real corriendo dentro de una Activity Temporal real,
 verificado end-to-end.
+
+TOOL-003 (Sandbox) reemplaza el `shell.exec` falso de `go/internal/toolexec/executor.go` — que hasta
+ahora sólo devolvía `{"status": "executed", ...}` sin ejecutar nada real — por una ejecución real,
+aislada. Decisión de diseño honesta, no un atajo: la redacción original de la arquitectura pedía
+"microVM/gVisor", pero ni gVisor (`runsc`, que necesita ptrace/KVM sobre un host Linux) ni Firecracker
+(que necesita KVM directamente) están disponibles a través del backend virtualizado de Docker Desktop
+en el Mac de desarrollo de este proyecto — exigir uno habría hecho esta feature imposible de probar
+aquí. En su lugar, `go/internal/sandbox/sandbox.go` usa aislamiento real de contenedores Docker vía
+el cliente oficial de la Engine API (`github.com/moby/moby/client` — el mismo criterio de "usar el
+SDK oficial real" que ya se aplicó a MCP/A2A): namespaces, cgroups, todas las capabilities eliminadas
+(`CapDrop: ["ALL"]`), `no-new-privileges`, rootfs de sólo lectura con un tmpfs pequeño en `/tmp`, y
+sobre todo `NetworkMode("none")` — el contenedor no tiene ningún stack de red, no una red restringida;
+una resolución DNS falla al instante ("bad address"), no por timeout. Verificado escribiendo el
+código contra la API real, no asumiéndola: dos bugs reales aparecieron y se corrigieron durante la
+propia implementación, no después. Primero, `ContainerWait` con la condición por defecto
+(`WaitConditionNotRunning`) dispara de inmediato sobre un contenedor recién creado pero aún no
+iniciado — que ya "no está corriendo" — devolviendo un `StatusCode` sin sentido (0) en vez de esperar
+a que el comando real termine; cada código de salida volvía 0 sin importar el comando hasta cambiar a
+`WaitConditionNextExit`, la condición que la propia documentación del cliente recomienda para
+sincronizar antes de `ContainerStart`. Segundo, leer los logs con una sola llamada justo después de
+la señal de `wait` puede competir con el propio volcado de logs del daemon y truncar la salida
+silenciosamente; se corrigió leyendo con `Follow: true` hasta EOF, que es en sí mismo el punto de
+sincronización real (el stream sólo se cierra cuando el contenedor terminó de verdad). Sólo
+deniega-por-defecto está implementado — un allowlist de egress configurable (mencionado también en la
+redacción original) queda documentado como hueco real en `backlog.md`, no oculto. `shell.exec` sigue
+prohibido por política en el despliegue de referencia (`policy_bundle.yaml` sigue negando
+`shell.*` para todo agente) — TOOL-003 construye el motor de ejecución real que un futuro perfil de
+acción usaría, no cambia qué agentes pueden invocarlo hoy.
 
 F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
 (`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y
