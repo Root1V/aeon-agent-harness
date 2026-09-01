@@ -11,6 +11,8 @@ dependencies = [
     "pyyaml>=6.0",
     # aeon_adapters.langgraph (INT-001, Modo B) runs a real compiled LangGraph graph.
     "langgraph>=1.0",
+    # aeon_adapters.crewai (INT-004, Modo B) runs a real crewai.Crew.
+    "crewai>=1.15",
 ]
 
 [project.optional-dependencies]

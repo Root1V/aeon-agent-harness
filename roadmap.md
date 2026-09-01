@@ -18,8 +18,10 @@
 > e interoperabilidad) arrancó con `TOOL-002` (MCP Adapter cliente, real sobre el SDK Go oficial de
 > MCP, conformidad probada contra la spec 2026-07-28 y contra un fallback legacy 2025-11-25 real),
 > `INT-003` (servidor MCP de salida exponiendo el catálogo real de `aeon-toolgw`, verificado también
-> con el paquete oficial `mcp` de Python, un cliente independiente del SDK Go) y `A2A-001` (A2A
-> Gateway, real sobre el SDK Go oficial de A2A, task lifecycle respaldado por un run Temporal real)).
+> con el paquete oficial `mcp` de Python, un cliente independiente del SDK Go), `A2A-001` (A2A
+> Gateway, real sobre el SDK Go oficial de A2A, task lifecycle respaldado por un run Temporal real)
+> e `INT-004` (`FrameworkAdapter` CrewAI, segundo Modo B real, con un puente sync/async real hacia
+> `crewai.BaseLLM`)).
 
 ## Resumen ejecutivo
 
@@ -202,7 +204,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | ~21% (3/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | ~29% (4/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -750,7 +752,7 @@ explícitamente en `backlog.md`, no oculto.
 | TOOL-002 | MCP Adapter (core stateless 2026-07-28 + legacy adapter) | `DONE` | `TestAdapterStatelessConformance20260728` y `TestAdapterLegacyFallback20251125` en verde — Aeon como cliente MCP real (`github.com/modelcontextprotocol/go-sdk`, dependencia real, no reinventada) negociando contra un servidor MCP real (mismo SDK): stateless 2026-07-28 por defecto, con fallback real al handshake legacy `initialize` 2025-11-25 cuando el servidor sólo anuncia esa versión vía `server/discover`. Un único adaptador, no dos — el fallback es el `Client.Connect` real del SDK, no una rama de código separada | go/internal/mcp/adapter.go, go/internal/mcp/adapter_test.go |
 | INT-003 | Servidor MCP de salida (catálogo de tools gobernado) | `DONE` | `TestToolGatewayServerEndToEndWithRealAdapter` en verde — el catálogo real del Tool Registry (Postgres real, TOOL-001) expuesto como servidor MCP real, con cada `tools/call` pasando por el mismo Cedar `Policy.IsAllowedForPrincipal` que `/execute` ya aplicaba. Verificado también a mano con el paquete **real** `mcp` de Python (independiente del SDK Go usado en el servidor) contra un `aeon-toolgw` real: listó 36 tools reales del registro y llamó `search.web` (permitido) y `shell.exec` (denegado por policy, nunca llega al executor) | go/internal/mcp/server.go, go/internal/mcp/server_test.go, go/internal/policy/cedar.go |
 | A2A-001 | A2A Gateway (Agent Card, identity/authz, task exchange) | `DONE` | `TestA2ATaskLifecycle` en verde — un `AgentCard` real construido desde un `AgentManifest` real (FND-001, Postgres real), un cliente A2A real (`github.com/a2aproject/a2a-go`) resolviéndolo, enviando un mensaje y observando la tarea recorrer `submitted`→`working`→`completed`, respaldado por un run Temporal real (RUN-001) — no un estado sintético. Un segundo escenario cancela una tarea en curso y confirma tanto el estado A2A `canceled` como la cancelación real del run subyacente | go/internal/a2a/agentcard.go, go/internal/a2a/executor.go, go/internal/a2a/executor_test.go |
-| INT-004 | `FrameworkAdapter` CrewAI | `TODO` | ejemplo equivalente a `langgraph-interop` | — |
+| INT-004 | `FrameworkAdapter` CrewAI | `DONE` | `test_crewai_interop_crew_runs_inside_a_real_activity` en verde — un `crewai.Crew` real (dependencia real, `crewai>=1.15`) corre dentro de una única Activity real, con su Agent llamando al cliente real del Model Gateway (`AeonLLM`, un `crewai.BaseLLM` real) — nunca un SDK de proveedor directamente. Mismo patrón que `INT-001` (LangGraph): `examples/crewai-interop`, verificado end-to-end contra un Temporal efímero real y un worker real separado | python/aeon_adapters/crewai/adapter.py, python/aeon_adapters/crewai/example_crew.py, python/tests/integration/test_crewai_interop_workflow.py |
 | INT-005 | `FrameworkAdapter` OpenAI Agents SDK | `TODO` | ídem | — |
 | INT-006 | `FrameworkAdapter` Microsoft Agent Framework | `TODO` | ídem | — |
 | INT-007 | `FrameworkAdapter` Claude Agent SDK | `TODO` | ídem | — |
@@ -821,6 +823,21 @@ en vez de tratarlo como "no hay eventos de historial". Arreglado detectando
 `serviceerror.NotFound` explícitamente (`go/cmd/aeon/dx002.go`) — un bug real de DX-002 que el
 "auto-saltarse" había mantenido invisible en cada verificación anterior, encontrado y corregido
 aquí, no ignorado, al pasar esta suite por primera vez con Temporal realmente disponible.
+
+INT-004 (`FrameworkAdapter` CrewAI) es el segundo Modo B real, tras `INT-001` (LangGraph), y
+comparte su misma estructura (`aeon_adapters/crewai/adapter.py` + `example_crew.py` +
+`framework_adapter_activities.py` + `crewai_interop_run.py` + `aeon_sdk/crewai_interop.py` +
+`examples/crewai-interop`) pero con una diferencia real que no existía en LangGraph: CrewAI es
+síncrono por diseño (`crewai.BaseLLM.call` y `Crew.kickoff` son métodos planos, no corrutinas),
+mientras que `call_model_gateway` de Aeon es `async`. Puentear eso exige una decisión de diseño
+real, no un parche: `run_crewai_crew` ejecuta `Crew.kickoff` dentro de un hilo de trabajo
+(`asyncio.to_thread`), de forma que `AeonLLM.call` puede arrancar su propio event loop nuevo con
+`asyncio.run()` con seguridad — seguro precisamente porque ese hilo no tiene ya un event loop
+corriendo, a diferencia de la Activity async que lo lanzó. La llamada a herramienta ("research")
+deliberadamente NO usa el mecanismo de tool-calling propio de CrewAI (evitar depender del formato
+exacto de parseo ReAct de CrewAI, que no es un contrato público estable) — en su lugar, el mismo
+patrón "plan luego research" de LangGraph se reproduce llamando a `execute_tool` directamente
+después de que el crew termina, no durante su razonamiento interno.
 
 F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
 (`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y
