@@ -21,10 +21,12 @@
 > con el paquete oficial `mcp` de Python, un cliente independiente del SDK Go), `A2A-001` (A2A
 > Gateway, real sobre el SDK Go oficial de A2A, task lifecycle respaldado por un run Temporal real),
 > `INT-004` (`FrameworkAdapter` CrewAI, segundo Modo B real, con un puente sync/async real hacia
-> `crewai.BaseLLM`) e `INT-005` (`FrameworkAdapter` OpenAI Agents SDK, tercer Modo B real — sin
+> `crewai.BaseLLM`), `INT-005` (`FrameworkAdapter` OpenAI Agents SDK, tercer Modo B real — sin
 > puente sync/async, y primera vez que el propio bucle de razonamiento del framework externo decide
-> cuándo llamar a una tool de Aeon, en vez de que la Activity conduzca una secuencia fija). F4 va
-> 5/14 (~36%).
+> cuándo llamar a una tool de Aeon, en vez de que la Activity conduzca una secuencia fija) e
+> `INT-006` (`FrameworkAdapter` Microsoft Agent Framework, mismo patrón que `INT-005` — sin meta-
+> paquete `agent-framework` instalado, sólo `agent-framework-core`+`agent-framework-openai`). F4 va
+> 6/14 (~43%).
 
 ## Resumen ejecutivo
 
@@ -207,7 +209,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | ~36% (5/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | ~43% (6/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -757,7 +759,7 @@ explícitamente en `backlog.md`, no oculto.
 | A2A-001 | A2A Gateway (Agent Card, identity/authz, task exchange) | `DONE` | `TestA2ATaskLifecycle` en verde — un `AgentCard` real construido desde un `AgentManifest` real (FND-001, Postgres real), un cliente A2A real (`github.com/a2aproject/a2a-go`) resolviéndolo, enviando un mensaje y observando la tarea recorrer `submitted`→`working`→`completed`, respaldado por un run Temporal real (RUN-001) — no un estado sintético. Un segundo escenario cancela una tarea en curso y confirma tanto el estado A2A `canceled` como la cancelación real del run subyacente | go/internal/a2a/agentcard.go, go/internal/a2a/executor.go, go/internal/a2a/executor_test.go |
 | INT-004 | `FrameworkAdapter` CrewAI | `DONE` | `test_crewai_interop_crew_runs_inside_a_real_activity` en verde — un `crewai.Crew` real (dependencia real, `crewai>=1.15`) corre dentro de una única Activity real, con su Agent llamando al cliente real del Model Gateway (`AeonLLM`, un `crewai.BaseLLM` real) — nunca un SDK de proveedor directamente. Mismo patrón que `INT-001` (LangGraph): `examples/crewai-interop`, verificado end-to-end contra un Temporal efímero real y un worker real separado | python/aeon_adapters/crewai/adapter.py, python/aeon_adapters/crewai/example_crew.py, python/tests/integration/test_crewai_interop_workflow.py |
 | INT-005 | `FrameworkAdapter` OpenAI Agents SDK | `DONE` | `test_openai_agents_interop_agent_runs_inside_a_real_activity` en verde — un `agents.Agent`/`agents.Runner` real (dependencia real, `openai-agents`) corre dentro de una única Activity real; su modelo es el propio `OpenAIChatCompletionsModel` del SDK apuntado a `aeon-modelgw`'s `POST /v1/chat/completions` (INT-002) — nunca un SDK de proveedor directamente — y su tool-calling nativo (`FunctionTool` real, no bypaseado como en `INT-004`) dispara una llamada real a `execute_tool` (RUN-004) decidida por el propio Agent, no por la Activity. Verificado end-to-end contra un Temporal efímero real y un worker real separado | python/aeon_adapters/openai_agents/adapter.py, python/aeon_adapters/openai_agents/example_agent.py, python/tests/integration/test_openai_agents_interop_workflow.py |
-| INT-006 | `FrameworkAdapter` Microsoft Agent Framework | `TODO` | ídem | — |
+| INT-006 | `FrameworkAdapter` Microsoft Agent Framework | `DONE` | `test_maf_interop_agent_runs_inside_a_real_activity` en verde — un `agent_framework.Agent` real (dependencias reales, `agent-framework-core`+`agent-framework-openai`, sin el meta-paquete `agent-framework`) corre dentro de una única Activity real; su chat client es el propio `OpenAIChatCompletionClient` del SDK (deliberadamente no el `OpenAIChatClient` por defecto, que habla la API Responses en vez de Chat Completions) apuntado a `aeon-modelgw`'s `POST /v1/chat/completions` (INT-002) — nunca un SDK de proveedor directamente — y su tool-calling nativo (`agent_framework.tool` real) dispara una llamada real a `execute_tool` (RUN-004) decidida por el propio Agent, no por la Activity. Mismo patrón que `INT-005`. Verificado end-to-end contra un Temporal efímero real y un worker real separado | python/aeon_adapters/microsoft_agent_framework/adapter.py, python/aeon_adapters/microsoft_agent_framework/example_agent.py, python/tests/integration/test_maf_interop_workflow.py |
 | INT-007 | `FrameworkAdapter` Claude Agent SDK | `TODO` | ídem | — |
 | TOOL-003 | Sandbox (shell/code/browser, microVM/gVisor, egress allowlist) | `TODO` | `test_sandbox_egress_denied_by_default` en verde | — |
 | SEC-002 | Secret Broker (short-lived credentials) | `TODO` | `test_no_secret_in_prompt` en verde | — |
@@ -864,6 +866,24 @@ falta ningún puente sync/async. Hueco real encontrado y documentado, no oculto:
 fija `openai<3`, mientras que `openai-agents` saltó a exigir `openai>=3.0.0` en su propia versión
 `0.21.0` (19 de agosto de 2026) — un conflicto de dependencias real entre ambos frameworks que obliga
 a fijar `openai-agents>=0.20,<0.21` en `pyproject.toml` hasta que se resuelva (ver `backlog.md`).
+
+INT-006 (`FrameworkAdapter` Microsoft Agent Framework) repite el mismo patrón que `INT-005` — misma
+razón de fondo, no repetición mecánica: MAF también trae un chat client OpenAI-compatible listo
+para usar, así que tampoco hizo falta ninguna implementación propia de su protocolo de chat client,
+y su tool-calling nativo (`agent_framework.tool`) también es un contrato tipado y estable, así que
+también se conectó de verdad. Una diferencia real que sólo se descubrió inspeccionando el código
+fuente instalado, no la documentación (que muestra casi siempre el otro cliente): MAF trae **dos**
+clientes con forma de OpenAI — `OpenAIChatClient` (su cliente por defecto, que llama
+`client.responses.create`, la API Responses más nueva) y `OpenAIChatCompletionClient` (que llama
+`client.chat.completions.create`, la API Chat Completions clásica). `aeon-modelgw`'s
+`POST /v1/chat/completions` (INT-002) habla Chat Completions, no Responses — así que el adaptador usa
+deliberadamente `OpenAIChatCompletionClient`, no el `OpenAIChatClient` que casi todos los ejemplos
+oficiales muestran primero; usar el equivocado habría fallado en silencio contra el endpoint real.
+Segunda decisión real, evitando repetir el error de `INT-004`: `pip install agent-framework` (el
+meta-paquete) instala ~30 integraciones de proveedor (Anthropic, Bedrock, Gemini, Azure, Redis,
+mem0, ...) que Aeon no usa — mismo problema de sobre-instalación que ya dejó `crewai` documentado en
+`backlog.md`. Aquí se evitó desde el principio: `pyproject.toml` sólo declara
+`agent-framework-core`+`agent-framework-openai`, no el meta-paquete.
 
 F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
 (`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y

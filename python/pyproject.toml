@@ -18,6 +18,13 @@ dependencies = [
     # >=3.0.0 at 0.21.0, which conflicts with crewai's own openai<3 pin above — a real, currently
     # unresolvable version conflict between these two frameworks' dependency trees (see backlog.md).
     "openai-agents>=0.20,<0.21",
+    # aeon_adapters.microsoft_agent_framework (INT-006, Modo B) runs a real agent_framework.Agent
+    # loop. Only the core + openai subpackages, not the "agent-framework" meta package — that meta
+    # package pulls in ~30 provider integrations (Anthropic, Bedrock, Gemini, Azure, Redis, mem0,
+    # ...) Aeon never uses, the same over-installation problem crewai's dependency footprint already
+    # showed (see backlog.md).
+    "agent-framework-core>=1.15",
+    "agent-framework-openai>=1.14",
 ]
 
 [project.optional-dependencies]
