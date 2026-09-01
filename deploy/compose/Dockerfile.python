@@ -1,5 +1,11 @@
 # syntax=docker/dockerfile:1
 FROM python:3.13-slim AS base
+# aeon_adapters.claude_agent_sdk (INT-007) wraps the real `claude` (Claude Code) CLI, an
+# @anthropic-ai/claude-code npm package, not a Python reimplementation — it must be on PATH for the
+# worker to run that interop example.
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+    && npm install -g @anthropic-ai/claude-code \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
 WORKDIR /app
 COPY pyproject.toml uv.lock* ./

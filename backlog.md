@@ -69,15 +69,6 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   incidentes de seguridad de memoria.
 - **Coste:** XL.
 
-### `FrameworkAdapter` más allá de LangGraph
-
-- **Descripción:** CrewAI, OpenAI Agents SDK, Microsoft Agent Framework, Claude Agent SDK
-  (`INT-004`..`INT-007`). El MVP sólo valida el patrón con LangGraph.
-- **Fase objetivo:** F4.
-- **Criterio de entrada:** un proyecto concreto ya usa ese framework y quiere adoptar Aeon sin
-  reescribir su orquestación.
-- **Coste:** M cada uno (una vez que el patrón `FrameworkAdapter` está probado).
-
 ### ABOM firmado (FND-002)
 
 - **Descripción:** bill of materials reproducible y firmado por versión/deployment.
@@ -416,3 +407,20 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Criterio de entrada:** revisar el `requires_dist` de la versión de `crewai` en uso — si ya acepta
   `openai>=3`, levantar el techo de `openai-agents` en el mismo cambio.
 - **Coste:** S.
+
+### Endpoint compatible con la API Messages de Anthropic en `aeon-modelgw` (`INT-007`)
+
+- **Descripción:** el Claude Agent SDK (`INT-007`) no tiene ningún punto de extensión de "cliente de
+  modelo personalizado" — envuelve el CLI real `claude` (Claude Code), que llama directamente a
+  `POST /v1/messages` de Anthropic (o a lo que `ANTHROPIC_BASE_URL`/Bedrock/Vertex tenga configurado
+  el host). Para que las llamadas de modelo de esta integración pasen de verdad por el Model Gateway
+  de Aeon, `aeon-modelgw` necesitaría un endpoint nuevo que hable el wire format de la API Messages
+  de Anthropic (bloques de contenido, `tool_use`/`tool_result`, etc.) — un `INT-002` equivalente para
+  ese formato, ya que `INT-002` sólo implementó OpenAI Chat Completions. Hasta que exista, `INT-007`
+  sólo gobierna el lado de las tools (ver `roadmap.md`), no el del modelo.
+- **Fase objetivo:** si un caso de uso real necesita que las llamadas de modelo de Claude Agent SDK
+  pasen por el routing/budgets/redaction de Aeon, no sólo sus tool calls.
+- **Criterio de entrada:** diseñar la traducción `NormalizedChatResponse` (o equivalente) ↔ forma de
+  la API Messages de Anthropic, incluyendo bloques `tool_use`/`tool_result`, y decidir si vive en
+  `aeon-modelgw` como una ruta nueva (`POST /v1/messages`) o en un servicio separado.
+- **Coste:** M.
