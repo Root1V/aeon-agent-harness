@@ -401,3 +401,18 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   construida con esta dependencia, y decidir si vale la pena un extra/optional-dependency separado
   para Modo B en vez de instalarlo siempre.
 - **Coste:** S.
+
+### Conflicto real de versiones entre `crewai` y `openai-agents` (`INT-004`/`INT-005`)
+
+- **Descripción:** `crewai>=1.15` fija `openai<3,>=2.30.0`; `openai-agents` saltó a exigir
+  `openai>=3.0.0,<4` a partir de su propia versión `0.21.0` (19 de agosto de 2026). Ambos
+  frameworks conviven hoy en el mismo `pyproject.toml` sólo porque `openai-agents` está fijado por
+  debajo de ese salto (`>=0.20,<0.21`, ver `python/pyproject.toml`) — una solución real pero
+  temporal: cuando `crewai` migre su propio pin a `openai>=3` (cosa que hará, tarde o temprano), este
+  techo podrá levantarse; hasta entonces, cualquier fix/feature de `openai-agents` posterior a
+  `0.20.x` queda fuera de alcance sin romper `INT-004`.
+- **Fase objetivo:** cuando `crewai` publique una versión con `openai>=3` como dependencia, o cuando
+  un caso de uso real necesite una versión de `openai-agents` posterior a `0.20.x`.
+- **Criterio de entrada:** revisar el `requires_dist` de la versión de `crewai` en uso — si ya acepta
+  `openai>=3`, levantar el techo de `openai-agents` en el mismo cambio.
+- **Coste:** S.
