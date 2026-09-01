@@ -41,9 +41,11 @@ test-python: ## Run Python unit + integration tests in a throwaway container via
 	# Mounts the whole repo, not just python/: test_contracts.py and (from DR-001) the Deep
 	# Research profile's Planner load JSON Schemas from proto/schemas and fixtures from examples/,
 	# both outside python/. '.[dev]' pulls in pytest/pytest-asyncio/pyyaml/referencing — plain
-	# '--with-editable .' only installs the package's runtime dependencies.
+	# '--with-editable .' only installs the package's runtime dependencies. nodejs+npm+the real
+	# `claude` CLI are installed for aeon_adapters.claude_agent_sdk's tests (INT-007) — it wraps that
+	# CLI as a subprocess, it does not reimplement it.
 	docker run --rm -v "$(PWD):/repo" -w /repo/python python:3.13-slim sh -c \
-		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q"
+		"apt-get update -qq && apt-get install -y -qq --no-install-recommends nodejs npm >/dev/null && npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 && pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q"
 
 eval-run: ## Run an EvalSuite offline (EVAL-002): make eval-run SUITE=deep_research_core [TRIALS=3]
 	# `aeon eval run` (go/cmd/aeon) shells out to this same aeon_evalops.cli entrypoint when a local

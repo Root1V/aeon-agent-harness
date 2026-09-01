@@ -14,6 +14,8 @@ from aeon_adapters.crewai.adapter import run_crewai_crew
 from aeon_adapters.crewai.example_crew import build_example_crew
 from aeon_adapters.langgraph.adapter import run_langgraph_graph
 from aeon_adapters.langgraph.example_graph import build_example_graph
+from aeon_adapters.claude_agent_sdk.adapter import run_claude_agent
+from aeon_adapters.claude_agent_sdk.example_agent import build_example_system_prompt
 from aeon_adapters.microsoft_agent_framework.adapter import run_maf_agent
 from aeon_adapters.microsoft_agent_framework.example_agent import build_example_agent as build_example_maf_agent
 from aeon_adapters.openai_agents.adapter import run_openai_agent
@@ -152,3 +154,34 @@ async def run_maf_interop_activity(inp: MafInteropInput) -> MafInteropOutput:
     tool_calls = result["tool_calls"]
     tool_result = tool_calls[-1].result if tool_calls else {}
     return MafInteropOutput(query=inp.query, final_output=result["final_output"], tool_result=tool_result)
+
+
+@dataclass
+class ClaudeAgentInteropInput:
+    run_id: str
+    query: str
+
+
+@dataclass
+class ClaudeAgentInteropOutput:
+    query: str
+    final_output: str
+    tool_result: dict
+
+
+@activity.defn
+async def run_claude_agent_interop_activity(inp: ClaudeAgentInteropInput) -> ClaudeAgentInteropOutput:
+    """Unlike every other run_*_interop_activity in this module, the model call here is not routed
+    through Aeon's Model Gateway — see aeon_adapters.claude_agent_sdk.adapter's module docstring for
+    why, and for the real governance boundary this integration enforces instead (the tool surface,
+    not the model surface)."""
+    result = await run_claude_agent(
+        build_example_system_prompt,
+        inp.query,
+        run_id=inp.run_id,
+        node_id="claude-agent-sdk-interop",
+    )
+
+    tool_calls = result["tool_calls"]
+    tool_result = tool_calls[-1].result if tool_calls else {}
+    return ClaudeAgentInteropOutput(query=inp.query, final_output=result["final_output"], tool_result=tool_result)

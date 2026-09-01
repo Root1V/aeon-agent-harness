@@ -25,8 +25,11 @@
 > puente sync/async, y primera vez que el propio bucle de razonamiento del framework externo decide
 > cuándo llamar a una tool de Aeon, en vez de que la Activity conduzca una secuencia fija) e
 > `INT-006` (`FrameworkAdapter` Microsoft Agent Framework, mismo patrón que `INT-005` — sin meta-
-> paquete `agent-framework` instalado, sólo `agent-framework-core`+`agent-framework-openai`). F4 va
-> 6/14 (~43%).
+> paquete `agent-framework` instalado, sólo `agent-framework-core`+`agent-framework-openai`) e
+> `INT-007` (`FrameworkAdapter` Claude Agent SDK, el último de la lista — estructuralmente distinto:
+> el modelo no se enruta por Aeon, pero cada tool que el agente puede llamar sí). Con `INT-007` las
+> **5 `FrameworkAdapter` (`INT-001`/`INT-004`/`INT-005`/`INT-006`/`INT-007`) están completas**. F4
+> va 7/14 (50%).
 
 ## Resumen ejecutivo
 
@@ -209,7 +212,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | ~43% (6/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | 50% (7/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -760,7 +763,7 @@ explícitamente en `backlog.md`, no oculto.
 | INT-004 | `FrameworkAdapter` CrewAI | `DONE` | `test_crewai_interop_crew_runs_inside_a_real_activity` en verde — un `crewai.Crew` real (dependencia real, `crewai>=1.15`) corre dentro de una única Activity real, con su Agent llamando al cliente real del Model Gateway (`AeonLLM`, un `crewai.BaseLLM` real) — nunca un SDK de proveedor directamente. Mismo patrón que `INT-001` (LangGraph): `examples/crewai-interop`, verificado end-to-end contra un Temporal efímero real y un worker real separado | python/aeon_adapters/crewai/adapter.py, python/aeon_adapters/crewai/example_crew.py, python/tests/integration/test_crewai_interop_workflow.py |
 | INT-005 | `FrameworkAdapter` OpenAI Agents SDK | `DONE` | `test_openai_agents_interop_agent_runs_inside_a_real_activity` en verde — un `agents.Agent`/`agents.Runner` real (dependencia real, `openai-agents`) corre dentro de una única Activity real; su modelo es el propio `OpenAIChatCompletionsModel` del SDK apuntado a `aeon-modelgw`'s `POST /v1/chat/completions` (INT-002) — nunca un SDK de proveedor directamente — y su tool-calling nativo (`FunctionTool` real, no bypaseado como en `INT-004`) dispara una llamada real a `execute_tool` (RUN-004) decidida por el propio Agent, no por la Activity. Verificado end-to-end contra un Temporal efímero real y un worker real separado | python/aeon_adapters/openai_agents/adapter.py, python/aeon_adapters/openai_agents/example_agent.py, python/tests/integration/test_openai_agents_interop_workflow.py |
 | INT-006 | `FrameworkAdapter` Microsoft Agent Framework | `DONE` | `test_maf_interop_agent_runs_inside_a_real_activity` en verde — un `agent_framework.Agent` real (dependencias reales, `agent-framework-core`+`agent-framework-openai`, sin el meta-paquete `agent-framework`) corre dentro de una única Activity real; su chat client es el propio `OpenAIChatCompletionClient` del SDK (deliberadamente no el `OpenAIChatClient` por defecto, que habla la API Responses en vez de Chat Completions) apuntado a `aeon-modelgw`'s `POST /v1/chat/completions` (INT-002) — nunca un SDK de proveedor directamente — y su tool-calling nativo (`agent_framework.tool` real) dispara una llamada real a `execute_tool` (RUN-004) decidida por el propio Agent, no por la Activity. Mismo patrón que `INT-005`. Verificado end-to-end contra un Temporal efímero real y un worker real separado | python/aeon_adapters/microsoft_agent_framework/adapter.py, python/aeon_adapters/microsoft_agent_framework/example_agent.py, python/tests/integration/test_maf_interop_workflow.py |
-| INT-007 | `FrameworkAdapter` Claude Agent SDK | `TODO` | ídem | — |
+| INT-007 | `FrameworkAdapter` Claude Agent SDK | `DONE` | `test_claude_agent_interop_agent_runs_inside_a_real_activity` en verde — un `claude_agent_sdk.ClaudeSDKClient` real (dependencia real; envuelve el CLI real `claude`/Claude Code vía npm, no una reimplementación) corre dentro de una única Activity real. A diferencia de `INT-001`/`INT-004`/`INT-005`/`INT-006`, el modelo NO se enruta por el Model Gateway de Aeon — esta SDK no tiene ese punto de extensión, ver la nota de diseño abajo — pero `ClaudeAgentOptions(tools=[])` excluye por completo cada tool nativa de Claude Code (Bash, Read, Write, WebFetch, ...) y el único tool disponible es un MCP tool propio en proceso que llama a `execute_tool` (RUN-004) real, decidido por el propio bucle de razonamiento de Claude. Verificado end-to-end contra un Temporal efímero real y un worker real separado, con el CLI real redirigido vía `ANTHROPIC_BASE_URL` a un servidor Anthropic Messages API falso (sin coste, sin credenciales reales) | python/aeon_adapters/claude_agent_sdk/adapter.py, python/aeon_adapters/claude_agent_sdk/example_agent.py, python/tests/integration/test_claude_agent_interop_workflow.py |
 | TOOL-003 | Sandbox (shell/code/browser, microVM/gVisor, egress allowlist) | `TODO` | `test_sandbox_egress_denied_by_default` en verde | — |
 | SEC-002 | Secret Broker (short-lived credentials) | `TODO` | `test_no_secret_in_prompt` en verde | — |
 | FND-002 | ABOM (bill of materials firmado, reproducible) | `TODO` | `aeon publish` genera y firma el ABOM | — |
@@ -884,6 +887,42 @@ meta-paquete) instala ~30 integraciones de proveedor (Anthropic, Bedrock, Gemini
 mem0, ...) que Aeon no usa — mismo problema de sobre-instalación que ya dejó `crewai` documentado en
 `backlog.md`. Aquí se evitó desde el principio: `pyproject.toml` sólo declara
 `agent-framework-core`+`agent-framework-openai`, no el meta-paquete.
+
+INT-007 (`FrameworkAdapter` Claude Agent SDK) es el último de los cinco `FrameworkAdapter` y el
+único con una forma realmente distinta — no una repetición mecánica del mismo patrón. Investigar el
+paquete real (`claude-agent-sdk`, no la documentación) reveló el hecho central: es un envoltorio
+delgado sobre el CLI real `claude` (Claude Code), lanzado como subproceso vía npm — no hay ningún
+punto de extensión tipo "cliente de modelo personalizado" como en `INT-005`/`INT-006`. El CLI llama
+directamente a la API Messages de Anthropic (o a lo que `ANTHROPIC_BASE_URL`/Bedrock/Vertex tenga
+configurado el host) — enrutar esto por Aeon exigiría un endpoint nuevo en `aeon-modelgw` compatible
+con la API Messages de Anthropic (un `INT-002` equivalente para ese wire format, que hoy sólo habla
+OpenAI Chat Completions) — un requisito previo real, no trivial, que esta feature no intenta resolver
+y deja documentado en `backlog.md` en vez de fingir que lo cumple.
+
+La compensación real, deliberada: en vez de enrutar el modelo, esta integración enruta el *tool* —
+el trade-off inverso al de `INT-004` (CrewAI enrutó el modelo, evitó el tool-calling nativo).
+`ClaudeAgentOptions(tools=[])` excluye por completo cada tool nativa de Claude Code (Bash, Read,
+Write, Edit, Glob, Grep, WebFetch, WebSearch, ...) — no sólo sin aprobación, directamente no se le
+ofrecen al modelo — y el único tool disponible es un MCP tool propio en proceso
+(`claude_agent_sdk.tool` + `create_sdk_mcp_server`) que llama a `execute_tool` (RUN-004) real.
+Decida lo que decida Claude, el único efecto secundario posible es una llamada real y gobernada a un
+tool de Aeon.
+
+Dependencia de infraestructura real y más pesada que las otras tres (paquetes Python puros): esta
+necesita el CLI real `@anthropic-ai/claude-code` (npm) en el `PATH` — el paquete Python es un
+envoltorio, no una reimplementación. `deploy/compose/Dockerfile.python` y el target `test-python`
+del `Makefile` instalan Node.js + ese CLI por esta razón exacta. Verificado a mano antes de escribir
+código: el CLI real, redirigido vía `ANTHROPIC_BASE_URL` a un servidor local falso que habla el wire
+format real de la API Messages (no `/decide`, no Chat Completions — un formato tercero), completa un
+turno con tool-calling nativo end-to-end sin tocar la red real ni credenciales reales — la misma
+técnica de "falsear la frontera de red externa" que usa cada test de este proyecto, aplicada a un
+wire format distinto. El test de aceptación corrió limpio dentro de un contenedor efímero sin
+credenciales de Anthropic reales montadas — nunca contra el propio entorno de este agente.
+
+**Con `INT-007`, los cinco `FrameworkAdapter` (`INT-001` LangGraph, `INT-004` CrewAI, `INT-005`
+OpenAI Agents SDK, `INT-006` Microsoft Agent Framework, `INT-007` Claude Agent SDK) están
+completos** — cada uno con al menos un ejemplo real corriendo dentro de una Activity Temporal real,
+verificado end-to-end.
 
 F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
 (`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y

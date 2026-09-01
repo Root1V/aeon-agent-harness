@@ -25,6 +25,11 @@ dependencies = [
     # showed (see backlog.md).
     "agent-framework-core>=1.15",
     "agent-framework-openai>=1.14",
+    # aeon_adapters.claude_agent_sdk (INT-007, Modo B) runs a real claude_agent_sdk.ClaudeSDKClient
+    # turn loop. This package is a thin wrapper around the real `claude` (Claude Code) CLI (spawned
+    # as a subprocess, not reimplemented) — the actual `@anthropic-ai/claude-code` npm CLI must be on
+    # PATH; see deploy/compose/Dockerfile.python and Makefile's test-python target.
+    "claude-agent-sdk>=0.2",
 ]
 
 [project.optional-dependencies]
