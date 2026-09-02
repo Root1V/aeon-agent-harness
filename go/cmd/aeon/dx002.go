@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +19,8 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 	"gopkg.in/yaml.v3"
+
+	"github.com/aeon-ai/aeon/go/internal/tempoclient"
 )
 
 // ---- init -------------------------------------------------------------------------------------
@@ -149,49 +150,22 @@ func resolveTempoQueryURL() string {
 	return "http://localhost:3200"
 }
 
-type tempoSearchResponse struct {
-	Traces []struct {
-		TraceID         string `json:"traceID"`
-		RootServiceName string `json:"rootServiceName"`
-		RootTraceName   string `json:"rootTraceName"`
-		DurationMs      int    `json:"durationMs"`
-	} `json:"traces"`
-}
-
 // runTrace is `aeon trace <run_id>` (DX-002): queries a real Tempo for every span this run
 // produced — OBS-001's invoke_agent span carries the run_id as gen_ai.agent.name, the same
 // attribute go/internal/api/tracing_integration_test.go searches by. A run with no matching
 // traces (e.g. one that never went through the traced Run Controller path) is reported honestly,
-// not an error — there is nothing wrong with the command itself.
+// not an error — there is nothing wrong with the command itself. Shares its Tempo query with the
+// Agent Console (OBS-002, go/internal/tempoclient) rather than re-implementing it.
 func runTrace(w io.Writer, runID string) error {
-	tempoURL := resolveTempoQueryURL()
-	traceQL := fmt.Sprintf(`{ span.gen_ai.agent.name = %q }`, runID)
-	reqURL := tempoURL + "/api/search?" + url.Values{"q": {traceQL}, "limit": {"50"}}.Encode()
-
-	resp, err := http.Get(reqURL) //nolint:noctx // a CLI one-shot call, no surrounding context to propagate
+	traces, err := tempoclient.SearchByAgentName(context.Background(), resolveTempoQueryURL(), runID)
 	if err != nil {
-		return fmt.Errorf("querying Tempo at %s: %w", tempoURL, err)
+		return err
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("reading Tempo response: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("tempo at %s returned %d: %s", tempoURL, resp.StatusCode, string(body))
-	}
-
-	var parsed tempoSearchResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
-		return fmt.Errorf("decoding Tempo response: %w", err)
-	}
-
-	if len(parsed.Traces) == 0 {
+	if len(traces) == 0 {
 		fmt.Fprintf(w, "no traces found for run_id=%s\n", runID)
 		return nil
 	}
-	for _, t := range parsed.Traces {
+	for _, t := range traces {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%dms\n", t.TraceID, t.RootServiceName, t.RootTraceName, t.DurationMs)
 	}
 	return nil

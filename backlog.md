@@ -87,13 +87,30 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   instancia sin ver datos de otros.
 - **Coste:** XL.
 
-### Consola web (Agent Console)
+### Agent Console: context inspector y evidence graph (`OBS-002`)
 
-- **Descripción:** `OBS-002`. El MVP se inspecciona con `aeon trace` (CLI). Una UI completa
-  (trace explorer, context inspector, evidence graph) es F4.
-- **Fase objetivo:** F4.
-- **Criterio de entrada:** el CLI resulta insuficiente para onboarding de usuarios no técnicos.
-- **Coste:** XL.
+- **Descripción:** `OBS-002` (ya `DONE`) sólo entrega el trace explorer — la única de las tres
+  vistas prometidas con una fuente de datos real y durable hoy. `aeon_context`'s `LaneState` vive
+  sólo en el proceso Python de un run mientras se ejecuta (nunca se persiste);
+  `aeon_evidence.EvidenceLedger` es un objeto Python en memoria pura, sin persistencia alguna.
+  Ninguno de los dos es consultable después de que un run termine, así que un "context inspector" o
+  "evidence graph" reales necesitan antes una capa de persistencia que hoy no existe.
+- **Fase objetivo:** cuando exista una necesidad real de inspeccionar contexto/evidencia después de
+  que un run termine (hoy sólo se pueden ver mientras el run está en curso, dentro de sus propios
+  logs/trazas).
+- **Criterio de entrada:** `aeon_context`/`aeon_evidence` ganan persistencia real (Postgres, o el
+  `ObservationStore` apuntando de verdad a MinIO/S3 en vez de sólo disco local por proceso).
+- **Coste:** L (persistencia) + M (UI sobre ella).
+
+### Agent Console no está montado en `aeon-controlplane`, sólo en `aeon-runcontroller`
+
+- **Descripción:** `ConsoleHandlers` (`OBS-002`) vive junto al Run Controller porque ahí es donde
+  ya existía `Controller.Status`. No muestra nada del Agent/Tool Registry (lifecycle, cuarentena de
+  `A5`, ABOM de `FND-002`) — sólo estado de run + trace.
+- **Fase objetivo:** cuando un caso de uso real necesite ver registro y ejecución en la misma
+  página.
+- **Criterio de entrada:** ese caso de uso existe.
+- **Coste:** M.
 
 ### Quality-aware routing (MDL-002)
 
