@@ -39,7 +39,11 @@
 > con la misma clave. `A5` (circuit breaker + kill switch) cierra el ciclo de seguridad de F4: una
 > tasa de fallo real cuarentena una versión `Released` de forma durable, revoca sus leases de
 > secreto reales y bloquea nuevos runs contra un Temporal real, antes de que el Run Controller lo
-> toque siquiera — probado end-to-end, no simulado. F4 va ~79% (11/14).
+> toque siquiera — probado end-to-end, no simulado. `OBS-002` añade el Agent Console: una página
+> HTML real servida por `aeon-runcontroller` que muestra el estado terminal y el trace real de un
+> run, combinando exactamente las mismas dos fuentes reales que `aeon trace`/`aeon status` ya leían
+> — acotado deliberadamente al trace explorer, sin context inspector ni evidence graph (ninguno de
+> los dos tiene todavía datos reales y durables que mostrar). F4 va ~86% (12/14).
 
 ## Resumen ejecutivo
 
@@ -222,7 +226,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | ~79% (11/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | ~86% (12/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -778,7 +782,7 @@ explícitamente en `backlog.md`, no oculto.
 | SEC-002 | Secret Broker (short-lived credentials) | `DONE` | `TestNoSecretInPrompt` en verde — un secreto real se emite como un lease de corta vida y opaco por HTTP real (`POST /secrets/issue`), y una tool call real (`secrets.whoami`) lo resuelve del lado del servidor; todo el round-trip completo (exactamente lo que volvería hacia el llamador y de ahí a un contexto de modelo renderizado) se busca byte a byte y el valor crudo del secreto no aparece nunca — verificado también que la resolución fue real (un fingerprint SHA-256 calculado del secreto conocido, no un no-op) | go/internal/secrets/broker.go, go/internal/toolexec/secrets_tool.go, go/internal/api/secret_broker_handlers_test.go |
 | FND-002 | ABOM (bill of materials firmado, reproducible) | `DONE` | `TestPublishGeneratesAndSignsReproducibleABOM` en verde — `aeon publish` escribe un ABOM real firmado con Ed25519 (`go/internal/abom`) junto al manifiesto publicado; la firma verifica (`abom.Verify`), y publicar el mismo manifiesto dos veces con la misma clave (`AEON_ABOM_SIGNING_KEY`) produce el mismo fichero ABOM byte a byte — determinismo real de Ed25519 (RFC 8032), no una promesa sin comprobar. Sin clave configurada, sigue firmando con una clave efímera y avisa explícitamente que esa firma no se reproducirá | go/internal/abom/abom.go, go/cmd/aeon/fnd002.go, go/cmd/aeon/fnd002_test.go |
 | A5 | Circuit breaker + kill switch por agente | `DONE` | `TestCircuitBreakerQuarantinesVersion` en verde — reportar suficientes fallos reales para una versión `Released` (por HTTP real) hace saltar el breaker, cuarentena la versión de forma durable en el Agent Registry real (Postgres), revoca un lease de secreto real emitido para ese agente, y — el punto de aplicación real — un `POST /runs` posterior que nombra esa versión se rechaza antes de que el Run Controller llegue siquiera a tocar un Temporal real; probado contra un servidor Temporal real, no simulado. `TestQuarantineHandlerIsAKillSwitchRegardlessOfBreakerState` prueba el kill switch manual, sin umbral de por medio | go/internal/circuitbreaker/breaker.go, go/internal/api/circuit_breaker_handlers.go, go/internal/api/circuit_breaker_handlers_test.go |
-| OBS-002 | Agent Console (trace explorer, context inspector, evidence graph) | `TODO` | UI muestra un run real de punta a punta | — |
+| OBS-002 | Agent Console (trace explorer) | `DONE` | `TestAgentConsoleShowsARunEndToEnd` en verde — un run real, arrancado por el Run Controller HTTP real contra un Temporal real y un worker real, termina de verdad; su span `invoke_agent` real llega a una Tempo real; la página HTML servida por `GET /console/runs/{run_id}` muestra el estado terminal real (`SUCCEEDED`) y el trace real que Tempo devolvió — un navegador mostrando un run real de punta a punta, no un fixture. Alcance acotado: sólo el trace explorer; el context inspector y el evidence graph no tienen todavía una fuente de datos real y durable que mostrar (ver la nota de diseño abajo) | go/internal/api/console_handlers.go, go/internal/tempoclient/tempoclient.go, go/internal/api/console_handlers_test.go |
 | OBS-003 | FinOps (cost per run/success/agent/model/tool) | `TODO` | dashboard con `cost_model: token_based|compute_based` | — |
 | MDL-002 | Quality-aware routing (eval scores como condición de routing) | `TODO` | routing cambia con score degradado en fixture | — |
 
@@ -1023,6 +1027,37 @@ hace la llamada HTTP cruzada de controlplane a toolgw en el despliegue real de c
 `backlog.md`. Tampoco existe todavía nada que llame a `POST /outcomes` automáticamente cuando un run
 real termina — el mismo hueco de wiring que MEM-003/EVAL-004 dejaron documentado antes de que
 Reflection/Learning Eval tuvieran su propio enganche a un workflow real.
+
+OBS-002 (Agent Console) es deliberadamente sólo un tercio de su propia descripción original ("trace
+explorer, context inspector, evidence graph"). Antes de escribir HTML se comprobó qué de esos tres
+tiene de verdad datos durables y consultables después de que un run termine: `aeon_context`'s
+`LaneState` vive únicamente dentro del proceso Python de un run mientras se ejecuta, y
+`aeon_evidence.EvidenceLedger` es un objeto Python en memoria pura, sin persistencia alguna — ninguno
+de los dos existe todavía en ningún sitio que una página pudiera consultar después del hecho.
+Construir un panel de "contexto" o "evidencia" sobre datos de muestra habría roto el mismo estándar
+de "nada simulado" que cada feature anterior de esta sesión ha respetado, así que ambos quedan fuera,
+documentados en `backlog.md`, en vez de rellenados con algo falso. El trace explorer sí tiene una
+fuente real: `go/internal/tempoclient` (nuevo, compartido) extrae la consulta TraceQL que `aeon
+trace` ya hacía contra una Tempo real, y `ConsoleHandlers` (montado en `aeon-runcontroller`, junto al
+propio Run Controller) la combina con `Controller.Status` para servir una página HTML real en
+`GET /console/runs/{run_id}`. El test de aceptación no se conforma con golpear el endpoint con un
+`run_id` inventado: arranca un run real contra un Temporal real y un worker real, espera a que
+termine de verdad (`SUCCEEDED`), espera a que su span `invoke_agent` real llegue a una Tempo real, y
+sólo entonces pide la página — comprobando que el HTML devuelto contiene el estado terminal real y
+el trace real, no una cadena fija. De paso, `aeon trace` (DX-002) se refactorizó para compartir esta
+misma consulta a Tempo en vez de mantener una segunda implementación divergente.
+
+Bug real encontrado y arreglado al añadir el segundo test de este paquete que necesita tracing de
+verdad: `TestDistributedTracingSpansReachTempo` (OBS-001) y el nuevo test de OBS-002 corriendo juntos
+en el mismo binario de test hacían que uno de los dos perdiera sus spans de forma intermitente.
+Causa real: cada test llamaba a `tracing.Init` (que reemplaza el `TracerProvider` global) y luego a
+su `Shutdown` propio para forzar un flush inmediato antes de consultar Tempo — pero `Shutdown` es
+terminal, así que un tracer de paquete obtenido en otro sitio de este código (p. ej. el de
+`modelgateway`, creado una vez al arrancar el paquete) que ya se hubiera resuelto contra el
+`TracerProvider` que el primer test acababa de cerrar se quedaba apuntando a un exportador cerrado
+durante el resto del proceso. Arreglado con un `TracerProvider` compartido, inicializado una sola vez
+por binario de test (`go/internal/api/tracing_test_setup_test.go`) y sólo `ForceFlush`eado (nunca
+`Shutdown`) entre tests — verificado corriendo ambos tests juntos, repetidamente, tras el arreglo.
 
 F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
 (`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y

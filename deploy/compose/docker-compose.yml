@@ -274,6 +274,9 @@ services:
       # A5: lets checkNotQuarantined refuse a run for a quarantined agent version before Temporal is
       # ever touched. Optional — see go/cmd/aeon-runcontroller/main.go's module doc.
       AEON_PG_DSN: postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable
+      # OBS-002: Agent Console's trace panel. Optional — under --profile core alone (no Tempo
+      # running), the console still serves run status; the trace panel just reports a query error.
+      AEON_TEMPO_QUERY_URL: http://tempo:3200
     ports:
       - "9404:9404"
 

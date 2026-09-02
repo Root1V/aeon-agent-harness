@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/aeon-ai/aeon/go/internal/modelgateway"
-	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
 
 // tracingFakeProvider is a minimal providers.Provider test double, mirroring
@@ -72,18 +71,13 @@ func waitForTempoSpan(t *testing.T, tempoURL, traceQL string, timeout time.Durat
 // AEON_TEST_OTEL_ENDPOINT/AEON_TEST_TEMPO_QUERY_URL — see make test-go-integration, which brings up
 // otel-collector and tempo alongside postgres/temporal/worker.
 func TestDistributedTracingSpansReachTempo(t *testing.T) {
-	otelEndpoint := os.Getenv("AEON_TEST_OTEL_ENDPOINT")
 	tempoURL := os.Getenv("AEON_TEST_TEMPO_QUERY_URL")
-	if otelEndpoint == "" || tempoURL == "" {
-		t.Skip("AEON_TEST_OTEL_ENDPOINT/AEON_TEST_TEMPO_QUERY_URL not set — skipping tracing integration test (see make test-go-integration)")
+	if tempoURL == "" {
+		t.Skip("AEON_TEST_TEMPO_QUERY_URL not set — skipping tracing integration test (see make test-go-integration)")
 	}
+	flush := ensureTestTracing(t)
 
 	ctx := context.Background()
-	_, shutdown, err := tracing.Init(ctx, "aeon-obs001-integration-test", otelEndpoint)
-	if err != nil {
-		t.Fatalf("tracing.Init: %v", err)
-	}
-
 	marker := fmt.Sprintf("obs001-%d", time.Now().UnixNano())
 
 	// "chat" span, via the real Model Gateway routing code (go/internal/modelgateway).
@@ -102,8 +96,8 @@ func TestDistributedTracingSpansReachTempo(t *testing.T) {
 	runSrv := newRunControllerTestServer(t)
 	startRun(t, runSrv, marker, simpleGraph("obs001-tracing-test.txt"))
 
-	if err := shutdown(ctx); err != nil {
-		t.Fatalf("tracing shutdown (flush): %v", err)
+	if err := flush(ctx); err != nil {
+		t.Fatalf("flushing spans: %v", err)
 	}
 
 	waitForTempoSpan(t, tempoURL, fmt.Sprintf(`{ name = "chat" && span.gen_ai.request.model = "%s" }`, marker), 30*time.Second)

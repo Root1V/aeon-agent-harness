@@ -4,7 +4,9 @@
 // restart or scale freely, with one optional exception: A5's circuit breaker enforcement. Given
 // AEON_PG_DSN, a POST /runs naming agent_manifest_ref for a quarantined version is refused before
 // ever reaching Temporal (go/internal/api's checkNotQuarantined) — without it, this check is simply
-// skipped, exactly like before A5 existed.
+// skipped, exactly like before A5 existed. Also mounts OBS-002's Agent Console
+// (GET /console/runs/{run_id}), a real HTML page combining this same Controller.Status with a real
+// Tempo query (AEON_TEMPO_QUERY_URL, optional — empty just disables the trace panel).
 package main
 
 import (
@@ -68,12 +70,18 @@ func main() {
 		log.Println("aeon-runcontroller: AEON_PG_DSN not set — circuit breaker enforcement skipped (see A5 in roadmap.md)")
 	}
 
+	controller := runcontroller.New(temporalClient, taskQueue)
 	mux := http.NewServeMux()
 	handlers := &api.RunControllerHandlers{
-		Controller: runcontroller.New(temporalClient, taskQueue),
+		Controller: controller,
 		Registry:   registry,
 	}
 	handlers.Register(mux)
+
+	// OBS-002: the Agent Console's trace explorer. TempoURL empty simply disables the trace panel
+	// (run status still renders) — optional like everything else here.
+	tempoURL := os.Getenv("AEON_TEMPO_QUERY_URL")
+	(&api.ConsoleHandlers{Controller: controller, TempoURL: tempoURL}).Register(mux)
 
 	srv := httpserver.New("aeon-runcontroller", mux)
 	log.Printf("aeon-runcontroller starting (temporal=%s, task_queue=%s)", address, taskQueue)
