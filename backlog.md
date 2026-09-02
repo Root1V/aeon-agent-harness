@@ -111,13 +111,29 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   incidentes de seguridad de memoria.
 - **Coste:** XL.
 
-### ABOM firmado (FND-002)
+### Firma por-tool/por-skill en el ABOM (ASI04, depende de `FND-002`)
 
-- **Descripción:** bill of materials reproducible y firmado por versión/deployment.
-- **Fase objetivo:** F4.
-- **Criterio de entrada:** hay más de un entorno de despliegue (staging/prod) y se necesita
-  trazabilidad de qué versión de qué corre dónde.
+- **Descripción:** `go/internal/abom.Document` (`FND-002`, ya `DONE`) sólo incluye los *nombres* de
+  `spec.tools.allow/deny` tal como aparecen en el manifiesto — no `ToolDescriptor`s completos
+  resueltos contra el Tool Registry (hash de esquema, clasificación de riesgo, `idempotency_key`
+  requerido, etc.), porque `aeon`, el CLI, no tiene todavía un cliente HTTP del Tool Registry.
+  Firmar cada tool/skill individualmente (lo que menciona ASI04 en la redacción original de la
+  arquitectura) necesita esa resolución primero.
+- **Fase objetivo:** F4, cuando `aeon publish` (o un comando nuevo) necesite verificar que las tools
+  que un manifiesto declara existen realmente en el Registry con el `ToolDescriptor` esperado.
+- **Criterio de entrada:** `aeon` gana un cliente del Tool Registry (mismo patrón que
+  `controlplaneClient` ya usa para Agent Registry).
 - **Coste:** M.
+
+### `aeon` no tiene comando `abom verify` (depende de `FND-002`)
+
+- **Descripción:** `go/internal/abom.Verify` es real y probado, pero sólo se usa hoy desde el propio
+  `aeon publish` (para confirmar lo que acaba de firmar) y desde tests — no hay una forma de
+  verificar un `.abom.json` ya escrito, en otra máquina, sin escribir Go a mano.
+- **Fase objetivo:** cuando exista un flujo real de distribución/despliegue que necesite verificar
+  la procedencia de un ABOM antes de desplegar el agente que describe.
+- **Criterio de entrada:** ese flujo de despliegue existe.
+- **Coste:** S.
 
 ### Identidad de workload real (SPIFFE/SVID) para el Secret Broker (`SEC-002`)
 

@@ -311,6 +311,15 @@ func runPublish(w io.Writer, manifestPath string) error {
 	}
 
 	fmt.Fprintf(w, "agent=%s@%s owner=%s lifecycle=%s\n", rec.Name, rec.Version, rec.Owner, rec.Lifecycle)
+
+	abomPath, fingerprint, ephemeral, err := writeABOM(manifestPath, manifest, raw)
+	if err != nil {
+		return fmt.Errorf("generating ABOM: %w", err)
+	}
+	fmt.Fprintf(w, "abom=%s public_key=%s\n", abomPath, fingerprint)
+	if ephemeral {
+		fmt.Fprintln(w, "warning: AEON_ABOM_SIGNING_KEY is not set — signed with a freshly generated, ephemeral key; this ABOM's signature will NOT reproduce on a future run")
+	}
 	return nil
 }
 

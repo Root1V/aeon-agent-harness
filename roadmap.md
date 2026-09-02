@@ -34,7 +34,9 @@
 > gVisor/Firecracker — ver la nota de F4 abajo). `SEC-002` (Secret Broker) añade emisión real de
 > leases de corta vida: un llamador nunca ve un secreto crudo, sólo una referencia opaca que una
 > tool call resuelve del lado del servidor — verificado buscando el valor crudo byte a byte en todo
-> el round-trip HTTP real. F4 va ~64% (9/14).
+> el round-trip HTTP real. `FND-002` (ABOM) cierra `aeon publish`: cada publicación escribe un bill
+> of materials real firmado con Ed25519 junto al manifiesto, verificable y reproducible byte a byte
+> con la misma clave. F4 va ~71% (10/14).
 
 ## Resumen ejecutivo
 
@@ -217,7 +219,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | ~64% (9/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | ~71% (10/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -771,7 +773,7 @@ explícitamente en `backlog.md`, no oculto.
 | INT-007 | `FrameworkAdapter` Claude Agent SDK | `DONE` | `test_claude_agent_interop_agent_runs_inside_a_real_activity` en verde — un `claude_agent_sdk.ClaudeSDKClient` real (dependencia real; envuelve el CLI real `claude`/Claude Code vía npm, no una reimplementación) corre dentro de una única Activity real. A diferencia de `INT-001`/`INT-004`/`INT-005`/`INT-006`, el modelo NO se enruta por el Model Gateway de Aeon — esta SDK no tiene ese punto de extensión, ver la nota de diseño abajo — pero `ClaudeAgentOptions(tools=[])` excluye por completo cada tool nativa de Claude Code (Bash, Read, Write, WebFetch, ...) y el único tool disponible es un MCP tool propio en proceso que llama a `execute_tool` (RUN-004) real, decidido por el propio bucle de razonamiento de Claude. Verificado end-to-end contra un Temporal efímero real y un worker real separado, con el CLI real redirigido vía `ANTHROPIC_BASE_URL` a un servidor Anthropic Messages API falso (sin coste, sin credenciales reales) | python/aeon_adapters/claude_agent_sdk/adapter.py, python/aeon_adapters/claude_agent_sdk/example_agent.py, python/tests/integration/test_claude_agent_interop_workflow.py |
 | TOOL-003 | Sandbox (shell/code/browser, microVM/gVisor, egress allowlist) | `DONE` | `TestSandboxEgressDeniedByDefault` en verde — un `shell.exec` real (ya no un stub falso) corre dentro de un contenedor Docker real sin stack de red (`NetworkMode("none")`), rootfs de sólo lectura, todas las capabilities eliminadas y `no-new-privileges`; una resolución DNS falla al instante, no por timeout. Motor de aislamiento real: contenedores Docker vía el cliente oficial de la Engine API (`github.com/moby/moby/client`), no gVisor/Firecracker — ver la nota de diseño abajo. Sólo deniega-por-defecto está implementado; el allowlist de egress configurable queda en `backlog.md` | go/internal/sandbox/sandbox.go, go/internal/sandbox/sandbox_test.go, go/internal/toolexec/executor.go |
 | SEC-002 | Secret Broker (short-lived credentials) | `DONE` | `TestNoSecretInPrompt` en verde — un secreto real se emite como un lease de corta vida y opaco por HTTP real (`POST /secrets/issue`), y una tool call real (`secrets.whoami`) lo resuelve del lado del servidor; todo el round-trip completo (exactamente lo que volvería hacia el llamador y de ahí a un contexto de modelo renderizado) se busca byte a byte y el valor crudo del secreto no aparece nunca — verificado también que la resolución fue real (un fingerprint SHA-256 calculado del secreto conocido, no un no-op) | go/internal/secrets/broker.go, go/internal/toolexec/secrets_tool.go, go/internal/api/secret_broker_handlers_test.go |
-| FND-002 | ABOM (bill of materials firmado, reproducible) | `TODO` | `aeon publish` genera y firma el ABOM | — |
+| FND-002 | ABOM (bill of materials firmado, reproducible) | `DONE` | `TestPublishGeneratesAndSignsReproducibleABOM` en verde — `aeon publish` escribe un ABOM real firmado con Ed25519 (`go/internal/abom`) junto al manifiesto publicado; la firma verifica (`abom.Verify`), y publicar el mismo manifiesto dos veces con la misma clave (`AEON_ABOM_SIGNING_KEY`) produce el mismo fichero ABOM byte a byte — determinismo real de Ed25519 (RFC 8032), no una promesa sin comprobar. Sin clave configurada, sigue firmando con una clave efímera y avisa explícitamente que esa firma no se reproducirá | go/internal/abom/abom.go, go/cmd/aeon/fnd002.go, go/cmd/aeon/fnd002_test.go |
 | — | Circuit breaker + kill switch por agente (A5) | `TODO` | `test_circuit_breaker_quarantines_version` en verde | — |
 | OBS-002 | Agent Console (trace explorer, context inspector, evidence graph) | `TODO` | UI muestra un run real de punta a punta | — |
 | OBS-003 | FinOps (cost per run/success/agent/model/tool) | `TODO` | dashboard con `cost_model: token_based|compute_based` | — |
@@ -974,6 +976,25 @@ efectivamente ocurrió, no que el test pasa por no hacer nada. Identidad de work
 implementada — necesitaría un servidor SPIRE real y infraestructura de attestation, un requisito
 previo propio que queda en `backlog.md`, igual que el hecho de que montar el socket de Docker de
 `toolgw` (`TOOL-003`) le da acceso equivalente a root sobre el host sin que este Broker lo cubra.
+
+FND-002 (ABOM) cierra `aeon publish` (DX-002), que hasta ahora sólo registraba el manifiesto en el
+control plane y lo promovía Draft → Candidate. `go/internal/abom.Document` extrae del propio
+manifiesto ya parseado (identidad del agente, `spec.modelPolicy`, `spec.tools.allow/deny`,
+`spec.evalGates`) más el hash SHA-256 de los bytes crudos realmente publicados — nunca de una
+re-serialización, así que verifica contra el fichero literal, no contra una reconstrucción que
+podría divergir. "Reproducible" es una propiedad real y comprobada, no una etiqueta: `Document` no
+lleva ningún campo no determinista (sin timestamp), y las firmas Ed25519 son deterministas por
+diseño (RFC 8032: misma clave + mismo mensaje siempre produce la misma firma, a diferencia de ECDSA)
+— el test de aceptación publica el mismo manifiesto dos veces con la misma clave
+(`AEON_ABOM_SIGNING_KEY`) y exige que el fichero `.abom.json` completo salga byte a byte idéntico,
+no sólo que ambas firmas verifiquen por separado. Sin esa variable configurada, `aeon publish` sigue
+firmando con una clave Ed25519 generada al vuelo — el ABOM resultante verifica igual de bien, pero el
+CLI imprime una advertencia explícita de que esa firma en concreto no se reproducirá en una
+publicación futura. Alcance real y acotado, documentado en `backlog.md`: las entradas `tools`/`deny`
+del ABOM son los nombres que el propio manifiesto declara, no `ToolDescriptor`s completos resueltos
+contra el Tool Registry — `aeon`, el CLI, no tiene todavía un cliente del Tool Registry — así que la
+firma real por-tool/por-skill que menciona la arquitectura (ASI04) queda pendiente de esa resolución
+previa.
 
 F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
 (`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y
