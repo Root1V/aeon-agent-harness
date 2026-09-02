@@ -1,9 +1,11 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -12,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/aeon-ai/aeon/go/internal/runcontroller"
+	"github.com/aeon-ai/aeon/go/internal/store"
 )
 
 // runControllerTracer emits OBS-001's "invoke_agent" span (OTel GenAI semantic conventions) around
@@ -21,8 +24,13 @@ var runControllerTracer = otel.Tracer("aeon-runcontroller")
 
 // RunControllerHandlers exposes RUN-001: start/cancel/pause/resume/status/stream for a run, as a
 // thin HTTP layer over runcontroller.Controller (which does the actual Temporal client calls).
+// Registry is optional (A5): when set and a start request names agent_manifest_ref, a quarantined
+// version's run is refused before Controller.Start is ever called — the circuit breaker's
+// enforcement point. Nil, or an omitted agent_manifest_ref, skips the check entirely (unaffected,
+// pre-A5 behavior).
 type RunControllerHandlers struct {
 	Controller *runcontroller.Controller
+	Registry   *store.AgentRegistry
 }
 
 // Register mounts the run controller routes on mux.
@@ -43,6 +51,32 @@ type startRunRequest struct {
 	RunID   string         `json:"run_id"`
 	Graph   map[string]any `json:"graph"`
 	Budgets map[string]any `json:"budgets,omitempty"` // RUN-003: optional {max_tool_calls, max_depth, deadline_seconds}
+	// AgentManifestRef (A5, optional): "name@version" of the AgentManifest this run belongs to. When
+	// set and Registry is configured, a quarantined version is refused here — a real circuit
+	// breaker enforcement point, not just an advisory flag. Omitted entirely: unaffected.
+	AgentManifestRef string `json:"agent_manifest_ref,omitempty"`
+}
+
+// checkNotQuarantined enforces A5's circuit breaker at the one place that matters: before a new run
+// is ever started. A missing registry, an empty ref, a malformed ref, or an unknown agent are all
+// treated as "nothing to enforce" — this check's only job is to refuse a KNOWN, quarantined agent
+// version, never to validate ref shape or agent existence (that's other code's job).
+func checkNotQuarantined(ctx context.Context, registry *store.AgentRegistry, agentManifestRef string) error {
+	if registry == nil || agentManifestRef == "" {
+		return nil
+	}
+	name, version, ok := strings.Cut(agentManifestRef, "@")
+	if !ok {
+		return nil
+	}
+	rec, err := registry.Get(ctx, name, version)
+	if err != nil {
+		return nil
+	}
+	if rec.Quarantined {
+		return fmt.Errorf("agent %s is quarantined: %s", agentManifestRef, rec.QuarantineReason)
+	}
+	return nil
 }
 
 func (h *RunControllerHandlers) start(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +95,12 @@ func (h *RunControllerHandlers) start(w http.ResponseWriter, r *http.Request) {
 		attribute.String("gen_ai.agent.name", body.RunID),
 	))
 	defer span.End()
+
+	if err := checkNotQuarantined(ctx, h.Registry, body.AgentManifestRef); err != nil {
+		span.SetStatus(codes.Error, "quarantined")
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
+		return
+	}
 
 	info, err := h.Controller.Start(ctx, body.RunID, body.Graph, body.Budgets)
 	if err != nil {

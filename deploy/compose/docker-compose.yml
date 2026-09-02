@@ -266,9 +266,14 @@ services:
     depends_on:
       temporal:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       <<: *common-env
       AEON_TEMPORAL_ADDRESS: temporal:7233
+      # A5: lets checkNotQuarantined refuse a run for a quarantined agent version before Temporal is
+      # ever touched. Optional — see go/cmd/aeon-runcontroller/main.go's module doc.
+      AEON_PG_DSN: postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable
     ports:
       - "9404:9404"
 

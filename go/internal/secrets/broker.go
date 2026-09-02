@@ -32,6 +32,7 @@ const DefaultLeaseTTL = 5 * time.Minute
 type lease struct {
 	secretName string
 	expiresAt  time.Time
+	owner      string // e.g. "agent-name@1.0.0" — empty for a lease issued with no owner (Issue)
 }
 
 // Broker holds named secret values (never exposed directly except via Resolve) and issues
@@ -75,8 +76,17 @@ func envVarName(name string) string {
 
 // Issue mints a short-lived, opaque lease reference for the named secret — never the secret value
 // itself. The lease is valid (repeatedly resolvable, like Vault's dynamic-secret leases, not
-// single-use) until it expires or is explicitly Revoked.
+// single-use) until it expires or is explicitly Revoked. Equivalent to IssueForOwner with an empty
+// owner (a lease no circuit breaker/kill switch (A5) can revoke by owner).
 func (b *Broker) Issue(name string, ttl time.Duration) (ref string, expiresAt time.Time, err error) {
+	return b.IssueForOwner(name, ttl, "")
+}
+
+// IssueForOwner is Issue, additionally tagging the lease with owner (e.g. an agent identity,
+// "name@version") so a later RevokeAllForOwner can cut off every credential a specific agent
+// version currently holds — the "revocación de credenciales en caliente" half of A5's circuit
+// breaker + kill switch, without needing to know individual lease refs.
+func (b *Broker) IssueForOwner(name string, ttl time.Duration, owner string) (ref string, expiresAt time.Time, err error) {
 	if ttl <= 0 {
 		ttl = DefaultLeaseTTL
 	}
@@ -92,7 +102,7 @@ func (b *Broker) Issue(name string, ttl time.Duration) (ref string, expiresAt ti
 		return "", time.Time{}, err
 	}
 	expiresAt = time.Now().Add(ttl)
-	b.leases[ref] = lease{secretName: name, expiresAt: expiresAt}
+	b.leases[ref] = lease{secretName: name, expiresAt: expiresAt, owner: owner}
 	return ref, expiresAt, nil
 }
 
@@ -125,6 +135,26 @@ func (b *Broker) Revoke(ref string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	delete(b.leases, ref)
+}
+
+// RevokeAllForOwner immediately invalidates every still-active lease tagged with owner (see
+// IssueForOwner) — a real "revoke this agent's credentials right now" kill switch, without the
+// caller needing to track individual lease refs. Returns how many leases were revoked. A lease
+// issued via the plain Issue (empty owner) is never matched by a non-empty owner query.
+func (b *Broker) RevokeAllForOwner(owner string) int {
+	if owner == "" {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	revoked := 0
+	for ref, l := range b.leases {
+		if l.owner == owner {
+			delete(b.leases, ref)
+			revoked++
+		}
+	}
+	return revoked
 }
 
 func randomRef() (string, error) {

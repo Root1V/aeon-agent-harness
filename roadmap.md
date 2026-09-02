@@ -36,7 +36,10 @@
 > tool call resuelve del lado del servidor — verificado buscando el valor crudo byte a byte en todo
 > el round-trip HTTP real. `FND-002` (ABOM) cierra `aeon publish`: cada publicación escribe un bill
 > of materials real firmado con Ed25519 junto al manifiesto, verificable y reproducible byte a byte
-> con la misma clave. F4 va ~71% (10/14).
+> con la misma clave. `A5` (circuit breaker + kill switch) cierra el ciclo de seguridad de F4: una
+> tasa de fallo real cuarentena una versión `Released` de forma durable, revoca sus leases de
+> secreto reales y bloquea nuevos runs contra un Temporal real, antes de que el Run Controller lo
+> toque siquiera — probado end-to-end, no simulado. F4 va ~79% (11/14).
 
 ## Resumen ejecutivo
 
@@ -219,7 +222,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | ~71% (10/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | ~79% (11/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -774,7 +777,7 @@ explícitamente en `backlog.md`, no oculto.
 | TOOL-003 | Sandbox (shell/code/browser, microVM/gVisor, egress allowlist) | `DONE` | `TestSandboxEgressDeniedByDefault` en verde — un `shell.exec` real (ya no un stub falso) corre dentro de un contenedor Docker real sin stack de red (`NetworkMode("none")`), rootfs de sólo lectura, todas las capabilities eliminadas y `no-new-privileges`; una resolución DNS falla al instante, no por timeout. Motor de aislamiento real: contenedores Docker vía el cliente oficial de la Engine API (`github.com/moby/moby/client`), no gVisor/Firecracker — ver la nota de diseño abajo. Sólo deniega-por-defecto está implementado; el allowlist de egress configurable queda en `backlog.md` | go/internal/sandbox/sandbox.go, go/internal/sandbox/sandbox_test.go, go/internal/toolexec/executor.go |
 | SEC-002 | Secret Broker (short-lived credentials) | `DONE` | `TestNoSecretInPrompt` en verde — un secreto real se emite como un lease de corta vida y opaco por HTTP real (`POST /secrets/issue`), y una tool call real (`secrets.whoami`) lo resuelve del lado del servidor; todo el round-trip completo (exactamente lo que volvería hacia el llamador y de ahí a un contexto de modelo renderizado) se busca byte a byte y el valor crudo del secreto no aparece nunca — verificado también que la resolución fue real (un fingerprint SHA-256 calculado del secreto conocido, no un no-op) | go/internal/secrets/broker.go, go/internal/toolexec/secrets_tool.go, go/internal/api/secret_broker_handlers_test.go |
 | FND-002 | ABOM (bill of materials firmado, reproducible) | `DONE` | `TestPublishGeneratesAndSignsReproducibleABOM` en verde — `aeon publish` escribe un ABOM real firmado con Ed25519 (`go/internal/abom`) junto al manifiesto publicado; la firma verifica (`abom.Verify`), y publicar el mismo manifiesto dos veces con la misma clave (`AEON_ABOM_SIGNING_KEY`) produce el mismo fichero ABOM byte a byte — determinismo real de Ed25519 (RFC 8032), no una promesa sin comprobar. Sin clave configurada, sigue firmando con una clave efímera y avisa explícitamente que esa firma no se reproducirá | go/internal/abom/abom.go, go/cmd/aeon/fnd002.go, go/cmd/aeon/fnd002_test.go |
-| — | Circuit breaker + kill switch por agente (A5) | `TODO` | `test_circuit_breaker_quarantines_version` en verde | — |
+| A5 | Circuit breaker + kill switch por agente | `DONE` | `TestCircuitBreakerQuarantinesVersion` en verde — reportar suficientes fallos reales para una versión `Released` (por HTTP real) hace saltar el breaker, cuarentena la versión de forma durable en el Agent Registry real (Postgres), revoca un lease de secreto real emitido para ese agente, y — el punto de aplicación real — un `POST /runs` posterior que nombra esa versión se rechaza antes de que el Run Controller llegue siquiera a tocar un Temporal real; probado contra un servidor Temporal real, no simulado. `TestQuarantineHandlerIsAKillSwitchRegardlessOfBreakerState` prueba el kill switch manual, sin umbral de por medio | go/internal/circuitbreaker/breaker.go, go/internal/api/circuit_breaker_handlers.go, go/internal/api/circuit_breaker_handlers_test.go |
 | OBS-002 | Agent Console (trace explorer, context inspector, evidence graph) | `TODO` | UI muestra un run real de punta a punta | — |
 | OBS-003 | FinOps (cost per run/success/agent/model/tool) | `TODO` | dashboard con `cost_model: token_based|compute_based` | — |
 | MDL-002 | Quality-aware routing (eval scores como condición de routing) | `TODO` | routing cambia con score degradado en fixture | — |
@@ -995,6 +998,31 @@ del ABOM son los nombres que el propio manifiesto declara, no `ToolDescriptor`s 
 contra el Tool Registry — `aeon`, el CLI, no tiene todavía un cliente del Tool Registry — así que la
 firma real por-tool/por-skill que menciona la arquitectura (ASI04) queda pendiente de esa resolución
 previa.
+
+A5 (circuit breaker + kill switch) añade `go/internal/circuitbreaker.Breaker` — lógica pura, sin
+dependencia de Postgres/HTTP, deliberadamente separada de `store.AgentRegistry.Quarantine`
+(aplicación durable) la misma separación entre Decision y quien la aplica que ADR-001 ya establece
+en todos lados. `Quarantine`/`Unquarantine` son deliberadamente **independientes** del mapa
+`validTransitions` forward-only que gobierna Draft→Candidate→Released→Retired: una versión
+cuarentenada sigue siendo `Released` en todo momento — cuarentena es un flag ortogonal, no un
+movimiento de lifecycle, la misma solución de diseño que MEM-005 ya usó (un segundo mapa de
+transiciones separado del pipeline pre-active) para el mismo problema estructural. El breaker
+mantiene una ventana móvil por versión de agente y hace saltar la cuarentena automáticamente cuando
+la tasa de fallo la supera; el kill switch manual (`POST /agents/{name}/{version}/quarantine`) es
+literalmente la misma llamada a `Quarantine`, sin pasar por ningún umbral. SEC-002 (Secret Broker)
+se extiende con `IssueForOwner`/`RevokeAllForOwner` para que cuarentenar una versión revoque también,
+de verdad, cualquier lease de secreto que esa versión tuviera emitido — la "revocación de
+credenciales en caliente" que el backlog prometía. El punto de aplicación real es
+`go/internal/api`'s `checkNotQuarantined`, llamado desde `RunControllerHandlers.start` antes de que
+`runcontroller.Controller.Start` toque Temporal — el test de aceptación lo prueba contra un servidor
+Temporal real: un run arranca con normalidad antes de la cuarentena, y es rechazado con 403 después,
+sin que se cree ningún workflow. Hueco real y documentado, no oculto: `aeon-controlplane` (donde vive
+el Registry) y `aeon-toolgw` (donde vive el Secret Broker en producción) son procesos distintos —
+`RevokeAllForOwner` funciona de verdad en el mismo proceso (como prueba el test), pero nada todavía
+hace la llamada HTTP cruzada de controlplane a toolgw en el despliegue real de compose; queda en
+`backlog.md`. Tampoco existe todavía nada que llame a `POST /outcomes` automáticamente cuando un run
+real termina — el mismo hueco de wiring que MEM-003/EVAL-004 dejaron documentado antes de que
+Reflection/Learning Eval tuvieran su propio enganche a un workflow real.
 
 F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
 (`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y

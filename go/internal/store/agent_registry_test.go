@@ -174,3 +174,82 @@ func TestAgentRegistryReleaseGateBlocksPromotion(t *testing.T) {
 		}
 	})
 }
+
+// releaseTestAgent creates and walks a fresh agent version all the way to Released — the only
+// lifecycle state Quarantine accepts.
+func releaseTestAgent(t *testing.T, registry *AgentRegistry, name string) (version string) {
+	t.Helper()
+	ctx := context.Background()
+	version = "0.1.0"
+	if _, err := registry.Create(ctx, testAgentManifest(name, version), "test-owner"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := registry.TransitionLifecycle(ctx, name, version, LifecycleCandidate, ReleaseGateDecision{}); err != nil {
+		t.Fatalf("Draft->Candidate: %v", err)
+	}
+	if _, err := registry.TransitionLifecycle(ctx, name, version, LifecycleReleased, ReleaseGateDecision{Allowed: true}); err != nil {
+		t.Fatalf("Candidate->Released: %v", err)
+	}
+	return version
+}
+
+// TestAgentRegistryQuarantine is A5's registry-side acceptance test: a Released version can be
+// quarantined (the circuit breaker's trip action and the manual kill switch are the same operation
+// — see go/internal/circuitbreaker), the flag and reason are visible via Get, lifecycle itself never
+// changes, and Unquarantine reverses it.
+func TestAgentRegistryQuarantine(t *testing.T) {
+	s := newTestStore(t)
+	registry := s.AgentRegistry()
+	ctx := context.Background()
+	name := "test-agent-quarantine-" + randSuffix(t)
+	version := releaseTestAgent(t, registry, name)
+
+	t.Run("a fresh Released version is not quarantined", func(t *testing.T) {
+		rec, err := registry.Get(ctx, name, version)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if rec.Quarantined {
+			t.Fatal("expected a freshly released agent to not be quarantined")
+		}
+	})
+
+	t.Run("Quarantine sets the flag and reason without touching lifecycle", func(t *testing.T) {
+		rec, err := registry.Quarantine(ctx, name, version, "failure rate 0.80 over last 10 runs exceeds 0.50")
+		if err != nil {
+			t.Fatalf("Quarantine: %v", err)
+		}
+		if !rec.Quarantined {
+			t.Fatal("expected Quarantined = true")
+		}
+		if !strings.Contains(rec.QuarantineReason, "failure rate") {
+			t.Fatalf("unexpected QuarantineReason: %q", rec.QuarantineReason)
+		}
+		if rec.Lifecycle != LifecycleReleased {
+			t.Fatalf("lifecycle = %q, want unchanged %q", rec.Lifecycle, LifecycleReleased)
+		}
+	})
+
+	t.Run("Quarantine rejects a version that isn't Released", func(t *testing.T) {
+		draftName := "test-agent-quarantine-draft-" + randSuffix(t)
+		if _, err := registry.Create(ctx, testAgentManifest(draftName, "0.1.0"), "test-owner"); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if _, err := registry.Quarantine(ctx, draftName, "0.1.0", "manual kill switch"); !errors.Is(err, ErrNotReleased) {
+			t.Fatalf("got %v, want ErrNotReleased", err)
+		}
+	})
+
+	t.Run("Unquarantine reverses it", func(t *testing.T) {
+		rec, err := registry.Unquarantine(ctx, name, version)
+		if err != nil {
+			t.Fatalf("Unquarantine: %v", err)
+		}
+		if rec.Quarantined {
+			t.Fatal("expected Quarantined = false after Unquarantine")
+		}
+		if rec.QuarantineReason != "" {
+			t.Fatalf("expected QuarantineReason cleared, got %q", rec.QuarantineReason)
+		}
+	})
+}
