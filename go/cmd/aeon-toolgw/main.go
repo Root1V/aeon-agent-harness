@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	aeonmcp "github.com/aeon-ai/aeon/go/internal/mcp"
 	"github.com/aeon-ai/aeon/go/internal/policy"
+	"github.com/aeon-ai/aeon/go/internal/secrets"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/toolexec"
 	"github.com/aeon-ai/aeon/go/internal/tracing"
@@ -68,12 +70,30 @@ func main() {
 
 	executor := toolexec.NewExecutor()
 
+	// SEC-002: a real Secret Broker — callers get short-lived, opaque lease references (POST
+	// /secrets/issue), never the raw values; only "secrets.whoami"'s own server-side execution ever
+	// resolves one (go/internal/secrets, go/internal/toolexec/secrets_tool.go). AEON_SECRET_NAMES is
+	// a comma-separated list of secret names to load from AEON_SECRET_<NAME> env vars — optional,
+	// like AEON_PG_DSN above: with none configured, Issue simply fails per-name rather than this
+	// process refusing to start.
+	var secretNames []string
+	if raw := os.Getenv("AEON_SECRET_NAMES"); raw != "" {
+		for _, name := range strings.Split(raw, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				secretNames = append(secretNames, name)
+			}
+		}
+	}
+	broker := secrets.NewBrokerFromEnv(secretNames)
+	toolexec.RegisterSecretsTool(executor, broker)
+
 	mux := http.NewServeMux()
 	handlers := &api.ToolGatewayHandlers{
 		Policy:   engine,
 		Executor: executor,
 	}
 	handlers.Register(mux)
+	(&api.SecretBrokerHandlers{Broker: broker}).Register(mux)
 
 	// INT-003: expose the real, Postgres-backed Tool Registry (TOOL-001) as a real outbound MCP
 	// server, so any real MCP client (LangGraph, CrewAI, Claude Code, ...) can list and call

@@ -218,12 +218,19 @@ services:
       # Config-as-code (FND-003): the policy bundle is a file in Git, mounted read-only, not baked
       # into the image. Point this at a different bundle to authorize a different set of agents.
       AEON_POLICY_BUNDLE_PATH: /examples/deep-research/policy_bundle.yaml
+      # SEC-002: comma-separated names the Secret Broker loads from AEON_SECRET_<NAME> env vars
+      # (see .env.example) — optional, empty until a real tool needs a credential.
+      AEON_SECRET_NAMES: "${AEON_SECRET_NAMES:-}"
+    env_file:
+      - path: ../../.env
+        required: false
     volumes:
       - ../../examples:/examples:ro
       # TOOL-003: go/internal/sandbox spawns real, isolated containers for shell.exec via the host
       # Docker daemon (sibling containers, not nested Docker-in-Docker) — this grants toolgw
-      # root-equivalent access to the host. Real, current tradeoff, not a mistake: no credential
-      # isolation exists yet for this socket (see SEC-002, Secret Broker, still backlog.md).
+      # root-equivalent access to the host. Real, current tradeoff, not a mistake: SEC-002's Secret
+      # Broker doesn't cover this socket — there's no credential isolation for it yet (see
+      # backlog.md).
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "9403:9403"
