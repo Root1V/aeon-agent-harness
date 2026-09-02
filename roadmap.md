@@ -31,7 +31,10 @@
 > **5 `FrameworkAdapter` (`INT-001`/`INT-004`/`INT-005`/`INT-006`/`INT-007`) están completas**, y
 > `TOOL-003` (Sandbox) cierra el hueco de `shell.exec`: ya no es un stub falso, corre de verdad
 > dentro de un contenedor Docker real sin stack de red por defecto (motor de aislamiento real, no
-> gVisor/Firecracker — ver la nota de F4 abajo). F4 va ~57% (8/14).
+> gVisor/Firecracker — ver la nota de F4 abajo). `SEC-002` (Secret Broker) añade emisión real de
+> leases de corta vida: un llamador nunca ve un secreto crudo, sólo una referencia opaca que una
+> tool call resuelve del lado del servidor — verificado buscando el valor crudo byte a byte en todo
+> el round-trip HTTP real. F4 va ~64% (9/14).
 
 ## Resumen ejecutivo
 
@@ -214,7 +217,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | ~57% (8/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | ~64% (9/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -767,7 +770,7 @@ explícitamente en `backlog.md`, no oculto.
 | INT-006 | `FrameworkAdapter` Microsoft Agent Framework | `DONE` | `test_maf_interop_agent_runs_inside_a_real_activity` en verde — un `agent_framework.Agent` real (dependencias reales, `agent-framework-core`+`agent-framework-openai`, sin el meta-paquete `agent-framework`) corre dentro de una única Activity real; su chat client es el propio `OpenAIChatCompletionClient` del SDK (deliberadamente no el `OpenAIChatClient` por defecto, que habla la API Responses en vez de Chat Completions) apuntado a `aeon-modelgw`'s `POST /v1/chat/completions` (INT-002) — nunca un SDK de proveedor directamente — y su tool-calling nativo (`agent_framework.tool` real) dispara una llamada real a `execute_tool` (RUN-004) decidida por el propio Agent, no por la Activity. Mismo patrón que `INT-005`. Verificado end-to-end contra un Temporal efímero real y un worker real separado | python/aeon_adapters/microsoft_agent_framework/adapter.py, python/aeon_adapters/microsoft_agent_framework/example_agent.py, python/tests/integration/test_maf_interop_workflow.py |
 | INT-007 | `FrameworkAdapter` Claude Agent SDK | `DONE` | `test_claude_agent_interop_agent_runs_inside_a_real_activity` en verde — un `claude_agent_sdk.ClaudeSDKClient` real (dependencia real; envuelve el CLI real `claude`/Claude Code vía npm, no una reimplementación) corre dentro de una única Activity real. A diferencia de `INT-001`/`INT-004`/`INT-005`/`INT-006`, el modelo NO se enruta por el Model Gateway de Aeon — esta SDK no tiene ese punto de extensión, ver la nota de diseño abajo — pero `ClaudeAgentOptions(tools=[])` excluye por completo cada tool nativa de Claude Code (Bash, Read, Write, WebFetch, ...) y el único tool disponible es un MCP tool propio en proceso que llama a `execute_tool` (RUN-004) real, decidido por el propio bucle de razonamiento de Claude. Verificado end-to-end contra un Temporal efímero real y un worker real separado, con el CLI real redirigido vía `ANTHROPIC_BASE_URL` a un servidor Anthropic Messages API falso (sin coste, sin credenciales reales) | python/aeon_adapters/claude_agent_sdk/adapter.py, python/aeon_adapters/claude_agent_sdk/example_agent.py, python/tests/integration/test_claude_agent_interop_workflow.py |
 | TOOL-003 | Sandbox (shell/code/browser, microVM/gVisor, egress allowlist) | `DONE` | `TestSandboxEgressDeniedByDefault` en verde — un `shell.exec` real (ya no un stub falso) corre dentro de un contenedor Docker real sin stack de red (`NetworkMode("none")`), rootfs de sólo lectura, todas las capabilities eliminadas y `no-new-privileges`; una resolución DNS falla al instante, no por timeout. Motor de aislamiento real: contenedores Docker vía el cliente oficial de la Engine API (`github.com/moby/moby/client`), no gVisor/Firecracker — ver la nota de diseño abajo. Sólo deniega-por-defecto está implementado; el allowlist de egress configurable queda en `backlog.md` | go/internal/sandbox/sandbox.go, go/internal/sandbox/sandbox_test.go, go/internal/toolexec/executor.go |
-| SEC-002 | Secret Broker (short-lived credentials) | `TODO` | `test_no_secret_in_prompt` en verde | — |
+| SEC-002 | Secret Broker (short-lived credentials) | `DONE` | `TestNoSecretInPrompt` en verde — un secreto real se emite como un lease de corta vida y opaco por HTTP real (`POST /secrets/issue`), y una tool call real (`secrets.whoami`) lo resuelve del lado del servidor; todo el round-trip completo (exactamente lo que volvería hacia el llamador y de ahí a un contexto de modelo renderizado) se busca byte a byte y el valor crudo del secreto no aparece nunca — verificado también que la resolución fue real (un fingerprint SHA-256 calculado del secreto conocido, no un no-op) | go/internal/secrets/broker.go, go/internal/toolexec/secrets_tool.go, go/internal/api/secret_broker_handlers_test.go |
 | FND-002 | ABOM (bill of materials firmado, reproducible) | `TODO` | `aeon publish` genera y firma el ABOM | — |
 | — | Circuit breaker + kill switch por agente (A5) | `TODO` | `test_circuit_breaker_quarantines_version` en verde | — |
 | OBS-002 | Agent Console (trace explorer, context inspector, evidence graph) | `TODO` | UI muestra un run real de punta a punta | — |
@@ -953,6 +956,24 @@ redacción original) queda documentado como hueco real en `backlog.md`, no ocult
 prohibido por política en el despliegue de referencia (`policy_bundle.yaml` sigue negando
 `shell.*` para todo agente) — TOOL-003 construye el motor de ejecución real que un futuro perfil de
 acción usaría, no cambia qué agentes pueden invocarlo hoy.
+
+SEC-002 (Secret Broker) reemplaza, para tools nuevas que lo necesiten, el modelo de "secreto
+estático de entorno" que el resto de la plataforma sigue usando (las API keys de proveedor de
+`aeon-modelgw`, por ejemplo, siguen leyéndose directamente de variables de entorno — eso no cambia
+aquí). `go/internal/secrets.Broker` emite referencias de lease opacas y de corta vida
+(`POST /secrets/issue`) — nunca el valor crudo — y sólo la propia ejecución de una tool del lado del
+servidor puede resolver una (`Broker.Resolve`, usado por `secrets.whoami` en
+`go/internal/toolexec/secrets_tool.go`). El test de aceptación no se conforma con probar que
+`Resolve` funciona en aislamiento: hace el round-trip completo por HTTP real (emitir el lease,
+llamar a la tool con la referencia, capturar la respuesta cruda de `/execute`) y busca el valor
+crudo del secreto byte a byte en esa respuesta — exactamente el contenido que en un caller
+descuidado terminaría en un contexto de modelo renderizado. Que la tool devuelva además un
+fingerprint SHA-256 calculado del secreto real (no un valor fijo) prueba que la resolución
+efectivamente ocurrió, no que el test pasa por no hacer nada. Identidad de workload real
+(SPIFFE/SVID, mencionada junto a este feature en la redacción original de la arquitectura) no está
+implementada — necesitaría un servidor SPIRE real y infraestructura de attestation, un requisito
+previo propio que queda en `backlog.md`, igual que el hecho de que montar el socket de Docker de
+`toolgw` (`TOOL-003`) le da acceso equivalente a root sobre el host sin que este Broker lo cubra.
 
 F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
 (`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y

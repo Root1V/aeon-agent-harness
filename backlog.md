@@ -54,13 +54,13 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 
 - **Descripción:** `deploy/compose/docker-compose.yml` monta `/var/run/docker.sock` dentro de
   `toolgw` para que `go/internal/sandbox` pueda lanzar contenedores hermanos reales — esto le da a
-  `toolgw` acceso equivalente a root sobre el host Docker, sin ningún aislamiento de credenciales
-  hoy (el Secret Broker de `SEC-002` sigue en este mismo `backlog.md`). Real, no un descuido: es el
-  tradeoff exacto de "contenedores Docker como motor de sandbox" (ver la nota de diseño de
-  `TOOL-003` en `roadmap.md`).
+  `toolgw` acceso equivalente a root sobre el host Docker. `SEC-002` (Secret Broker) ya existe, pero
+  no cubre este socket — no hay ningún lease/credencial de por medio para acceder a él, es acceso
+  directo de proceso. Real, no un descuido: es el tradeoff exacto de "contenedores Docker como motor
+  de sandbox" (ver la nota de diseño de `TOOL-003` en `roadmap.md`).
 - **Fase objetivo:** antes de exponer `aeon-toolgw` fuera de un entorno de confianza single-tenant.
-- **Criterio de entrada:** `SEC-002` (Secret Broker) existe, o se adopta un runtime rootless/daemonless
-  (ej. Podman sin socket compartido) para el sandbox.
+- **Criterio de entrada:** se adopta un runtime rootless/daemonless (ej. Podman sin socket
+  compartido) para el sandbox, o el propio socket se pone detrás de algún control de acceso real.
 - **Coste:** M.
 
 ### A2A Gateway completo (más allá del Agent Card mínimo)
@@ -119,14 +119,29 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   trazabilidad de qué versión de qué corre dónde.
 - **Coste:** M.
 
-### Secret Broker (SEC-002) con credenciales de corta vida
+### Identidad de workload real (SPIFFE/SVID) para el Secret Broker (`SEC-002`)
 
-- **Descripción:** el MVP usa secretos de entorno/compose estáticos; credenciales efímeras e
-  identidad de workload (SPIFFE/SVID) son F4.
-- **Fase objetivo:** F4.
-- **Criterio de entrada:** el despliegue sale de un entorno de desarrollo/demo hacia algo con datos
-  reales sensibles.
+- **Descripción:** `go/internal/secrets.Broker` (`SEC-002`) emite leases de corta vida, pero no hay
+  identidad de workload real detrás de quién puede pedir uno — cualquier llamador con acceso a
+  `POST /secrets/issue` puede emitir un lease para cualquier secreto configurado. SPIFFE/SVID
+  necesitaría un servidor SPIRE real y infraestructura de attestation de workload, un requisito
+  previo propio, no algo que se pueda añadir incrementalmente sobre el Broker actual.
+- **Fase objetivo:** cuando el despliegue salga de un entorno de desarrollo/demo hacia algo
+  multi-tenant o con datos reales sensibles.
+- **Criterio de entrada:** existe un servidor SPIRE real (o equivalente) para atestiguar la
+  identidad de los llamadores.
 - **Coste:** L.
+
+### Los proveedores del Model Gateway no pasan por el Secret Broker (`SEC-002`)
+
+- **Descripción:** `go/cmd/aeon-modelgw/main.go` sigue leyendo `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/
+  etc. directamente de variables de entorno estáticas al arrancar — `SEC-002` no los retroadapta;
+  sólo cubre tools nuevas que decidan usar el Broker (hoy, sólo `secrets.whoami`, una tool de
+  demostración).
+- **Fase objetivo:** cuando rotar credenciales de proveedor sin reiniciar `aeon-modelgw` sea un
+  requisito real.
+- **Criterio de entrada:** un incidente o una política de rotación real lo exige.
+- **Coste:** M.
 
 ### Circuit breaker + kill switch por agente (A5)
 
@@ -377,11 +392,13 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   no existe autenticación real de cliente MCP — ver la nota de diseño en `roadmap.md` INT-003.
 - **Fase objetivo:** el refresco en vivo del catálogo encaja con `OBS-002`/Agent Console (F4, ya
   que ambos necesitan una vista actualizada del registro); la identidad real de cliente MCP
-  necesita `SEC-002` (Secret Broker) primero.
+  necesita identidad de workload real primero — `SEC-002` (Secret Broker, ya `DONE`) no la cubre,
+  es un broker de credenciales de *tools*, no de identidad de *caller*; ver la entrada de
+  SPIFFE/SVID en este mismo fichero.
 - **Criterio de entrada:** para el refresco en vivo, ninguno especial (extensión directa: recargar
-  `ToolRegistry.List()` periódicamente o en `tools/list_changed`). Para identidad real, que
-  `SEC-002` exista.
-- **Coste:** S (refresco) / M (identidad real, depende de SEC-002).
+  `ToolRegistry.List()` periódicamente o en `tools/list_changed`). Para identidad real, que exista
+  un mecanismo real de identidad de workload (SPIFFE/SVID u otro).
+- **Coste:** S (refresco) / M (identidad real, depende de identidad de workload).
 
 ### A2A Gateway (`A2A-001`) no está montado en ningún binario real todavía
 
@@ -404,8 +421,11 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   aplica ninguno — cualquier caller que alcance el endpoint puede enviar un mensaje. Mismo hueco
   que `INT-003` con MCP: hace falta autenticación real de caller antes de poder autorizar por
   identidad real en vez de tratar a todo el mundo igual.
-- **Fase objetivo:** junto con `SEC-002` (Secret Broker).
-- **Criterio de entrada:** que `SEC-002` exista.
+- **Fase objetivo:** junto con la identidad de workload real (ver la entrada de SPIFFE/SVID) —
+  `SEC-002` (Secret Broker, ya `DONE`) no resuelve esto por sí solo; es un broker de credenciales de
+  *tools*, no un mecanismo de identidad de *caller*.
+- **Criterio de entrada:** que exista un mecanismo real de identidad de workload (SPIFFE/SVID u
+  otro).
 - **Coste:** M.
 
 ### CrewAI: el tool-calling nativo del framework no está integrado (`INT-004`)
