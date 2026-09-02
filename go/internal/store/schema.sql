@@ -65,3 +65,10 @@ CREATE INDEX IF NOT EXISTS memory_records_scope_status_idx ON memory_records (sc
 -- need their own idempotent ALTER — the first real schema history this table has had.
 ALTER TABLE memory_records ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ;
 ALTER TABLE memory_records ADD COLUMN IF NOT EXISTS superseded_by UUID REFERENCES memory_records(memory_id);
+
+-- A5 (circuit breaker + kill switch): additive migration, same reasoning as MEM-005 above. This is
+-- a real, orthogonal flag alongside `lifecycle` — a Released agent that gets quarantined does NOT
+-- change lifecycle (still "Released"), since Quarantine/Unquarantine are not part of the forward-only
+-- Draft->Candidate->Released->Retired path TransitionLifecycle enforces (see AgentRegistry.Quarantine).
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS quarantine_reason TEXT;

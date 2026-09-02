@@ -93,3 +93,47 @@ func TestBrokerDefaultsTTLWhenNonPositive(t *testing.T) {
 		t.Fatalf("expected the default TTL (%s) to apply, got expiry %s", DefaultLeaseTTL, expiresAt)
 	}
 }
+
+func TestRevokeAllForOwnerRevokesOnlyThatOwnersLeases(t *testing.T) {
+	b := NewBroker(map[string]string{"demo": "value"})
+	refA, _, err := b.IssueForOwner("demo", time.Minute, "agent-a@1.0.0")
+	if err != nil {
+		t.Fatalf("IssueForOwner (a): %v", err)
+	}
+	refB, _, err := b.IssueForOwner("demo", time.Minute, "agent-b@1.0.0")
+	if err != nil {
+		t.Fatalf("IssueForOwner (b): %v", err)
+	}
+	refPlain, _, err := b.Issue("demo", time.Minute)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	revoked := b.RevokeAllForOwner("agent-a@1.0.0")
+	if revoked != 1 {
+		t.Fatalf("RevokeAllForOwner returned %d, want 1", revoked)
+	}
+	if _, err := b.Resolve(refA); err == nil {
+		t.Fatal("expected agent-a's lease to be revoked")
+	}
+	if _, err := b.Resolve(refB); err != nil {
+		t.Fatalf("expected agent-b's lease to be unaffected, got: %v", err)
+	}
+	if _, err := b.Resolve(refPlain); err != nil {
+		t.Fatalf("expected the owner-less lease to be unaffected, got: %v", err)
+	}
+}
+
+func TestRevokeAllForOwnerWithEmptyOwnerRevokesNothing(t *testing.T) {
+	b := NewBroker(map[string]string{"demo": "value"})
+	ref, _, err := b.Issue("demo", time.Minute)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if revoked := b.RevokeAllForOwner(""); revoked != 0 {
+		t.Fatalf("RevokeAllForOwner(\"\") revoked %d leases, want 0", revoked)
+	}
+	if _, err := b.Resolve(ref); err != nil {
+		t.Fatalf("expected the lease to still resolve: %v", err)
+	}
+}

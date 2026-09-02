@@ -159,13 +159,32 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Criterio de entrada:** un incidente o una política de rotación real lo exige.
 - **Coste:** M.
 
-### Circuit breaker + kill switch por agente (A5)
+### Revocación cruzada de proceso: `aeon-controlplane` → `aeon-toolgw` (depende de `A5`)
 
-- **Descripción:** cuarentena automática de versión por tasa de fallo/coste anómalo, revocación de
-  credenciales en caliente.
-- **Fase objetivo:** F4.
-- **Criterio de entrada:** hay más de un agente `Released` corriendo simultáneamente en el mismo
-  entorno (antes de eso el radio de explosión de un fallo es trivial).
+- **Descripción:** `CircuitBreakerHandlers.applyQuarantine` (`A5`, ya `DONE`) llama a
+  `secrets.Broker.RevokeAllForOwner` cuando está configurado — y funciona de verdad, probado
+  end-to-end en `TestCircuitBreakerQuarantinesVersion`. Pero en el despliegue real de
+  `deploy/compose/docker-compose.yml`, el Registry vive en `aeon-controlplane` y el Secret Broker
+  real vive en `aeon-toolgw` — procesos distintos. Hoy `aeon-controlplane` monta
+  `CircuitBreakerHandlers` con `Secrets: nil`, así que la revocación de credenciales en caliente no
+  ocurre todavía en el despliegue real, sólo en el mismo proceso (como en el test).
+- **Fase objetivo:** cuando exista al menos un tool real que emita leases con `IssueForOwner` en
+  producción (hoy sólo `secrets.whoami`, una tool de demostración, lo hace).
+- **Criterio de entrada:** `aeon-toolgw` expone un endpoint HTTP para revocar por owner, y
+  `aeon-controlplane` lo llama desde `applyQuarantine` con la dirección de `aeon-toolgw` configurada.
+- **Coste:** S.
+
+### Nada reporta automáticamente el resultado de un run al circuit breaker (`A5`)
+
+- **Descripción:** `POST /agents/{name}/{version}/outcomes` es real y probado, pero nada en el
+  worker Python llama a este endpoint cuando un run real termina — el mismo hueco de wiring que
+  `MEM-003`/`EVAL-004` documentaron antes de que Reflection/Learning Eval tuvieran su propio enganche
+  a un workflow real. Hoy sólo un kill switch manual (`POST .../quarantine`) o una llamada manual a
+  `/outcomes` puede cuarentenar una versión.
+- **Fase objetivo:** cuando `AgentRunWorkflow`/`GraphRunWorkflow` tengan un punto de finalización
+  real desde el que reportar (éxito/fallo, coste) hacia el control plane.
+- **Criterio de entrada:** existe ese punto de finalización, y se decide qué cuenta como "fallo" a
+  efectos del breaker (¿cualquier excepción no capturada? ¿sólo un budget agotado?).
 - **Coste:** M.
 
 ### Adaptadores de proveedor adicionales (Bedrock, Azure AI Foundry nativo, Mistral, Cohere)

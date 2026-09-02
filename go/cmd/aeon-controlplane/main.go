@@ -1,10 +1,12 @@
 // Command aeon-controlplane serves the Agent/Tool/Prompt/Skill/Eval/Policy registries, approvals,
-// ABOM generation and release gates (FND-001, RUN-005, EVAL-003 — see roadmap.md F0/F2/F4).
+// release gates, and the circuit breaker + kill switch (FND-001, RUN-005, EVAL-003, A5 — see
+// roadmap.md F0/F2/F4). ABOM generation (FND-002) lives in the `aeon` CLI (go/cmd/aeon), not here —
+// it's a property of a single `aeon publish` invocation, not a service.
 //
-// STATUS: the Agent Registry (FND-001), Tool Registry (TOOL-001 CRUD portion), and Memory Store +
-// Candidate Pipeline (MEM-001/MEM-002) are real, Postgres-backed, and exposed over HTTP — see
-// go/internal/store and go/internal/api. Cedar policy evaluation (ADR-002), approvals (RUN-005)
-// and ABOM (FND-002) are not yet implemented — see roadmap.md, still `TODO`.
+// STATUS: the Agent Registry (FND-001), Tool Registry (TOOL-001 CRUD portion), Memory Store +
+// Candidate Pipeline (MEM-001/MEM-002), and the circuit breaker (A5) are real, Postgres-backed, and
+// exposed over HTTP — see go/internal/store and go/internal/api. Cedar policy evaluation (ADR-002)
+// and approvals (RUN-005) are not yet implemented — see roadmap.md, still `TODO`.
 package main
 
 import (
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/aeon-ai/aeon/go/internal/api"
+	"github.com/aeon-ai/aeon/go/internal/circuitbreaker"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	"github.com/aeon-ai/aeon/go/internal/store"
 )
@@ -61,7 +64,14 @@ func main() {
 	memoryHandlers := &api.MemoryHandlers{MemoryStore: memoryStore}
 	memoryHandlers.Register(mux)
 
+	// A5: circuit breaker + kill switch. Secrets stays nil here deliberately — aeon-toolgw's real
+	// Secret Broker (SEC-002) lives in a different process, and nothing yet plumbs a cross-process
+	// "revoke this agent's leases" call from here to there (see backlog.md) — quarantine still
+	// applies durably to the registry and blocks new runs regardless.
+	breakerHandlers := &api.CircuitBreakerHandlers{Registry: s.AgentRegistry(), Breaker: circuitbreaker.New(circuitbreaker.DefaultThresholds)}
+	breakerHandlers.Register(mux)
+
 	srv := httpserver.New("aeon-controlplane", mux)
-	log.Println("aeon-controlplane starting (Agent/Tool registries + Memory Store/Candidate Pipeline live; policy/approvals/ABOM not yet implemented — see roadmap.md F0/F4)")
+	log.Println("aeon-controlplane starting (Agent/Tool registries + Memory Store/Candidate Pipeline + circuit breaker live; policy/approvals not yet implemented — see roadmap.md F0/F4)")
 	httpserver.MustListenAndServe(srv)
 }

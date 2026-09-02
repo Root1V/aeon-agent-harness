@@ -1,7 +1,10 @@
 // Command aeon-runcontroller is the Run Controller (RUN-001): start/cancel/pause/resume/status/
 // stream for a run, as a thin HTTP layer over the Temporal client. It holds no run state of its
 // own — Temporal is the source of truth (docs/adr/0001) — so this service is stateless and can
-// restart or scale freely.
+// restart or scale freely, with one optional exception: A5's circuit breaker enforcement. Given
+// AEON_PG_DSN, a POST /runs naming agent_manifest_ref for a quarantined version is refused before
+// ever reaching Temporal (go/internal/api's checkNotQuarantined) — without it, this check is simply
+// skipped, exactly like before A5 existed.
 package main
 
 import (
@@ -15,6 +18,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/api"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	"github.com/aeon-ai/aeon/go/internal/runcontroller"
+	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
 
@@ -51,9 +55,23 @@ func main() {
 	}
 	defer temporalClient.Close()
 
+	var registry *store.AgentRegistry
+	if dsn := os.Getenv("AEON_PG_DSN"); dsn != "" {
+		s, err := store.Connect(context.Background(), dsn)
+		if err != nil {
+			log.Fatalf("aeon-runcontroller: connecting to Postgres for the circuit breaker check: %v", err)
+		}
+		defer s.Close()
+		registry = s.AgentRegistry()
+		log.Println("aeon-runcontroller: circuit breaker enforcement live (a quarantined agent_manifest_ref will be refused)")
+	} else {
+		log.Println("aeon-runcontroller: AEON_PG_DSN not set — circuit breaker enforcement skipped (see A5 in roadmap.md)")
+	}
+
 	mux := http.NewServeMux()
 	handlers := &api.RunControllerHandlers{
 		Controller: runcontroller.New(temporalClient, taskQueue),
+		Registry:   registry,
 	}
 	handlers.Register(mux)
 

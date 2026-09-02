@@ -45,6 +45,11 @@ var ErrAlreadyExists = errors.New("store: already exists")
 // ReleaseGateDecision that didn't allow it (EVAL-003).
 var ErrReleaseGateBlocked = errors.New("store: release gate blocked promotion to Released")
 
+// ErrNotReleased is returned by Quarantine when the target agent version isn't (or is no longer)
+// Released — quarantine is a control on live, in-production traffic; a Draft/Candidate/Retired
+// version was never (or is no longer) reachable to begin with (A5).
+var ErrNotReleased = errors.New("store: agent version is not Released")
+
 // ReleaseGateDecision is EVAL-003's typed verdict on whether a Candidate may be promoted to
 // Released — computed elsewhere (aeon_evalops.release_gate.evaluate_release_gate, comparing the
 // candidate's eval results against the currently Released version's own baseline) and passed in
@@ -58,13 +63,15 @@ type ReleaseGateDecision struct {
 
 // AgentRecord is a stored AgentManifest plus registry metadata (FND-001).
 type AgentRecord struct {
-	Name      string         `json:"name"`
-	Version   string         `json:"version"`
-	Owner     string         `json:"owner"`
-	Lifecycle string         `json:"lifecycle"`
-	Manifest  map[string]any `json:"manifest"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	Name             string         `json:"name"`
+	Version          string         `json:"version"`
+	Owner            string         `json:"owner"`
+	Lifecycle        string         `json:"lifecycle"`
+	Manifest         map[string]any `json:"manifest"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+	Quarantined      bool           `json:"quarantined"`
+	QuarantineReason string         `json:"quarantine_reason,omitempty"`
 }
 
 // AgentRegistry is the Postgres-backed CRUD + lifecycle store for AgentManifests.
@@ -101,7 +108,7 @@ func (r *AgentRegistry) Create(ctx context.Context, manifest map[string]any, own
 // Get fetches a single agent version.
 func (r *AgentRegistry) Get(ctx context.Context, name, version string) (*AgentRecord, error) {
 	row := r.pool.QueryRow(ctx,
-		`SELECT name, version, owner, lifecycle, manifest, created_at, updated_at
+		`SELECT name, version, owner, lifecycle, manifest, created_at, updated_at, quarantined, quarantine_reason
 		 FROM agents WHERE name = $1 AND version = $2`,
 		name, version,
 	)
@@ -111,7 +118,7 @@ func (r *AgentRegistry) Get(ctx context.Context, name, version string) (*AgentRe
 // List returns every registered version of every agent, newest first.
 func (r *AgentRegistry) List(ctx context.Context) ([]*AgentRecord, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT name, version, owner, lifecycle, manifest, created_at, updated_at
+		`SELECT name, version, owner, lifecycle, manifest, created_at, updated_at, quarantined, quarantine_reason
 		 FROM agents ORDER BY created_at DESC`,
 	)
 	if err != nil {
@@ -164,6 +171,46 @@ func (r *AgentRegistry) TransitionLifecycle(ctx context.Context, name, version, 
 	return r.Get(ctx, name, version)
 }
 
+// Quarantine immediately marks a Released agent version quarantined, with reason recorded for
+// operators — the automatic circuit-breaker trip and the manual "kill switch" are the same
+// operation here, just different callers (see go/internal/circuitbreaker). Deliberately NOT part of
+// validTransitions/TransitionLifecycle: quarantine is an orthogonal flag on a Released version, not
+// a lifecycle move — the agent stays Released throughout, satisfying "forward-only" untouched.
+// Idempotent: quarantining an already-quarantined version just updates the reason.
+func (r *AgentRegistry) Quarantine(ctx context.Context, name, version, reason string) (*AgentRecord, error) {
+	current, err := r.Get(ctx, name, version)
+	if err != nil {
+		return nil, err
+	}
+	if current.Lifecycle != LifecycleReleased {
+		return nil, fmt.Errorf("%w: %s@%s is %s", ErrNotReleased, name, version, current.Lifecycle)
+	}
+	_, err = r.pool.Exec(ctx,
+		`UPDATE agents SET quarantined = TRUE, quarantine_reason = $1, updated_at = now() WHERE name = $2 AND version = $3`,
+		reason, name, version,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: quarantine: %w", err)
+	}
+	return r.Get(ctx, name, version)
+}
+
+// Unquarantine clears a version's quarantine — the manual reset after remediation. Safe to call on
+// a version that isn't currently quarantined (a no-op update).
+func (r *AgentRegistry) Unquarantine(ctx context.Context, name, version string) (*AgentRecord, error) {
+	if _, err := r.Get(ctx, name, version); err != nil {
+		return nil, err
+	}
+	_, err := r.pool.Exec(ctx,
+		`UPDATE agents SET quarantined = FALSE, quarantine_reason = NULL, updated_at = now() WHERE name = $1 AND version = $2`,
+		name, version,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: unquarantine: %w", err)
+	}
+	return r.Get(ctx, name, version)
+}
+
 func manifestNameVersion(manifest map[string]any) (name, version string, err error) {
 	metadata, ok := manifest["metadata"].(map[string]any)
 	if !ok {
@@ -186,12 +233,16 @@ type rowScanner interface {
 func scanAgentRow(row rowScanner) (*AgentRecord, error) {
 	var rec AgentRecord
 	var manifestJSON []byte
-	err := row.Scan(&rec.Name, &rec.Version, &rec.Owner, &rec.Lifecycle, &manifestJSON, &rec.CreatedAt, &rec.UpdatedAt)
+	var quarantineReason *string
+	err := row.Scan(&rec.Name, &rec.Version, &rec.Owner, &rec.Lifecycle, &manifestJSON, &rec.CreatedAt, &rec.UpdatedAt, &rec.Quarantined, &quarantineReason)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("store: scan agent: %w", err)
+	}
+	if quarantineReason != nil {
+		rec.QuarantineReason = *quarantineReason
 	}
 	if err := json.Unmarshal(manifestJSON, &rec.Manifest); err != nil {
 		return nil, fmt.Errorf("store: unmarshal manifest: %w", err)
