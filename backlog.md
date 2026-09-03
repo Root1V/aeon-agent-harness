@@ -141,12 +141,20 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   adaptador `prometheus_inference`, o el gateway de Prometheus, tendría que exponerlo).
 - **Coste:** M.
 
-### Quality-aware routing (MDL-002)
+### Ningún suite de eval reporta scores automáticamente todavía (`MDL-002`)
 
-- **Descripción:** rutear por score de eval, no sólo por profile/coste/disponibilidad.
-- **Fase objetivo:** F4.
-- **Criterio de entrada:** existen suficientes runs históricos con eval scores por proveedor para
-  que el routing tenga señal (no antes de EVAL-002 estable).
+- **Descripción:** `MDL-002` (ya `DONE`) entrega el mecanismo completo y probado: `POST
+  /quality-scores` real, `go/internal/store.QualityScoreStore` real (Postgres), y
+  `modelgateway.Gateway.Decide` real saltando un candidato degradado. Lo que falta es el lado que lo
+  alimenta — ningún suite de eval real (`provider_conformance` u otro, `aeon_evalops.runner`) llama
+  a ese endpoint tras correr. Hoy sólo un reporte manual (`curl`/un test) puede degradar un
+  candidato.
+- **Fase objetivo:** cuando `provider_conformance` (u otro suite por-proveedor) corra con
+  regularidad real (CI nocturno, según roadmap §7) y su resultado deba alimentar routing
+  automáticamente.
+- **Criterio de entrada:** `aeon_evalops.runner` gana un modo "reportar a aeon-modelgw" tras
+  terminar un suite cuyo `case_id`/dataset mapee a un (provider, model) concreto — hoy los suites no
+  necesariamente llevan esa granularidad.
 - **Coste:** M.
 
 ### Abstracción de experiencia (MEM-004) y Learning Lab (F5 completo)
@@ -363,11 +371,12 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   ningún sitio en el Model Gateway que contabilice presupuesto consumido por llamada. La
   descripción original de INT-002 en la spec incluye "routing, budgets, redaction y FinOps
   cambiando una base_url"; sólo "routing" es real hoy.
-- **Fase objetivo:** F4, junto con `MDL-002` (quality-aware routing) — ambos comparten la necesidad
-  de que el Model Gateway sepa qué agente/run está haciendo la llamada, algo que este endpoint no
-  recibe hoy (un cliente OpenAI genérico no manda ese contexto). `OBS-003` (FinOps, ya `DONE`)
-  resolvió esto para `POST /decide` (que sí acepta `run_id`/`agent_manifest_ref` opcionales) — ver
-  la entrada de coste por-run/agente más abajo — pero no para este endpoint OpenAI-compatible.
+- **Fase objetivo:** F4. Requiere que el Model Gateway sepa qué agente/run está haciendo la
+  llamada, algo que este endpoint no recibe hoy (un cliente OpenAI genérico no manda ese contexto).
+  `OBS-003` (FinOps, ya `DONE`) resolvió esto para `POST /decide` (que sí acepta
+  `run_id`/`agent_manifest_ref` opcionales) — ver la entrada de coste por-run/agente más abajo —
+  pero no para este endpoint OpenAI-compatible. (`MDL-002`, ya `DONE`, no comparte este requisito:
+  enruta por score de proveedor+modelo, no por identidad de agente/run.)
 - **Criterio de entrada:** decidir cómo un cliente externo identifica el run/agente que hace la
   llamada — ¿un header custom? ¿parte del `model` string (`profile:run_id`)? — antes de poder
   contabilizar nada contra un presupuesto real.

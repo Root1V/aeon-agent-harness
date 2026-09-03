@@ -140,3 +140,73 @@ func TestModelGatewayRoutingFallback(t *testing.T) {
 		}
 	})
 }
+
+// fakeQualityGate reports exactly the (provider, model) pairs listed in degraded as degraded — a
+// minimal QualityGate test double, mirroring fakeProvider's own style.
+type fakeQualityGate struct {
+	degraded map[string]bool
+}
+
+func (f *fakeQualityGate) IsDegraded(ctx context.Context, provider, model string) bool {
+	return f.degraded[provider+"/"+model]
+}
+
+// TestModelGatewayQualityAwareRouting is MDL-002's acceptance test: a real routing decision changes
+// — the higher-priority candidate is skipped entirely, never even attempted — once its quality
+// score reports as degraded.
+func TestModelGatewayQualityAwareRouting(t *testing.T) {
+	t.Run("a degraded higher-priority candidate is skipped, never attempted", func(t *testing.T) {
+		gw := New()
+		gw.RegisterProvider("degraded-provider", &fakeProvider{responded: map[string]any{}})
+		gw.RegisterProvider("healthy-provider", &fakeProvider{responded: map[string]any{}})
+		gw.Quality = &fakeQualityGate{degraded: map[string]bool{"degraded-provider/m1": true}}
+
+		result, err := gw.Decide(context.Background(), []Candidate{
+			{Provider: "degraded-provider", Model: "m1", Priority: 0},
+			{Provider: "healthy-provider", Model: "m2", Priority: 1},
+		}, map[string]any{"messages": []any{}}, "")
+
+		if err != nil {
+			t.Fatalf("Decide: %v", err)
+		}
+		if result.ProviderUsed != "healthy-provider" {
+			t.Fatalf("ProviderUsed = %q, want healthy-provider — the degraded, higher-priority candidate should have been skipped", result.ProviderUsed)
+		}
+		if len(result.Attempts) != 2 {
+			t.Fatalf("expected 2 attempts (the skip is recorded), got %+v", result.Attempts)
+		}
+		if result.Attempts[0].Provider != "degraded-provider" || result.Attempts[0].Err == "" {
+			t.Fatalf("expected the first attempt to record the degraded candidate as skipped, got %+v", result.Attempts[0])
+		}
+	})
+
+	t.Run("without a QualityGate configured, routing is unaffected (nil-safe)", func(t *testing.T) {
+		gw := New()
+		gw.RegisterProvider("only-provider", &fakeProvider{responded: map[string]any{}})
+
+		result, err := gw.Decide(context.Background(), []Candidate{
+			{Provider: "only-provider", Model: "m1", Priority: 0},
+		}, map[string]any{"messages": []any{}}, "")
+
+		if err != nil {
+			t.Fatalf("Decide: %v", err)
+		}
+		if result.ProviderUsed != "only-provider" {
+			t.Fatalf("ProviderUsed = %q, want only-provider", result.ProviderUsed)
+		}
+	})
+
+	t.Run("when every candidate is degraded, the error still reports every skip", func(t *testing.T) {
+		gw := New()
+		gw.RegisterProvider("degraded-provider", &fakeProvider{responded: map[string]any{}})
+		gw.Quality = &fakeQualityGate{degraded: map[string]bool{"degraded-provider/m1": true}}
+
+		_, err := gw.Decide(context.Background(), []Candidate{
+			{Provider: "degraded-provider", Model: "m1", Priority: 0},
+		}, map[string]any{"messages": []any{}}, "")
+
+		if !errors.Is(err, ErrAllCandidatesFailed) {
+			t.Fatalf("expected ErrAllCandidatesFailed, got %v", err)
+		}
+	})
+}

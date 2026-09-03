@@ -82,3 +82,9 @@ func (s *Store) ToolRegistry() *ToolRegistry {
 func (s *Store) FinOpsLedger() *FinOpsLedger {
 	return &FinOpsLedger{pool: s.pool}
 }
+
+// QualityScores returns a handle for MDL-002's quality score store. threshold is the score below
+// which IsDegraded reports true (e.g. 0.9 for "degraded once below 90% pass rate").
+func (s *Store) QualityScores(threshold float64) *QualityScoreStore {
+	return &QualityScoreStore{pool: s.pool, threshold: threshold}
+}

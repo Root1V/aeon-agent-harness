@@ -67,10 +67,23 @@ type DecisionResult struct {
 	Attempts     []AttemptRecord
 }
 
+// QualityGate is MDL-002's quality-aware routing hook: given a candidate about to be tried,
+// reports whether its recent eval score has degraded below its configured threshold. Decide skips
+// (never even attempts) a degraded candidate, falling through to the next one exactly like an
+// unregistered provider does today — this package defines the interface it needs (Go convention);
+// go/internal/store.QualityScoreStore satisfies it structurally, with no import from this package
+// to that one.
+type QualityGate interface {
+	IsDegraded(ctx context.Context, provider, model string) bool
+}
+
 // Gateway holds registered provider adapters, keyed by name (proto/schemas/model_profile.schema.json's
 // candidates[].provider enum: anthropic, openai, gemini, prometheus_inference, openai_compatible).
 type Gateway struct {
 	providers map[string]providers.Provider
+	// Quality is optional and nil-safe (MDL-002): nil means no quality gating at all, identical to
+	// behavior before this field existed.
+	Quality QualityGate
 }
 
 // New returns an empty Gateway; register providers with RegisterProvider before calling Decide.
@@ -104,6 +117,11 @@ func (g *Gateway) Decide(
 
 	var attempts []AttemptRecord
 	for _, c := range sorted {
+		if g.Quality != nil && g.Quality.IsDegraded(ctx, c.Provider, c.Model) {
+			attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model, Err: "skipped: quality score degraded below threshold"})
+			continue
+		}
+
 		provider, ok := g.providers[c.Provider]
 		if !ok {
 			attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model, Err: "provider not registered"})
