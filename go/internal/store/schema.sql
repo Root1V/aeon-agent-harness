@@ -90,3 +90,16 @@ CREATE TABLE IF NOT EXISTS model_gateway_costs (
 );
 CREATE INDEX IF NOT EXISTS model_gateway_costs_model_idx ON model_gateway_costs (provider, model);
 CREATE INDEX IF NOT EXISTS model_gateway_costs_run_idx ON model_gateway_costs (run_id);
+
+-- MDL-002 (quality-aware routing): the current real eval score per (provider, model) — a real
+-- eval suite (e.g. provider_conformance) reports here; the Model Gateway consults it to skip a
+-- degraded candidate before ever attempting it. One row per (provider, model) — the latest report
+-- replaces the previous one; no history is kept here (see backlog.md).
+CREATE TABLE IF NOT EXISTS model_quality_scores (
+    provider    TEXT NOT NULL,
+    model       TEXT NOT NULL,
+    score       DOUBLE PRECISION NOT NULL,
+    suite       TEXT NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (provider, model)
+);

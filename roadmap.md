@@ -47,7 +47,10 @@
 > todo: cada `/decide` calcula un coste real en dólares desde uso de tokens real y una tabla de
 > precios real config-as-code, lo registra en un ledger Postgres real, y `GET /finops/costs` lo
 > agrega en un dashboard real que nunca inventa un `$0.00` para un proveedor `compute_based` sin
-> precio por token. F4 va ~93% (13/14).
+> precio por token. **`MDL-002` (quality-aware routing) cierra F4: 14/14, `DONE`.** Un score de eval
+> real, bajo, reportado por HTTP real para un candidato concreto (proveedor+modelo) hace que el
+> Model Gateway lo salte por completo en el siguiente `/decide` — nunca se llega a intentar —
+> verificado tanto en test como a mano contra el binario reconstruido.
 
 ## Resumen ejecutivo
 
@@ -232,7 +235,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | ~93% (13/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | 100% (14/14) | `DONE` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -790,7 +793,7 @@ explícitamente en `backlog.md`, no oculto.
 | A5 | Circuit breaker + kill switch por agente | `DONE` | `TestCircuitBreakerQuarantinesVersion` en verde — reportar suficientes fallos reales para una versión `Released` (por HTTP real) hace saltar el breaker, cuarentena la versión de forma durable en el Agent Registry real (Postgres), revoca un lease de secreto real emitido para ese agente, y — el punto de aplicación real — un `POST /runs` posterior que nombra esa versión se rechaza antes de que el Run Controller llegue siquiera a tocar un Temporal real; probado contra un servidor Temporal real, no simulado. `TestQuarantineHandlerIsAKillSwitchRegardlessOfBreakerState` prueba el kill switch manual, sin umbral de por medio | go/internal/circuitbreaker/breaker.go, go/internal/api/circuit_breaker_handlers.go, go/internal/api/circuit_breaker_handlers_test.go |
 | OBS-002 | Agent Console (trace explorer) | `DONE` | `TestAgentConsoleShowsARunEndToEnd` en verde — un run real, arrancado por el Run Controller HTTP real contra un Temporal real y un worker real, termina de verdad; su span `invoke_agent` real llega a una Tempo real; la página HTML servida por `GET /console/runs/{run_id}` muestra el estado terminal real (`SUCCEEDED`) y el trace real que Tempo devolvió — un navegador mostrando un run real de punta a punta, no un fixture. Alcance acotado: sólo el trace explorer; el context inspector y el evidence graph no tienen todavía una fuente de datos real y durable que mostrar (ver la nota de diseño abajo) | go/internal/api/console_handlers.go, go/internal/tempoclient/tempoclient.go, go/internal/api/console_handlers_test.go |
 | OBS-003 | FinOps (cost per model, ledger durable) | `DONE` | `TestFinOpsDashboardShowsRealCostPerModel` en verde — un `POST /decide` real con uso de tokens real, enrutado contra una tabla de precios real config-as-code (el propio `ModelPolicyBundle`), calcula un coste real en dólares, lo registra de forma durable en Postgres real, y `GET /finops/costs` lo agrega y lo muestra en un dashboard HTML real — cada fila con su propio `cost_model` (`token_based`/`compute_based`), nunca un `$0.00` fabricado para un proveedor sin precio configurado | go/internal/finops/finops.go, go/internal/store/finops_ledger.go, go/internal/api/finops_handlers.go, go/internal/api/finops_handlers_test.go |
-| MDL-002 | Quality-aware routing (eval scores como condición de routing) | `TODO` | routing cambia con score degradado en fixture | — |
+| MDL-002 | Quality-aware routing (eval scores como condición de routing) | `DONE` | `TestQualityAwareRoutingChangesWithADegradedScore` en verde — antes de reportar ningún score, un `/decide` real enruta al candidato de mayor prioridad como siempre; tras reportar un score real y bajo para ese mismo candidato por HTTP real (`POST /quality-scores`, Postgres real), el siguiente `/decide` lo salta por completo — nunca se intenta — y cae al candidato de fallback; probado también a mano con `curl` contra el binario reconstruido | go/internal/modelgateway/gateway.go, go/internal/store/quality_scores.go, go/internal/api/quality_score_handlers.go, go/internal/api/quality_score_handlers_test.go |
 
 INT-003 expone el catálogo real de `store.ToolRegistry` (TOOL-001) como servidor MCP real,
 montado en `aeon-toolgw` bajo `/mcp` (opcional: sin `AEON_PG_DSN` simplemente no se monta). Cada
@@ -1112,6 +1115,33 @@ extremos de la conformidad (cliente Aeon y servidor de referencia) corren sobre 
 este adaptador al Tool Gateway real (hoy es una librería lista para usar, sin ningún
 `ToolDescriptor` que la invoque todavía) — mismo patrón que Reflection (`MEM-003`) o
 `aeon_evalops.learning_eval` (`EVAL-004`) antes de su propio wiring.
+
+MDL-002 (quality-aware routing) cierra F4. `modelgateway.Gateway` gana un campo `Quality
+QualityGate` opcional y nil-safe — el mismo patrón que `finops.PricingTable`/`FinOpsLedger` en
+`ModelGatewayHandlers` (OBS-003): sin configurar, el comportamiento es idéntico al de antes de que
+el campo existiera. `QualityGate` es una interfaz de una sola función
+(`IsDegraded(ctx, provider, model) bool`) definida en el propio paquete `modelgateway` (el
+consumidor define la interfaz que necesita, no el productor) — `go/internal/store.
+QualityScoreStore` la satisface estructuralmente, sin que `modelgateway` importe `store` en ningún
+momento. Dentro de `Decide`, un candidato degradado se trata exactamente igual que un proveedor no
+registrado: se registra el intento con su motivo y se pasa al siguiente, sin haberlo llamado nunca.
+Una ausencia de score (un par proveedor+modelo que ningún suite evaluó todavía) deliberadamente NO
+cuenta como degradado — sólo un score real y bajo bloquea, nunca la falta de datos, que es el caso
+común para la mayoría de candidatos la mayor parte del tiempo. El test de aceptación prueba el
+cambio de comportamiento real, no sólo la lógica en aislado: un `/decide` real enruta al candidato
+de mayor prioridad antes de reportar nada, y tras un `POST /quality-scores` real con un score bajo
+para ese mismo candidato, el siguiente `/decide` lo salta — verificado además a mano reconstruyendo
+`aeon-modelgw` y forzando exactamente ese escenario con `curl`. Hueco real, documentado en
+`backlog.md`: ningún suite de eval real (`provider_conformance` u otro) llama todavía a
+`POST /quality-scores` automáticamente tras correr — el mecanismo de reporte y el de enrutamiento
+están completos y probados; conectar un suite real a él es la misma clase de hueco de wiring que
+A5/OBS-003/MEM-003 dejaron documentado antes de sus propias integraciones.
+
+**Con esto, F4 (Trust e interoperabilidad) está completa: 14/14 features `DONE`.** Cada una con su
+test de aceptación real en verde, contra infraestructura real (Postgres, Temporal, un worker real,
+Docker, un OTel Collector + Tempo reales) — nunca un mock ni un fixture aislado del sistema que dice
+probar. Los huecos que quedan (wiring automático entre features ya reales, identidad de workload,
+persistencia de contexto/evidencia) están documentados explícitamente en `backlog.md`, no ocultos.
 
 ## F5 — Learning Lab (semanas 24+)
 

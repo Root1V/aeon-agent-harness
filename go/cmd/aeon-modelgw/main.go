@@ -14,7 +14,8 @@
 // Also hosts OBS-003's FinOps: real per-call cost computation (from the same ModelPolicyBundle's
 // candidates' cost_model/cost_per_million_*_tokens fields) and, given AEON_PG_DSN, a durable cost
 // ledger plus its GET /finops/costs dashboard — both optional, like the rest of this binary's
-// config-as-code inputs.
+// config-as-code inputs. The same AEON_PG_DSN also enables MDL-002's quality-aware routing: a real
+// eval score reported via POST /quality-scores can make Decide skip a degraded candidate entirely.
 package main
 
 import (
@@ -22,6 +23,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 
@@ -63,16 +65,21 @@ func main() {
 	pricing := finops.NewPricingTable(bundle.PricingRates())
 
 	var ledger *store.FinOpsLedger
+	var qualityScores *store.QualityScoreStore
 	if dsn := os.Getenv("AEON_PG_DSN"); dsn != "" {
 		s, err := store.Connect(context.Background(), dsn)
 		if err != nil {
-			log.Fatalf("aeon-modelgw: connecting to Postgres for the FinOps ledger: %v", err)
+			log.Fatalf("aeon-modelgw: connecting to Postgres for the FinOps ledger / quality scores: %v", err)
 		}
 		defer s.Close()
 		ledger = s.FinOpsLedger()
 		log.Println("aeon-modelgw: FinOps cost ledger live (GET /finops/costs)")
+
+		qualityScores = s.QualityScores(qualityScoreThreshold())
+		gw.Quality = qualityScores
+		log.Printf("aeon-modelgw: quality-aware routing live (MDL-002), degraded threshold=%.2f", qualityScoreThreshold())
 	} else {
-		log.Println("aeon-modelgw: AEON_PG_DSN not set — FinOps costs computed per-call but not durably recorded, /finops/costs not mounted")
+		log.Println("aeon-modelgw: AEON_PG_DSN not set — FinOps costs computed per-call but not durably recorded, and quality-aware routing (MDL-002) disabled")
 	}
 
 	mux := http.NewServeMux()
@@ -81,10 +88,27 @@ func main() {
 	if ledger != nil {
 		(&api.FinOpsHandlers{Ledger: ledger}).Register(mux)
 	}
+	if qualityScores != nil {
+		(&api.QualityScoreHandlers{Scores: qualityScores}).Register(mux)
+	}
 
 	srv := httpserver.New("aeon-modelgw", mux)
 	log.Println("aeon-modelgw starting")
 	httpserver.MustListenAndServe(srv)
+}
+
+// qualityScoreThreshold is MDL-002's degraded-below cutoff (AEON_QUALITY_SCORE_THRESHOLD, default
+// 0.5) — a candidate whose most recently reported eval score is below this is skipped by routing.
+func qualityScoreThreshold() float64 {
+	raw := os.Getenv("AEON_QUALITY_SCORE_THRESHOLD")
+	if raw == "" {
+		return 0.5
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		log.Fatalf("aeon-modelgw: AEON_QUALITY_SCORE_THRESHOLD %q is not a valid number: %v", raw, err)
+	}
+	return v
 }
 
 // loadModelPolicyBundle loads the real, config-as-code ModelPolicyBundle (FND-003) that
