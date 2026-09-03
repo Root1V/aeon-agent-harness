@@ -1,3 +1,9 @@
+# cost_per_million_*_tokens (OBS-003): illustrative placeholder rates, not fetched from any
+# provider's live price list — this example already names forward-looking placeholder model ids
+# (claude-opus-5, gpt-5.1, ...), so there is no real published price to cite for them. Replace with
+# your actual contracted rates; a token_based candidate with no rate set here is still routed
+# normally, it just won't have a computed cost_usd (aeon-modelgw reports "cost unknown", never a
+# silent $0 — see go/internal/finops).
 apiVersion: harness.ai/v1
 kind: ModelPolicyBundle
 profiles:
@@ -9,6 +15,8 @@ profiles:
         tool_calling: native
         caching_capability: explicit_breakpoints
         cost_model: token_based
+        cost_per_million_input_tokens: 15.0
+        cost_per_million_output_tokens: 75.0
         max_context_tokens: 200000
       - provider: openai
         model: gpt-5.1
@@ -16,6 +24,8 @@ profiles:
         tool_calling: native
         caching_capability: automatic_prefix
         cost_model: token_based
+        cost_per_million_input_tokens: 10.0
+        cost_per_million_output_tokens: 30.0
         max_context_tokens: 200000
   - profile: reasoning-balanced
     candidates:
@@ -25,6 +35,8 @@ profiles:
         tool_calling: native
         caching_capability: explicit_breakpoints
         cost_model: token_based
+        cost_per_million_input_tokens: 1.25
+        cost_per_million_output_tokens: 5.0
         max_context_tokens: 1000000
   - profile: reasoning-local
     candidates:

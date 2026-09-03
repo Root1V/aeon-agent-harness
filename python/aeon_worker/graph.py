@@ -76,10 +76,12 @@ class BudgetExceededError(GraphError):
 class BudgetPolicy:
     """Hard limits (RUN-003), all optional — None means unlimited for that dimension. Mirrors
     AgentManifest's spec.runtime.{maxDepth,deadlineSeconds,budgets.toolCalls} (examples/
-    deep-research/agent.yaml). model_calls/tokens/cost_usd aren't enforced yet: the Graph Runtime
-    has no Model Gateway call site to count them from (MDL-001 is still TODO) — BudgetsConsumed
-    below declares those fields anyway so RunState's shape doesn't need to change when they start
-    being real."""
+    deep-research/agent.yaml). model_calls/tokens/cost_usd aren't enforced yet — not because the
+    Model Gateway doesn't exist (MDL-001 is real and DONE, and OBS-003 even computes real per-call
+    cost there), but because this generic Graph Runtime (graph_spec.schema.json) has no `model_call`
+    node kind at all — only DR-001's own Activities call the Model Gateway today, outside this
+    runtime entirely. BudgetsConsumed below declares those fields anyway so RunState's shape doesn't
+    need to change when a real model_call node kind starts populating them."""
 
     max_tool_calls: int | None = None
     max_depth: int | None = None

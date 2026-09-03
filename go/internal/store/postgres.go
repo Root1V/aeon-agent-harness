@@ -77,3 +77,8 @@ func (s *Store) AgentRegistry() *AgentRegistry {
 func (s *Store) ToolRegistry() *ToolRegistry {
 	return &ToolRegistry{pool: s.pool}
 }
+
+// FinOpsLedger returns a handle for the real model-gateway cost ledger (OBS-003).
+func (s *Store) FinOpsLedger() *FinOpsLedger {
+	return &FinOpsLedger{pool: s.pool}
+}

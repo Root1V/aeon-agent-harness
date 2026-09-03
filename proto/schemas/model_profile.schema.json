@@ -22,6 +22,8 @@
           "tool_calling": { "type": "string", "enum": ["native", "emulated"] },
           "caching_capability": { "type": "string", "enum": ["automatic_prefix", "explicit_breakpoints", "none"] },
           "cost_model": { "type": "string", "enum": ["token_based", "compute_based"] },
+          "cost_per_million_input_tokens": { "type": "number", "minimum": 0, "description": "OBS-003 FinOps: real USD rate per 1M input/prompt tokens. Only meaningful when cost_model=token_based; list pricing is a starting point, confirm against your actual provider contract." },
+          "cost_per_million_output_tokens": { "type": "number", "minimum": 0, "description": "OBS-003 FinOps: real USD rate per 1M output/completion tokens. Only meaningful when cost_model=token_based." },
           "max_context_tokens": { "type": "integer" }
         }
       }

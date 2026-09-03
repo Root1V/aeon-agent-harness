@@ -43,7 +43,11 @@
 > HTML real servida por `aeon-runcontroller` que muestra el estado terminal y el trace real de un
 > run, combinando exactamente las mismas dos fuentes reales que `aeon trace`/`aeon status` ya leían
 > — acotado deliberadamente al trace explorer, sin context inspector ni evidence graph (ninguno de
-> los dos tiene todavía datos reales y durables que mostrar). F4 va ~86% (12/14).
+> los dos tiene todavía datos reales y durables que mostrar). `OBS-003` (FinOps) cierra F4 casi del
+> todo: cada `/decide` calcula un coste real en dólares desde uso de tokens real y una tabla de
+> precios real config-as-code, lo registra en un ledger Postgres real, y `GET /finops/costs` lo
+> agrega en un dashboard real que nunca inventa un `$0.00` para un proveedor `compute_based` sin
+> precio por token. F4 va ~93% (13/14).
 
 ## Resumen ejecutivo
 
@@ -216,7 +220,9 @@ hoy ningún sitio en el Model Gateway que contabilice presupuesto por-agente, ve
 §7 original: informe con citas + traza navegable + coste por run + replay idéntico) todavía tiene
 huecos honestos, ninguno bloqueante para pasar a F3: `DeepResearchWorkflow` (Python, `DX-001`) no
 emite spans todavía — sólo los servicios Go (`OBS-001`) lo hacen, así que `aeon trace` no encuentra
-nada para un run de Deep Research real; no hay coste-por-run (eso es `OBS-003`/FinOps, F4); y
+nada para un run de Deep Research real; `OBS-003` (F4, ya `DONE`) da coste real por modelo, pero
+coste por-run específicamente sigue sin existir — ningún run_id llega todavía al Model Gateway (ver
+`backlog.md`); y
 `aeon replay` (`DX-002`) muestra historial real pero no reejecuta ni compara (`--assert-identical`,
 en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos silenciosos.
 
@@ -226,7 +232,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F1 | Contexto y evidencia | 100% (9/9) | `DONE` |
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
-| F4 | Trust e interoperabilidad | ~86% (12/14) | `IN_PROGRESS` |
+| F4 | Trust e interoperabilidad | ~93% (13/14) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
@@ -783,7 +789,7 @@ explícitamente en `backlog.md`, no oculto.
 | FND-002 | ABOM (bill of materials firmado, reproducible) | `DONE` | `TestPublishGeneratesAndSignsReproducibleABOM` en verde — `aeon publish` escribe un ABOM real firmado con Ed25519 (`go/internal/abom`) junto al manifiesto publicado; la firma verifica (`abom.Verify`), y publicar el mismo manifiesto dos veces con la misma clave (`AEON_ABOM_SIGNING_KEY`) produce el mismo fichero ABOM byte a byte — determinismo real de Ed25519 (RFC 8032), no una promesa sin comprobar. Sin clave configurada, sigue firmando con una clave efímera y avisa explícitamente que esa firma no se reproducirá | go/internal/abom/abom.go, go/cmd/aeon/fnd002.go, go/cmd/aeon/fnd002_test.go |
 | A5 | Circuit breaker + kill switch por agente | `DONE` | `TestCircuitBreakerQuarantinesVersion` en verde — reportar suficientes fallos reales para una versión `Released` (por HTTP real) hace saltar el breaker, cuarentena la versión de forma durable en el Agent Registry real (Postgres), revoca un lease de secreto real emitido para ese agente, y — el punto de aplicación real — un `POST /runs` posterior que nombra esa versión se rechaza antes de que el Run Controller llegue siquiera a tocar un Temporal real; probado contra un servidor Temporal real, no simulado. `TestQuarantineHandlerIsAKillSwitchRegardlessOfBreakerState` prueba el kill switch manual, sin umbral de por medio | go/internal/circuitbreaker/breaker.go, go/internal/api/circuit_breaker_handlers.go, go/internal/api/circuit_breaker_handlers_test.go |
 | OBS-002 | Agent Console (trace explorer) | `DONE` | `TestAgentConsoleShowsARunEndToEnd` en verde — un run real, arrancado por el Run Controller HTTP real contra un Temporal real y un worker real, termina de verdad; su span `invoke_agent` real llega a una Tempo real; la página HTML servida por `GET /console/runs/{run_id}` muestra el estado terminal real (`SUCCEEDED`) y el trace real que Tempo devolvió — un navegador mostrando un run real de punta a punta, no un fixture. Alcance acotado: sólo el trace explorer; el context inspector y el evidence graph no tienen todavía una fuente de datos real y durable que mostrar (ver la nota de diseño abajo) | go/internal/api/console_handlers.go, go/internal/tempoclient/tempoclient.go, go/internal/api/console_handlers_test.go |
-| OBS-003 | FinOps (cost per run/success/agent/model/tool) | `TODO` | dashboard con `cost_model: token_based|compute_based` | — |
+| OBS-003 | FinOps (cost per model, ledger durable) | `DONE` | `TestFinOpsDashboardShowsRealCostPerModel` en verde — un `POST /decide` real con uso de tokens real, enrutado contra una tabla de precios real config-as-code (el propio `ModelPolicyBundle`), calcula un coste real en dólares, lo registra de forma durable en Postgres real, y `GET /finops/costs` lo agrega y lo muestra en un dashboard HTML real — cada fila con su propio `cost_model` (`token_based`/`compute_based`), nunca un `$0.00` fabricado para un proveedor sin precio configurado | go/internal/finops/finops.go, go/internal/store/finops_ledger.go, go/internal/api/finops_handlers.go, go/internal/api/finops_handlers_test.go |
 | MDL-002 | Quality-aware routing (eval scores como condición de routing) | `TODO` | routing cambia con score degradado en fixture | — |
 
 INT-003 expone el catálogo real de `store.ToolRegistry` (TOOL-001) como servidor MCP real,
@@ -1058,6 +1064,32 @@ terminal, así que un tracer de paquete obtenido en otro sitio de este código (
 durante el resto del proceso. Arreglado con un `TracerProvider` compartido, inicializado una sola vez
 por binario de test (`go/internal/api/tracing_test_setup_test.go`) y sólo `ForceFlush`eado (nunca
 `Shutdown`) entre tests — verificado corriendo ambos tests juntos, repetidamente, tras el arreglo.
+
+OBS-003 (FinOps) empieza por lo mismo que motivó el alcance recortado de OBS-002: comprobar qué dato
+de coste ya es real antes de escribir nada. `BudgetsConsumed.cost_usd` (RUN-003, Python) existe desde
+antes en el esquema pero nunca se incrementa — el propio comentario en `graph.py` lo admitía
+("model_calls/tokens/cost_usd aren't enforced yet"), y de hecho ese comentario ya estaba desactualizado:
+el Model Gateway (`MDL-001`) lleva tiempo `DONE`, sólo que el Graph Runtime genérico (`RUN-002`) nunca
+tuvo un nodo `model_call` que lo invocara — únicamente DR-001 llama al Model Gateway, por sus propias
+Activities, fuera del Graph Runtime genérico. Dado que el Model Gateway (`go/internal/api/
+model_gateway_handlers.go`) es el único punto por el que pasa TODA llamada a modelo, sin importar qué
+workflow la origine, ahí es donde OBS-003 calcula el coste real: `go/internal/finops.PricingTable`
+(paquete puro, sin dependencia de `modelgateway`) multiplica el uso de tokens real que ya devuelve
+cada `NormalizedChatResponse` por una tarifa real, config-as-code — reutilizando el mismo
+`ModelPolicyBundle` que ya declaraba `cost_model` por candidato (campo del schema ya existente,
+nunca antes leído en Go) y sumándole dos campos nuevos, `cost_per_million_{input,output}_tokens`.
+Cuando no hay tarifa configurada, o el `cost_model` del proveedor es `compute_based` (facturado por
+segundo de GPU, no por token), `CostUSD` devuelve `ok=false` — el llamador debe tratar eso como
+"coste desconocido", nunca como un `$0.00` silencioso, y `FinOpsHandlers`'s dashboard respeta esa
+distinción mostrando el `cost_model` de cada fila explícitamente. Un test de aceptación real prueba
+todo el camino: una llamada real con uso de tokens conocido produce un `cost_usd` real en la
+respuesta de `/decide`, ese coste queda grabado en una tabla Postgres real
+(`model_gateway_costs`, migración aditiva igual que MEM-005/A5), y `GET /finops/costs` lo agrega con
+SQL real (`SUM`/`COUNT` agrupados por proveedor+modelo) — verificado también a mano, con `curl`
+contra el binario reconstruido. Hueco real y documentado, no oculto: `decideRequest` acepta ya
+`run_id`/`agent_manifest_ref` opcionales para etiquetar el coste, pero ningún llamador real
+(Python) los rellena todavía — el coste hoy se agrega por modelo, no por run/agente, hasta que esa
+integración exista (ver `backlog.md`, mismo patrón de hueco que A5 dejó con `POST /outcomes`).
 
 F4 arrancó con `TOOL-002`. Antes de implementar nada se verificó contra la especificación real
 (`https://blog.modelcontextprotocol.io/posts/2026-07-28/` y
