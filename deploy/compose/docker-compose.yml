@@ -188,12 +188,18 @@ services:
       args:
         CMD_PATH: ./cmd/aeon-modelgw
     profiles: ["core", "obs", "local-llm", "full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       <<: *common-env
       # INT-002 (Modo C): resolves POST /v1/chat/completions's "model" (a capability profile) to
       # real candidates — config-as-code, same file aeon_sdk.model_policy resolves on the Python
       # side. Optional: without it /decide still works, only /v1/chat/completions is affected.
       AEON_MODEL_POLICY_BUNDLE_PATH: /examples/deep-research/model_policy_bundle.yaml
+      # OBS-003: durable FinOps cost ledger + GET /finops/costs dashboard. Optional — without it,
+      # /decide still computes and returns cost_usd per call, it just isn't recorded anywhere.
+      AEON_PG_DSN: postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable
     env_file:
       - path: ../../.env
         required: false

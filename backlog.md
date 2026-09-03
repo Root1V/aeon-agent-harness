@@ -112,6 +112,35 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Criterio de entrada:** ese caso de uso existe.
 - **Coste:** M.
 
+### Coste real por run/agente, no sólo por modelo (`OBS-003`)
+
+- **Descripción:** `decideRequest` (`OBS-003`, ya `DONE`) acepta `run_id`/`agent_manifest_ref`
+  opcionales y `FinOpsLedger` los graba cuando llegan, pero ningún llamador real del Model Gateway
+  (DR-001's Planner/Researcher/Reporter, `aeon_worker.activities.model_activities.
+  call_model_gateway`) los rellena hoy — así que `GET /finops/costs` agrega correctamente por
+  modelo, pero "coste por run" o "coste por agente" (parte del título original de `OBS-003` en la
+  spec) no tiene todavía ningún dato real que mostrar.
+- **Fase objetivo:** cuando un caso de uso real necesite atribuir coste a un run/agente específico,
+  no sólo a un modelo en agregado.
+- **Criterio de entrada:** `call_model_gateway`/`decide_activity` (Python) empiezan a pasar
+  `run_id`/`agent_manifest_ref` — normalmente disponibles ya en el contexto de la Activity que
+  llama, sólo falta añadirlos a `DecideInput` y threadearlos hasta el body HTTP.
+- **Coste:** S.
+
+### Coste `compute_based` nunca se calcula (`OBS-003`)
+
+- **Descripción:** un proveedor `compute_based` (hoy sólo `prometheus_inference`) nunca obtiene un
+  `cost_usd` real — `finops.PricingTable.CostUSD` devuelve `ok=false` a propósito para él, ya que se
+  factura por segundo de GPU, no por token, y no existe ninguna instrumentación de tiempo de
+  inferencia real todavía. El dashboard lo muestra honestamente (fila con `cost_model:
+  compute_based`, sin coste inventado) pero el coste real de la inferencia local sigue siendo
+  invisible.
+- **Fase objetivo:** cuando el coste de inferencia local sea significativo frente al de proveedores
+  cloud y valga la pena medirlo.
+- **Criterio de entrada:** existe una forma real de medir tiempo de GPU por llamada (el propio
+  adaptador `prometheus_inference`, o el gateway de Prometheus, tendría que exponerlo).
+- **Coste:** M.
+
 ### Quality-aware routing (MDL-002)
 
 - **Descripción:** rutear por score de eval, no sólo por profile/coste/disponibilidad.
@@ -334,9 +363,11 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   ningún sitio en el Model Gateway que contabilice presupuesto consumido por llamada. La
   descripción original de INT-002 en la spec incluye "routing, budgets, redaction y FinOps
   cambiando una base_url"; sólo "routing" es real hoy.
-- **Fase objetivo:** F4, junto con `OBS-003` (FinOps) y `MDL-002` (quality-aware routing) — los
-  tres comparten la necesidad de que el Model Gateway sepa qué agente/run está haciendo la
-  llamada, algo que este endpoint no recibe hoy (un cliente OpenAI genérico no manda ese contexto).
+- **Fase objetivo:** F4, junto con `MDL-002` (quality-aware routing) — ambos comparten la necesidad
+  de que el Model Gateway sepa qué agente/run está haciendo la llamada, algo que este endpoint no
+  recibe hoy (un cliente OpenAI genérico no manda ese contexto). `OBS-003` (FinOps, ya `DONE`)
+  resolvió esto para `POST /decide` (que sí acepta `run_id`/`agent_manifest_ref` opcionales) — ver
+  la entrada de coste por-run/agente más abajo — pero no para este endpoint OpenAI-compatible.
 - **Criterio de entrada:** decidir cómo un cliente externo identifica el run/agente que hace la
   llamada — ¿un header custom? ¿parte del `model` string (`profile:run_id`)? — antes de poder
   contabilizar nada contra un presupuesto real.
@@ -395,9 +426,10 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   ejecuta `Prune`, ningún run llama a `RecordUsage` tras consultar memoria, y `halfLifeDays`/
   `threshold` se pasan como argumentos directos a la llamada — no hay ningún
   `AgentManifest.spec.memoryPolicy` ni config-as-code que los declare por scope/tenant.
-- **Fase objetivo:** F4 (Agent Console/FinOps) para el job periódico; el config-as-code de
-  decaimiento podría vivir en el mismo `ModelPolicyBundle`-style YAML o uno propio, a decidir junto
-  con `EVAL-004` (F3, todavía pendiente) ya que también toca cómo se gobierna una memoria `ACTIVE`.
+- **Fase objetivo:** F4, para el job periódico en sí (`OBS-002`/`OBS-003`, ambos ya `DONE`, no
+  resolvieron esto — son observabilidad, no un scheduler); el config-as-code de decaimiento podría
+  vivir en el mismo `ModelPolicyBundle`-style YAML o uno propio, a decidir junto con `EVAL-004`
+  (F3, ya `DONE`) ya que también toca cómo se gobierna una memoria `ACTIVE`.
 - **Criterio de entrada:** un consumidor real (`aeon_worker` leyendo memoria vía
   `GET /memory/active` y llamando `RecordUsage`) que haga evidente qué parámetros de decaimiento
   hacen falta.

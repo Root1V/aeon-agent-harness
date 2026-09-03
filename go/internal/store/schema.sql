@@ -72,3 +72,21 @@ ALTER TABLE memory_records ADD COLUMN IF NOT EXISTS superseded_by UUID REFERENCE
 -- Draft->Candidate->Released->Retired path TransitionLifecycle enforces (see AgentRegistry.Quarantine).
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS quarantine_reason TEXT;
+
+-- OBS-003 (FinOps): a durable ledger of real model-gateway cost events. run_id/agent_manifest_ref
+-- are nullable — no real caller populates them yet (see backlog.md), so a row logged today has cost
+-- attributable to a provider/model, not yet to a specific run or agent.
+CREATE TABLE IF NOT EXISTS model_gateway_costs (
+    id                  BIGSERIAL PRIMARY KEY,
+    provider            TEXT NOT NULL,
+    model               TEXT NOT NULL,
+    cost_model          TEXT NOT NULL,
+    prompt_tokens       INTEGER NOT NULL DEFAULT 0,
+    completion_tokens   INTEGER NOT NULL DEFAULT 0,
+    cost_usd            DOUBLE PRECISION NOT NULL DEFAULT 0,
+    run_id              TEXT,
+    agent_manifest_ref  TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS model_gateway_costs_model_idx ON model_gateway_costs (provider, model);
+CREATE INDEX IF NOT EXISTS model_gateway_costs_run_idx ON model_gateway_costs (run_id);

@@ -3,17 +3,28 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 
+	"github.com/aeon-ai/aeon/go/internal/finops"
 	"github.com/aeon-ai/aeon/go/internal/modelgateway"
+	"github.com/aeon-ai/aeon/go/internal/store"
 )
 
 // ModelGatewayHandlers exposes the Model Gateway's routing/fallback (MDL-001) over HTTP — the only
 // network-reachable way anything outside this process (the Python worker, starting with DR-001's
 // Research Planner) can ask a provider to decide. Per docs/adr/0004: no caller other than this
 // gateway ever talks to a provider SDK directly.
+//
+// Pricing/Ledger are OBS-003's FinOps addition, both optional and nil-safe: without them, /decide
+// behaves exactly as before. With both configured, every successful call computes a real dollar
+// cost from real token usage and a real config-as-code pricing table, and durably records it —
+// best-effort (a ledger write failure is logged, never turned into a failed /decide response; cost
+// observability must never be able to break the actual model call it's observing).
 type ModelGatewayHandlers struct {
 	Gateway *modelgateway.Gateway
+	Pricing *finops.PricingTable
+	Ledger  *store.FinOpsLedger
 }
 
 // Register mounts the model gateway routes on mux.
@@ -31,6 +42,11 @@ type decideRequest struct {
 	Candidates      []decideCandidate `json:"candidates"`
 	RenderedContext map[string]any    `json:"rendered_context"`
 	DataSensitivity string            `json:"data_sensitivity,omitempty"`
+	// RunID/AgentManifestRef (OBS-003, optional): tags a recorded cost event so it can later be
+	// aggregated per run/agent, not just per model. No real caller populates these yet — see
+	// backlog.md — so today every ledger row has both null.
+	RunID            string `json:"run_id,omitempty"`
+	AgentManifestRef string `json:"agent_manifest_ref,omitempty"`
 }
 
 func (h *ModelGatewayHandlers) decide(w http.ResponseWriter, r *http.Request) {
@@ -56,10 +72,73 @@ func (h *ModelGatewayHandlers) decide(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+
+	response := map[string]any{
 		"provider_used": result.ProviderUsed,
 		"model":         result.Model,
 		"output":        result.Output,
 		"attempts":      result.Attempts,
-	})
+	}
+	h.recordCost(r, result, body.RunID, body.AgentManifestRef, response)
+	writeJSON(w, http.StatusOK, response)
+}
+
+// recordCost is OBS-003: computes a real dollar cost from this call's real token usage (when a
+// rate is configured) and durably records it — best-effort, never blocking or failing the actual
+// /decide response it's observing.
+func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.DecisionResult, runID, agentManifestRef string, response map[string]any) {
+	if h.Pricing == nil {
+		return
+	}
+	rate, ok := h.Pricing.Rate(result.ProviderUsed, result.Model)
+	if !ok {
+		return
+	}
+
+	promptTokens, completionTokens := usageTokens(result.Output)
+	costUSD, priced := h.Pricing.CostUSD(result.ProviderUsed, result.Model, promptTokens, completionTokens)
+
+	response["cost_model"] = rate.CostModel
+	if priced {
+		response["cost_usd"] = costUSD
+	}
+
+	if h.Ledger == nil {
+		return
+	}
+	entry := store.CostEntry{
+		Provider:         result.ProviderUsed,
+		Model:            result.Model,
+		CostModel:        rate.CostModel,
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		CostUSD:          costUSD,
+		RunID:            runID,
+		AgentManifestRef: agentManifestRef,
+	}
+	if err := h.Ledger.Record(r.Context(), entry); err != nil {
+		log.Printf("aeon-modelgw: recording FinOps cost event: %v", err)
+	}
+}
+
+// usageTokens pulls prompt/completion token counts out of a NormalizedChatResponse's usage block,
+// tolerating either real Go ints (the in-process case, providers.NormalizedChatResponse's own
+// return type) or float64 (were this ever JSON-decoded first) — defensive, not a sign either shape
+// is expected in practice.
+func usageTokens(output map[string]any) (prompt, completion int) {
+	usage, _ := output["usage"].(map[string]any)
+	return toInt(usage["prompt_tokens"]), toInt(usage["completion_tokens"])
+}
+
+func toInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
 }

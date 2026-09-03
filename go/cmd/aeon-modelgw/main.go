@@ -10,6 +10,11 @@
 // configuration is present in the environment (see .env.example) — a candidate naming an
 // unconfigured provider fails over to the next candidate (modelgateway.Gateway's normal fallback),
 // rather than this process refusing to start.
+//
+// Also hosts OBS-003's FinOps: real per-call cost computation (from the same ModelPolicyBundle's
+// candidates' cost_model/cost_per_million_*_tokens fields) and, given AEON_PG_DSN, a durable cost
+// ledger plus its GET /finops/costs dashboard — both optional, like the rest of this binary's
+// config-as-code inputs.
 package main
 
 import (
@@ -21,6 +26,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/aeon-ai/aeon/go/internal/api"
+	"github.com/aeon-ai/aeon/go/internal/finops"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	"github.com/aeon-ai/aeon/go/internal/modelgateway"
 	"github.com/aeon-ai/aeon/go/internal/providers/anthropic"
@@ -28,6 +34,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/providers/openai"
 	openaicompatible "github.com/aeon-ai/aeon/go/internal/providers/openai_compatible"
 	prometheusinference "github.com/aeon-ai/aeon/go/internal/providers/prometheus_inference"
+	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
 
@@ -53,10 +60,27 @@ func main() {
 	log.Printf("aeon-modelgw: registered providers: %v", registered)
 
 	bundle := loadModelPolicyBundle()
+	pricing := finops.NewPricingTable(bundle.PricingRates())
+
+	var ledger *store.FinOpsLedger
+	if dsn := os.Getenv("AEON_PG_DSN"); dsn != "" {
+		s, err := store.Connect(context.Background(), dsn)
+		if err != nil {
+			log.Fatalf("aeon-modelgw: connecting to Postgres for the FinOps ledger: %v", err)
+		}
+		defer s.Close()
+		ledger = s.FinOpsLedger()
+		log.Println("aeon-modelgw: FinOps cost ledger live (GET /finops/costs)")
+	} else {
+		log.Println("aeon-modelgw: AEON_PG_DSN not set — FinOps costs computed per-call but not durably recorded, /finops/costs not mounted")
+	}
 
 	mux := http.NewServeMux()
-	(&api.ModelGatewayHandlers{Gateway: gw}).Register(mux)
+	(&api.ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger}).Register(mux)
 	(&api.OpenAICompatibleHandlers{Gateway: gw, Bundle: bundle}).Register(mux)
+	if ledger != nil {
+		(&api.FinOpsHandlers{Ledger: ledger}).Register(mux)
+	}
 
 	srv := httpserver.New("aeon-modelgw", mux)
 	log.Println("aeon-modelgw starting")

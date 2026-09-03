@@ -29,9 +29,9 @@ func randSuffix(t *testing.T) string {
 	return hex.EncodeToString(b)
 }
 
-// newCircuitBreakerTestStore mirrors newMemoryTestServer's memoryTestDSN-based connection —
+// newAPITestStore mirrors newMemoryTestServer's memoryTestDSN-based connection —
 // store.newTestStore isn't reachable from this package (unexported there).
-func newCircuitBreakerTestStore(t *testing.T) *store.Store {
+func newAPITestStore(t *testing.T) *store.Store {
 	t.Helper()
 	s, err := store.Connect(context.Background(), memoryTestDSN(t))
 	if err != nil {
@@ -76,7 +76,7 @@ func releaseRealAgent(t *testing.T, registry *store.AgentRegistry, name, version
 // genuinely starts, the "after trip" one is rejected with no workflow ever created). Unquarantine
 // reverses the block.
 func TestCircuitBreakerQuarantinesVersion(t *testing.T) {
-	s := newCircuitBreakerTestStore(t)
+	s := newAPITestStore(t)
 	registry := s.AgentRegistry()
 	name := "circuit-breaker-test-agent-" + randSuffix(t)
 	version := "0.1.0"
@@ -212,7 +212,7 @@ func postStartRun(t *testing.T, srv *httptest.Server, runID, agentManifestRef st
 // TestQuarantineHandlerIsAKillSwitchRegardlessOfBreakerState is A5's manual-trip path: an operator
 // can quarantine a Released version immediately, with no rolling-window threshold involved at all.
 func TestQuarantineHandlerIsAKillSwitchRegardlessOfBreakerState(t *testing.T) {
-	s := newCircuitBreakerTestStore(t)
+	s := newAPITestStore(t)
 	registry := s.AgentRegistry()
 	name := "kill-switch-test-agent-" + randSuffix(t)
 	version := "0.1.0"
@@ -246,7 +246,7 @@ func TestQuarantineHandlerIsAKillSwitchRegardlessOfBreakerState(t *testing.T) {
 // TestQuarantineRejectsNonReleasedVersion confirms the store-level ErrNotReleased guard surfaces as
 // a real, distinguishable HTTP status (409) rather than a generic 500.
 func TestQuarantineRejectsNonReleasedVersion(t *testing.T) {
-	s := newCircuitBreakerTestStore(t)
+	s := newAPITestStore(t)
 	registry := s.AgentRegistry()
 	name := "draft-agent-" + randSuffix(t)
 	version := "0.1.0"
