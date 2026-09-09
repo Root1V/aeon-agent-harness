@@ -243,7 +243,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
 | F4 | Trust e interoperabilidad | 100% (14/14) | `DONE` |
-| F4.5 | Costura Synaptum + Axonium (interop de runtime) | 0% (0/10) | `IN_PROGRESS` |
+| F4.5 | Costura Synaptum + Axonium (interop de runtime) | 18% (2/11) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: **uno real, y es externo** — `FND-004` y la suite de conformidad de F4.5 dependen
@@ -1169,12 +1169,13 @@ hueco real de Aeon que existiría igual sin Synaptum — el Model Gateway no tie
 | ID | Feature | Estado | Criterio de DONE | PR |
 |---|---|---|---|---|
 | INT-008 | Streaming con cancelación en el Model Gateway | `DONE` | `TestModelGatewayStreamsAndCancelsMidStream` en verde — `/v1/chat/completions` con `"stream": true` transmite deltas reales por SSE desde un servidor upstream real, y una cancelación a mitad de stream **corta la generación aguas arriba de verdad**: el upstream de prueba registra que observó la desconexión y se detuvo tras 2 de 50 chunks, en vez de completar y ser descartado localmente. Es la respuesta empírica a `P5` del acuerdo tripartito para el salto que Aeon controla. Más `TestGatewayDecideStream` (7 subtests) sobre las reglas de routing en streaming | go/internal/providers/streaming.go, go/internal/providers/openai_compatible/streaming.go, go/internal/modelgateway/streaming.go, go/internal/api/openai_compatible_streaming.go |
-| INT-009 | `Checkpointer` — costura de durabilidad | `TODO` | `TestCheckpointerDeduplicatesByStepIdentity` en verde — `append` es idempotente por `(run_id, step_id, phase)` bajo ejecución *at-least-once* de Activities de Temporal, y `load` reconstruye un estado equivalente | — |
+| INT-009 | `Checkpointer` — costura de durabilidad | `DONE` | `TestCheckpointerDeduplicatesByStepIdentity` en verde contra Postgres real **y Temporal real**: un worker Go de prueba ejecuta una Activity que registra el paso y muere después, y Temporal la reintenta de verdad — *«real Temporal ran the Activity 3 times; the journal holds 1 entry»*. Cubre además que la fase es parte de la identidad, que un duplicado con resultado distinto conserva el primero y **reporta la divergencia**, que reordenar las claves del payload no es divergencia (comparación `jsonb` semántica, no de bytes), y que appends concurrentes del mismo run obtienen `seq` contiguo sin huecos. Más `TestRunStateAnswersTheThreeReadings` (sin infraestructura) sobre las tres lecturas de las dos fases, y `TestCheckpointSeamOverHTTP` porque una costura que solo existe en Go no es una frontera: el consumidor es un proceso Python | go/internal/checkpoint/checkpoint.go, go/internal/store/checkpointer.go, go/internal/api/checkpoint_handlers.go |
 | INT-010 | Costura de aplicación — forma y medición | `TODO` | `TestEnforcementSeamDeniesWithDisposition` en verde — la costura devuelve un tipo con disposición (`deny_step`/`terminate_run`/`require_approval`), no un booleano; más medición real gateway HTTP remoto vs proxy de egress local, con streaming | — |
 | OBS-004 | Nivel de durabilidad como campo consultable del run | `TODO` | `TestRunReportsDurabilityLevel` en verde — el nivel (paso vs Activity) es campo del run y atributo de traza, consultable durante un incidente sin leer documentación | — |
 | MDL-008 | Clase de inferencia (`local`/`cloud`) en el `ModelPolicyBundle` | `TODO` | `TestLocalInferenceOutsidePrometheusIsDenied` en verde — **default-deny con excepción nominal por entorno declarado**, y denegación **observable** (señal distinguible, no un error genérico). Forma fijada en el acuerdo tripartito: si fuera default-allow con una regla de deny encima, «aplicamos la regla como política» degrada a «teníamos intención de aplicarla» | — |
+| MDL-011 | Verificación de modalidad del candidato antes de enrutar | `TODO` | `TestEmbeddingModelRoutedAsChatIsRejected` en verde — un candidato cuya modalidad no es de chat se rechaza **al resolver el perfil**, no en la décima llamada. Hallazgo del equipo Axonium contra el despliegue real de Prometheus: `/v1/chat/completions` con un modelo de *embeddings* no falla, devuelve `200` con salida degenerada **que se factura**. Para el gateway es un fallo de enrutado del peor tipo — la cascada de fallback solo avanza cuando el candidato *falla*, así que un `200` degenerado no pasa al siguiente: se da por bueno y el ledger de FinOps lo registra como llamada legítima con su coste. De nuestro lado la comprobación no puede ser opcional (en el SDK de Axonium lo es, `verify_modality`): un candidato mal clasificado en el `ModelPolicyBundle` es un error de configuración | — |
 | MDL-010 | Robustez del `TokenSource` frente al reloj | `TODO` | `TestTokenSourceSurvivesLocalClockJump` en verde — la expiración se mide como **tiempo transcurrido** (reloj monótono, que `time.Now().Add` conserva y `Before` usa), no como instante de reloj de pared, así que ni el desfase constante con el auth-service ni un salto de NTP la afectan; más el camino suspensión → 401 → `Invalidate()` → reacuñación, que es el único residuo real (el reloj monótono no avanza durante la suspensión del sistema). **Premisa corregida:** este ítem nació como «anclar al header `Date`» a partir de la cesión de Axonium; al ir al código resultó que anclar al `Date` sería cambiar una medida de tiempo transcurrido por una de reloj de pared — un retroceso. El `Date` queda como cota de sanidad ante un `expires_in` absurdo, no como ancla. Ver el canal de coordinación tripartito | — |
-| MDL-009 | Sustituir `prometheus_inference` nativo por Axonium-Go | `BLOCKED` | Bloqueado por **RM-27** (Axonium-Go, aún no construido). El adaptador nativo actual —`DONE`, 392 líneas de producción + 244 de tests, verificado en vivo— se mantiene hasta que el reemplazo exista y pase el corpus de fixtures | — |
+| MDL-009 | Sustituir `prometheus_inference` nativo por Axonium-Go | `BLOCKED` | Bloqueado por **`AXO-27`** (Axonium-Go, aún no construido). El adaptador nativo actual —`DONE`, 392 líneas de producción + 244 de tests, verificado en vivo— se mantiene hasta que el reemplazo exista y pase el corpus de fixtures | — |
 | FND-004 | Vocabulario de normalización como contrato compartido | `BLOCKED` | Bloqueado por la decisión conjunta H1 (opción D: especificación compartida versionada, implementada en Go por el gateway y en Python por Synaptum, con suite de conformidad como garantía de equivalencia) | — |
 | — | Extracción del repo de contratos (`proto/` fuera de Aeon) | `BLOCKED` | Bloqueado por P8 (gobierno con tres consumidores: Aeon, Synaptum, Axonium). Hoy `proto/` vive dentro de Aeon, lo cual deja de ser sostenible en cuanto haya un tercer consumidor | — |
 | — | Suite de conformidad de la costura (artefacto conjunto) | `BLOCKED` | Bloqueado por el congelado del contrato en v0.1 — hasta entonces no hay contra qué escribirla | — |
@@ -1195,7 +1196,7 @@ a la plataforma de inferencia Prometheus, con una regla fijada por el dueño del
 inferencia local se resuelve en Prometheus, y la única puerta es el SDK Axonium.* Eso convierte
 `MDL-006` (adaptador `prometheus_inference` nativo en Go) en **superseded-pending**: sigue `DONE` y
 en producción porque es código real, probado y verificado en vivo, y se retira el día que
-Axonium-Go (**RM-27**, aún no construido) exista y pase el corpus de fixtures. No antes — sustituir
+Axonium-Go (**`AXO-27`**, aún no construido) exista y pase el corpus de fixtures. No antes — sustituir
 392 líneas de producción funcionando por una dependencia que todavía no se puede instalar sería
 cambiar riesgo conocido por riesgo desconocido.
 
@@ -1231,6 +1232,56 @@ Lo que `INT-008` **no** resuelve, y queda anotado: el `Usage` que viaja en el st
 forma actual de dos contadores (`prompt_tokens`/`completion_tokens`), no los cinco campos que fija
 `H3` del acuerdo tripartito. Cambiar esa forma toca lo que el ledger de FinOps (`OBS-003`) lee en
 cada llamada, así que pertenece al vocabulario compartido (`FND-004`), no a esta feature.
+
+`INT-009` (`Checkpointer`) cierra el segundo elemento y es el que Synaptum necesita para integrar.
+Cuatro decisiones que no eran obvias:
+
+- **La clave de idempotencia la aplica Postgres, no el código.** `PRIMARY KEY (run_id, step_id,
+  phase)` *es* el contrato. La comprobación de duplicado que hace `Append` existe para poder
+  *informar* del duplicado, no para evitarlo: un llamante que se saltara esa comprobación seguiría
+  sin poder escribir dos veces.
+- **Un duplicado con resultado distinto conserva el primero y reporta `PayloadDiverged`.** Gana el
+  primero porque es el que otros lectores pueden haber usado ya; pero dos intentos del mismo paso
+  produciendo resultados distintos es no-determinismo real, y un diario que lo traga en silencio es
+  peor que no tener diario. La comparación es semántica sobre `jsonb`, no de bytes: al otro lado de
+  la costura hay Python, y el orden de las claves de un dict entre dos intentos no es algo que
+  podamos dar por supuesto — compararlo por bytes convertiría cada reintento en una falsa alarma.
+- **`seq` es contiguo por run**, asignado bajo un advisory lock por run. No es cosmética: es lo que
+  hace que `NextSeq` signifique «por dónde continúa el diario» y no «algún número mayor que el
+  último». Con nodos `parallel` hay appends concurrentes de verdad, y sin el lock los dos leerían el
+  mismo `MAX(seq)`. Serializar por run convierte un bucle de reintentos en una espera.
+- **`Attempted` es excluyente de `Completed`.** Un paso terminado no está «intentado», está hecho, y
+  quien pregunta «¿qué hago ahora?» necesita una respuesta, no dos.
+
+La costura se expone por HTTP en `aeon-controlplane` (`POST`/`GET /runs/{run_id}/checkpoints`) con
+exactamente las dos operaciones acordadas y ninguna más. Se dejó fuera a propósito un endpoint que
+responda «¿debo reejecutar este paso?»: esa decisión es del bucle, y ponerla aquí movería una
+decisión al lado de la costura que se comprometió a no tomar ninguna.
+
+**La pregunta que esto dejó abierta ya está resuelta, y la respuesta corrigió a los dos lados.** Se
+planteó a Synaptum en el canal de coordinación: distinguir `attempted` de `completed` obliga a dos
+escrituras durables por paso, el doble de latencia en el camino caliente, para una distinción que
+solo cambia la decisión cuando el efecto no es idempotente. La implementación soporta las tres
+lecturas —dos fases siempre, solo `completed`, o dos fases solo para pasos no idempotentes— y
+`TestRunStateAnswersTheThreeReadings` prueba las tres, así que la elección se pudo tomar con el
+código delante.
+
+Synaptum eligió la tercera, y el campo ya existía (`ToolDefinition.idempotent` / `ToolStep.idempotent`,
+aditivos y con `False` por defecto: quien calla paga durabilidad). Pero además corrigieron su propia
+implementación con un argumento mejor que el mío: **el coste no es el número de `append`, es cuántos
+bloquean antes del efecto.** Una llamada al modelo no tiene efecto externo más allá de su coste, así
+que saber que *se intentó* no cambia ninguna decisión — si el registro se pierde, se vuelve a
+inferir, caro pero correcto. Resultado: un agente con todas sus tools idempotentes hace **cero
+escrituras bloqueantes antes de un efecto**, y uno con una tool no idempotente hace exactamente una.
+
+**Consecuencia para Aeon, anotada y no cumplida todavía:** hoy `Append` es síncrono y durable
+siempre. Por la regla acordada («`durability` es un suelo, no un techo») eso es correcto, y para un
+régimen de auditoría bancario probablemente sea lo que se quiere de todas formas. Pero no entrega la
+propiedad de latencia que la tabla de Synaptum diseña: si todas las escrituras bloquean, `DEFERRABLE`
+no significa nada en el camino real. El append diferido es una feature aparte y tiene su propia
+pregunta abierta en el canal —qué garantía se espera de un append diferido que no llegó a disco
+cuando el proceso cae— cuya respuesta decide si basta con agrupar escrituras o hace falta un journal
+de escritura por delante.
 
 ## F5 — Learning Lab (semanas 24+)
 

@@ -88,3 +88,9 @@ func (s *Store) FinOpsLedger() *FinOpsLedger {
 func (s *Store) QualityScores(threshold float64) *QualityScoreStore {
 	return &QualityScoreStore{pool: s.pool, threshold: threshold}
 }
+
+// Checkpointer returns a handle for INT-009's durability seam — the run journal the Synaptum
+// framework appends to. See go/internal/checkpoint.
+func (s *Store) Checkpointer() *Checkpointer {
+	return &Checkpointer{pool: s.pool}
+}
