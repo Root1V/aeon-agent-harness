@@ -51,6 +51,13 @@
 > real, bajo, reportado por HTTP real para un candidato concreto (proveedor+modelo) hace que el
 > Model Gateway lo salte por completo en el siguiente `/decide` — nunca se llega a intentar —
 > verificado tanto en test como a mano contra el binario reconstruido.
+>
+> **Nueva fase F4.5 — Costura Synaptum**, antepuesta a F5: nace de una negociación de arquitectura
+> real con el equipo del framework Synaptum sobre dónde vive el runtime. El acuerdo estructural está
+> cerrado (dos costuras: aplicación síncrona y denegable, y `Checkpointer` que persiste sin decidir);
+> quedan seis decisiones de contrato, una de ellas bloqueante para ambos equipos. Destapa además un
+> hueco propio y real de Aeon: **el Model Gateway no tiene streaming**, así que hoy no hay corte de
+> presupuesto en caliente ni cancelación a mitad de generación para ningún cliente.
 
 ## Resumen ejecutivo
 
@@ -236,9 +243,12 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F2 | Deep Research + EvalOps (**MVP**) | 100% (13/13) | `DONE`* |
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
 | F4 | Trust e interoperabilidad | 100% (14/14) | `DONE` |
+| F4.5 | Costura Synaptum + Axonium (interop de runtime) | 0% (0/10) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
-Bloqueos abiertos: ninguno para el roadmap de features. Nota de entorno pendiente (última fila de
+Bloqueos abiertos: **uno real, y es externo** — `FND-004` y la suite de conformidad de F4.5 dependen
+de una decisión conjunta con el equipo de Synaptum (H1: quién es dueño de la normalización de la capa
+de modelo). Las otras cuatro features de F4.5 no dependen de esa decisión y pueden construirse ya. Nota de entorno pendiente (última fila de
 F0): la imagen oficial `vllm/vllm-openai` (perfil `local-llm`) requiere GPU/CUDA y falla en hosts
 sin GPU — incluyendo el Mac Apple Silicon de este proyecto, verificado al levantar `--profile full`.
 `make dev` con `PROFILE=core` o `PROFILE=obs` (core+obs, sin `local-llm`) está completamente
@@ -1142,6 +1152,63 @@ test de aceptación real en verde, contra infraestructura real (Postgres, Tempor
 Docker, un OTel Collector + Tempo reales) — nunca un mock ni un fixture aislado del sistema que dice
 probar. Los huecos que quedan (wiring automático entre features ya reales, identidad de workload,
 persistencia de contexto/evidencia) están documentados explícitamente en `backlog.md`, no ocultos.
+
+## F4.5 — Costura Synaptum + Axonium (interop de runtime)
+
+Fase nueva, no prevista en el plan original. Surge de una discusión de arquitectura con el equipo de
+Synaptum (el framework de agentes que se está reescribiendo en paralelo) sobre dónde vive el runtime:
+tres notas cruzadas —«Dónde vive el runtime» (Synaptum), «Frontera del runtime» (Aeon), «Acta de
+convergencia» (conjunta)— que cierran el corte **semántica de ejecución (framework) / sustrato de
+ejecución (harness)** y definen dos costuras entre ambos: una de **aplicación** (síncrona, denegable,
+fuera del proceso del bucle) y una de **durabilidad** (`Checkpointer`: `append`/`load`, persiste pero
+no decide).
+
+Se antepone a F5 por dos razones: hay compromisos con otro equipo, y una de las features destapa un
+hueco real de Aeon que existiría igual sin Synaptum — el Model Gateway no tiene streaming.
+
+| ID | Feature | Estado | Criterio de DONE | PR |
+|---|---|---|---|---|
+| INT-008 | Streaming con cancelación en el Model Gateway | `TODO` | `TestModelGatewayStreamsAndCancelsMidStream` en verde — `/v1/chat/completions` con `"stream": true` transmite deltas reales por SSE, y una cancelación a mitad de stream **corta la generación aguas arriba de verdad** (el upstream observa el cierre), no descarta el resultado tras recibirlo entero. Es donde se juega `P5` del acuerdo tripartito, la única pregunta abierta capaz de invalidar trabajo ya empezado | — |
+| INT-009 | `Checkpointer` — costura de durabilidad | `TODO` | `TestCheckpointerDeduplicatesByStepIdentity` en verde — `append` es idempotente por `(run_id, step_id, phase)` bajo ejecución *at-least-once* de Activities de Temporal, y `load` reconstruye un estado equivalente | — |
+| INT-010 | Costura de aplicación — forma y medición | `TODO` | `TestEnforcementSeamDeniesWithDisposition` en verde — la costura devuelve un tipo con disposición (`deny_step`/`terminate_run`/`require_approval`), no un booleano; más medición real gateway HTTP remoto vs proxy de egress local, con streaming | — |
+| OBS-004 | Nivel de durabilidad como campo consultable del run | `TODO` | `TestRunReportsDurabilityLevel` en verde — el nivel (paso vs Activity) es campo del run y atributo de traza, consultable durante un incidente sin leer documentación | — |
+| MDL-008 | Clase de inferencia (`local`/`cloud`) en el `ModelPolicyBundle` | `TODO` | `TestLocalInferenceOutsidePrometheusIsDenied` en verde — **default-deny con excepción nominal por entorno declarado**, y denegación **observable** (señal distinguible, no un error genérico). Forma fijada en el acuerdo tripartito: si fuera default-allow con una regla de deny encima, «aplicamos la regla como política» degrada a «teníamos intención de aplicarla» | — |
+| MDL-010 | Anclaje del `TokenSource` al reloj del servidor | `TODO` | `TestTokenSourceSurvivesLocalClockJump` en verde — la expiración se ancla al header `Date` de la respuesta del auth-service, no a `time.Now()` local. Deriva de la cesión de Axonium: al ceder ellos el refresco anticipado en modo gobernado, el problema de desfase de reloj (causa clásica de 401 intermitentes) pasa a ser nuestro | — |
+| MDL-009 | Sustituir `prometheus_inference` nativo por Axonium-Go | `BLOCKED` | Bloqueado por **RM-27** (Axonium-Go, aún no construido). El adaptador nativo actual —`DONE`, 392 líneas de producción + 244 de tests, verificado en vivo— se mantiene hasta que el reemplazo exista y pase el corpus de fixtures | — |
+| FND-004 | Vocabulario de normalización como contrato compartido | `BLOCKED` | Bloqueado por la decisión conjunta H1 (opción D: especificación compartida versionada, implementada en Go por el gateway y en Python por Synaptum, con suite de conformidad como garantía de equivalencia) | — |
+| — | Extracción del repo de contratos (`proto/` fuera de Aeon) | `BLOCKED` | Bloqueado por P8 (gobierno con tres consumidores: Aeon, Synaptum, Axonium). Hoy `proto/` vive dentro de Aeon, lo cual deja de ser sostenible en cuanto haya un tercer consumidor | — |
+| — | Suite de conformidad de la costura (artefacto conjunto) | `BLOCKED` | Bloqueado por el congelado del contrato en v0.1 — hasta entonces no hay contra qué escribirla | — |
+
+Estado de la negociación al abrir esta fase: **acuerdo cerrado en lo estructural** (corte
+semántica/sustrato, dos costuras, dos niveles de durabilidad conviviendo, observabilidad por
+operación, presupuestos partidos entre corrección y política). Quedan seis decisiones sobre la forma
+del contrato, de las cuales **H1 es la única que bloquea a ambos lados**: Synaptum propuso que Aeon
+importara sus adaptadores de proveedor como librería, lo cual no es implementable cruzando la
+frontera Go/Python —los cinco adaptadores viven en `go/internal/providers/`, y el lado Python está
+diseñado explícitamente para no tener credenciales— además de invertir el principio de que Aeon no
+puede depender de un framework concreto. La contrapropuesta de Aeon (opción D) es que la
+normalización se **especifique una vez y se implemente dos**, acotada por la suite de conformidad.
+
+Consecuencia sobre F0-F4: **casi ninguna, con una excepción.** Nada del diseño se invalida — el acta
+confirma el lado harness — pero se suma un tercer equipo, **Axonium**, que construye el SDK de acceso
+a la plataforma de inferencia Prometheus, con una regla fijada por el dueño del proyecto: *toda la
+inferencia local se resuelve en Prometheus, y la única puerta es el SDK Axonium.* Eso convierte
+`MDL-006` (adaptador `prometheus_inference` nativo en Go) en **superseded-pending**: sigue `DONE` y
+en producción porque es código real, probado y verificado en vivo, y se retira el día que
+Axonium-Go (**RM-27**, aún no construido) exista y pase el corpus de fixtures. No antes — sustituir
+392 líneas de producción funcionando por una dependencia que todavía no se puede instalar sería
+cambiar riesgo conocido por riesgo desconocido.
+
+De la misma regla sale `MDL-008`: la política de Prometheus tiene que poder **denegar**, no solo
+enrutar. El mecanismo de fallo en cerrado ya existe (`data_sensitivity: restricted` filtra y devuelve
+`ErrNoRestrictedCandidate` en vez de degradar a cloud) y la detección también (el ledger de FinOps
+registra proveedor y modelo por llamada); lo que falta es que el `ModelPolicyBundle` sepa expresar
+*«este modelo es local»*. `MDL-007` (`openai_compatible`) **no se borra**: el adaptador es capacidad,
+que se use o no es política — decidido conjuntamente con Axonium.
+
+Consecuencia sobre Modo A: se congela. Si Synaptum es la capa de autoría, el DSL de grafos nativo de
+Aeon (`RUN-002`) deja de crecer y se queda como el caso mínimo sin framework — compromiso adquirido
+por escrito con el otro equipo, no una decisión reversible unilateralmente.
 
 ## F5 — Learning Lab (semanas 24+)
 
