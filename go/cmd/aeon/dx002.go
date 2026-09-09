@@ -65,7 +65,15 @@ profiles:
       - provider: openai_compatible
         model: local-default
         modality: chat
+        inference_class: local
         priority: 0
+    # MDL-008: local inference resolves in Prometheus, and nowhere else, unless an exception names
+    # the provider and the environment it belongs to. This scaffold runs against Ollama/vLLM on a
+    # developer machine, which is exactly the case the exception exists for — and writing it down
+    # here is what keeps "why is this allowed" answerable without asking anyone.
+    local_inference:
+      environment: local-dev
+      allowed_providers: [openai_compatible]
 `
 
 // runInit scaffolds a new agent project directory with minimal, valid config-as-code manifests

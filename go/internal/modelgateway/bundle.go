@@ -18,9 +18,25 @@ type ModelPolicyBundleDoc struct {
 
 // ModelProfileDoc is one profile -> candidates[] entry, mirroring proto/schemas/model_profile.schema.json.
 type ModelProfileDoc struct {
-	Profile            string              `json:"profile" yaml:"profile"`
-	Candidates         []CandidateDoc      `json:"candidates" yaml:"candidates"`
-	RoutingConstraints *RoutingConstraints `json:"routing_constraints,omitempty" yaml:"routing_constraints,omitempty"`
+	Profile    string         `json:"profile" yaml:"profile"`
+	Candidates []CandidateDoc `json:"candidates" yaml:"candidates"`
+	// LocalInference is MDL-008's nominal exception, and it is scoped to the profile rather than to
+	// the bundle on purpose: an exception granted to the profile that needs it cannot silently
+	// widen to the others sitting in the same file.
+	LocalInference     *LocalInferenceException `json:"local_inference,omitempty" yaml:"local_inference,omitempty"`
+	RoutingConstraints *RoutingConstraints      `json:"routing_constraints,omitempty" yaml:"routing_constraints,omitempty"`
+}
+
+// LocalInferenceException names which providers other than prometheus_inference may serve local
+// inference, and for which declared environment.
+//
+// It lives in the bundle — in Git, under review — rather than in an environment variable, because
+// an exception nobody can diff is not an exception, it is a hole. Environment is not decoration
+// either: it is what makes "why was this allowed" answerable from the file itself, months later,
+// by someone who was not in the conversation.
+type LocalInferenceException struct {
+	Environment      string   `json:"environment" yaml:"environment"`
+	AllowedProviders []string `json:"allowed_providers" yaml:"allowed_providers"`
 }
 
 // CandidateDoc is one candidate entry within a profile — the subset of model_profile.schema.json's
@@ -32,7 +48,10 @@ type CandidateDoc struct {
 	Model    string `json:"model" yaml:"model"`
 	// Modality is what the model actually is (MDL-011). Required: silence is not a permission,
 	// because the failure this prevents is precisely a bundle that never says what a model is.
-	Modality                   string  `json:"modality" yaml:"modality"`
+	Modality string `json:"modality" yaml:"modality"`
+	// InferenceClass is where the model actually runs (MDL-008), "local" or "cloud". Required, and
+	// undeclared is denied rather than assumed — see ErrInferenceClassUndeclared.
+	InferenceClass             string  `json:"inference_class" yaml:"inference_class"`
 	Priority                   int     `json:"priority" yaml:"priority"`
 	CostModel                  string  `json:"cost_model,omitempty" yaml:"cost_model,omitempty"`
 	CostPerMillionInputTokens  float64 `json:"cost_per_million_input_tokens,omitempty" yaml:"cost_per_million_input_tokens,omitempty"`
@@ -68,6 +87,30 @@ const ModalityChat = "chat"
 // where configuration errors belong — at resolution, before any call.
 var ErrCandidateModalityMismatch = errors.New("modelgateway: candidate modality is not usable for a chat profile")
 
+// InferenceClassLocal and InferenceClassCloud are the two declared places a model can run (MDL-008).
+const (
+	InferenceClassLocal = "local"
+	InferenceClassCloud = "cloud"
+)
+
+// localInferenceProvider is the platform's single door for local inference: the project's standing
+// rule is that all local inference resolves in Prometheus. Any other provider serving local
+// inference needs a named exception.
+const localInferenceProvider = restrictedProvider
+
+// ErrInferenceClassUndeclared is MDL-008's default-deny: a candidate that does not say where it
+// runs is denied, not assumed to be safe.
+//
+// The direction matters and was fixed in the tripartite agreement. If this were default-allow with
+// a deny rule layered on top, "we enforce the platform rule as policy" would quietly degrade into
+// "we intended to enforce it" — because the rule would only ever fire on the candidates someone
+// remembered to annotate, and the ones nobody annotated are precisely where mistakes live.
+var ErrInferenceClassUndeclared = errors.New("modelgateway: candidate does not declare inference_class, and undeclared is denied")
+
+// ErrLocalInferenceProviderDenied is MDL-008's enforcement: a candidate declares it runs locally,
+// but its provider is neither Prometheus nor named as an exception for a declared environment.
+var ErrLocalInferenceProviderDenied = errors.New("modelgateway: local inference is only served by prometheus_inference unless a named exception allows this provider")
+
 // ResolveProfile returns the candidates (in whatever order the bundle declares them — Decide sorts
 // by Priority itself) and routing data_sensitivity, if any, for a named capability profile. A
 // caller never names a concrete model — only a profile (docs/adr/0004) — so an unresolvable
@@ -79,6 +122,9 @@ func (doc ModelPolicyBundleDoc) ResolveProfile(profile string) ([]Candidate, str
 		}
 		candidates := make([]Candidate, len(p.Candidates))
 		for i, c := range p.Candidates {
+			if err := checkInferenceClass(profile, c, p.LocalInference); err != nil {
+				return nil, "", err
+			}
 			if c.Modality != ModalityChat {
 				declared := c.Modality
 				if declared == "" {
@@ -121,4 +167,43 @@ func (doc ModelPolicyBundleDoc) PricingRates() []finops.Rate {
 		}
 	}
 	return rates
+}
+
+// checkInferenceClass applies MDL-008 to one candidate.
+//
+// Note what it deliberately does NOT do: merge with the data_sensitivity=restricted rule, which
+// filters by provider name. The two look similar and are not the same rule. Restricted is about a
+// network boundary — sensitive data must never leave — and it must keep meaning "prometheus_inference
+// and nothing else", including in an environment where an exception permits some other provider to
+// serve local inference. Folding restricted into "any local candidate" would hand restricted data to
+// whatever that exception named, which is the opposite of tightening.
+func checkInferenceClass(profile string, c CandidateDoc, exception *LocalInferenceException) error {
+	switch c.InferenceClass {
+	case InferenceClassCloud:
+		return nil
+	case InferenceClassLocal:
+		if c.Provider == localInferenceProvider {
+			return nil
+		}
+		if exception != nil && exception.Environment != "" {
+			for _, allowed := range exception.AllowedProviders {
+				if allowed == c.Provider {
+					return nil
+				}
+			}
+		}
+		return fmt.Errorf("%w: profile %q candidate %s/%s%s",
+			ErrLocalInferenceProviderDenied, profile, c.Provider, c.Model, describeException(exception))
+	default:
+		return fmt.Errorf("%w: profile %q candidate %s/%s", ErrInferenceClassUndeclared, profile, c.Provider, c.Model)
+	}
+}
+
+// describeException makes a denial legible to whoever reads it in an incident: the exception that
+// exists and did not cover this candidate is far more useful than its absence.
+func describeException(exception *LocalInferenceException) string {
+	if exception == nil || exception.Environment == "" {
+		return " (no local_inference exception is declared for this profile)"
+	}
+	return fmt.Sprintf(" (the exception declared for environment %q allows %v)", exception.Environment, exception.AllowedProviders)
 }

@@ -108,7 +108,7 @@ func newStreamingTestServer(t *testing.T, upstream *fakeStreamingUpstream) *http
 		Profiles: []modelgateway.ModelProfileDoc{{
 			Profile: "streaming-test",
 			Candidates: []modelgateway.CandidateDoc{
-				{Provider: openaicompatible.Name, Model: "fake-stream-model", Modality: modelgateway.ModalityChat, Priority: 0},
+				{Provider: openaicompatible.Name, Model: "fake-stream-model", Modality: modelgateway.ModalityChat, InferenceClass: modelgateway.InferenceClassCloud, Priority: 0},
 			},
 		}},
 	}
