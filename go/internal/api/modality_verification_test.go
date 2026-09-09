@@ -37,21 +37,21 @@ func newModalityTestServer(t *testing.T) (*httptest.Server, *countingProvider) {
 	bundle := modelgateway.ModelPolicyBundleDoc{
 		Profiles: []modelgateway.ModelProfileDoc{
 			{Profile: "chat-ok", Candidates: []modelgateway.CandidateDoc{
-				{Provider: "prometheus_inference", Model: "chat-model", Modality: modelgateway.ModalityChat, Priority: 0},
+				{Provider: "prometheus_inference", Model: "chat-model", Modality: modelgateway.ModalityChat, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
 			}},
 			// The real misconfiguration: an embeddings model sitting in a chat profile.
 			{Profile: "chat-with-embeddings-model", Candidates: []modelgateway.CandidateDoc{
-				{Provider: "prometheus_inference", Model: "embed-model", Modality: "embedding", Priority: 0},
+				{Provider: "prometheus_inference", Model: "embed-model", Modality: "embedding", InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
 			}},
 			// The silent version of the same mistake: the bundle never says what the model is.
 			{Profile: "chat-undeclared", Candidates: []modelgateway.CandidateDoc{
-				{Provider: "prometheus_inference", Model: "who-knows", Priority: 0},
+				{Provider: "prometheus_inference", Model: "who-knows", InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
 			}},
 			// A misclassified candidate must not be rescued by a healthy sibling: the bundle is
 			// wrong, and routing around the error would hide it.
 			{Profile: "chat-mixed", Candidates: []modelgateway.CandidateDoc{
-				{Provider: "prometheus_inference", Model: "chat-model", Modality: modelgateway.ModalityChat, Priority: 0},
-				{Provider: "prometheus_inference", Model: "embed-model", Modality: "embedding", Priority: 1},
+				{Provider: "prometheus_inference", Model: "chat-model", Modality: modelgateway.ModalityChat, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
+				{Provider: "prometheus_inference", Model: "embed-model", Modality: "embedding", InferenceClass: modelgateway.InferenceClassLocal, Priority: 1},
 			}},
 		},
 	}
