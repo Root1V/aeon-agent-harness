@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon-ai.dev/contracts/costura-durabilidad/0.1/append-request.schema.json",
+  "title": "CheckpointAppendRequest",
+  "description": "Una entrada del diario. run_id viaja en la ruta, no en el cuerpo.",
+  "type": "object",
+  "required": ["step_id", "phase"],
+  "additionalProperties": false,
+  "properties": {
+    "step_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Identidad determinista del paso dentro del run. Estable entre reintentos: es la mitad de la clave de idempotencia."
+    },
+    "phase": {
+      "enum": ["attempted", "completed"],
+      "description": "Un valor fuera de este enum se rechaza con 400. Aceptarlo no fallaria: registraria en silencio una segunda entrada de un paso que ya se ejecuto."
+    },
+    "payload": {
+      "description": "Opaco para la costura. Ausente y nulo son cosas distintas: ausente es 'no se registro resultado', nulo es 'el resultado registrado fue nulo'."
+    }
+  }
+}

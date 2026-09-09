@@ -1,0 +1,89 @@
+{
+  "contract": "costura-durabilidad",
+  "version": "0.1-draft",
+  "cases": [
+    {
+      "name": "un duplicado es un no-op, nunca un error",
+      "why": "Quien corre bajo at-least-once no puede distinguir un reintento de un primer intento. Si el duplicado fuera un error, la parte dificil volveria a su lado.",
+      "operations": [
+        {"op": "append", "step_id": "s1", "phase": "completed", "payload": {"wrote": "a.txt"},
+         "expect": {"seq": 0, "duplicate": false, "payload_diverged": false}},
+        {"op": "append", "step_id": "s1", "phase": "completed", "payload": {"wrote": "a.txt"},
+         "expect": {"seq": 0, "duplicate": true, "payload_diverged": false}},
+        {"op": "append", "step_id": "s1", "phase": "completed", "payload": {"wrote": "a.txt"},
+         "expect": {"seq": 0, "duplicate": true, "payload_diverged": false}},
+        {"op": "load",
+         "expect": {"next_seq": 1, "records": [{"step_id": "s1", "phase": "completed", "seq": 0, "payload": {"wrote": "a.txt"}}]}}
+      ]
+    },
+    {
+      "name": "el mismo paso en la otra fase es otra entrada",
+      "why": "phase es parte de la identidad. Si no lo fuera, el caso de caida a mitad del efecto no seria representable.",
+      "operations": [
+        {"op": "append", "step_id": "s1", "phase": "attempted",
+         "expect": {"seq": 0, "duplicate": false, "payload_diverged": false}},
+        {"op": "append", "step_id": "s1", "phase": "completed", "payload": {"ok": true},
+         "expect": {"seq": 1, "duplicate": false, "payload_diverged": false}},
+        {"op": "query", "step_id": "s1", "expect": {"completed": true, "attempted": false}}
+      ]
+    },
+    {
+      "name": "attempted sin completed es la caida a mitad del efecto",
+      "why": "Es la unica situacion en la que el bucle no puede decidir solo: el efecto pudo haber ocurrido.",
+      "operations": [
+        {"op": "append", "step_id": "s1", "phase": "attempted",
+         "expect": {"seq": 0, "duplicate": false, "payload_diverged": false}},
+        {"op": "query", "step_id": "s1", "expect": {"completed": false, "attempted": true}}
+      ]
+    },
+    {
+      "name": "un duplicado con resultado distinto conserva el primero y reporta la divergencia",
+      "why": "Gana el primero porque es el que otros lectores pueden haber usado ya. Pero dos intentos con resultados distintos es no-determinismo real, y tragarselo en silencio es peor que no tener diario.",
+      "operations": [
+        {"op": "append", "step_id": "s1", "phase": "completed", "payload": {"answer": 41},
+         "expect": {"seq": 0, "duplicate": false, "payload_diverged": false}},
+        {"op": "append", "step_id": "s1", "phase": "completed", "payload": {"answer": 42},
+         "expect": {"seq": 0, "duplicate": true, "payload_diverged": true}},
+        {"op": "load",
+         "expect": {"next_seq": 1, "records": [{"step_id": "s1", "phase": "completed", "seq": 0, "payload": {"answer": 41}}]}}
+      ]
+    },
+    {
+      "name": "reordenar las claves del payload no es divergencia",
+      "why": "La comparacion es semantica, no de bytes. Comparar bytes convertiria en falsa alarma cada reintento desde un lenguaje que no garantiza el orden de las claves.",
+      "operations": [
+        {"op": "append", "step_id": "s1", "phase": "completed", "payload": {"a": 1, "b": 2},
+         "expect": {"seq": 0, "duplicate": false, "payload_diverged": false}},
+        {"op": "append", "step_id": "s1", "phase": "completed", "payload": {"b": 2, "a": 1},
+         "expect": {"seq": 0, "duplicate": true, "payload_diverged": false}}
+      ]
+    },
+    {
+      "name": "seq es contiguo desde cero y no lo consume un duplicado",
+      "why": "Contiguo es lo que hace que next_seq signifique 'por donde continua el diario' y no 'algun numero mayor que el ultimo'.",
+      "operations": [
+        {"op": "append", "step_id": "s1", "phase": "completed", "expect": {"seq": 0, "duplicate": false, "payload_diverged": false}},
+        {"op": "append", "step_id": "s1", "phase": "completed", "expect": {"seq": 0, "duplicate": true, "payload_diverged": false}},
+        {"op": "append", "step_id": "s2", "phase": "completed", "expect": {"seq": 1, "duplicate": false, "payload_diverged": false}},
+        {"op": "append", "step_id": "s3", "phase": "completed", "expect": {"seq": 2, "duplicate": false, "payload_diverged": false}},
+        {"op": "load", "expect": {"next_seq": 3}}
+      ]
+    },
+    {
+      "name": "un run desconocido carga como diario vacio, no como error",
+      "why": "Un bucle que pregunta 'donde estaba' antes de su primer checkpoint es la llamada normal. Un 404 obligaria a todos los llamantes a tratar el camino feliz como caso especial.",
+      "operations": [
+        {"op": "load", "expect": {"next_seq": 0, "records": []}}
+      ]
+    },
+    {
+      "name": "una fase desconocida se rechaza antes de escribir",
+      "why": "phase es la mitad de la clave de idempotencia. Aceptar un valor desconocido no fallaria: registraria en silencio una segunda entrada de un paso que ya se ejecuto.",
+      "operations": [
+        {"op": "append", "step_id": "s1", "phase": "completed", "expect": {"seq": 0, "duplicate": false, "payload_diverged": false}},
+        {"op": "append", "step_id": "s1", "phase": "finished", "expect_error": true},
+        {"op": "load", "expect": {"next_seq": 1}}
+      ]
+    }
+  ]
+}

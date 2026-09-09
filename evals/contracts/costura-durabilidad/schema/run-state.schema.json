@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon-ai.dev/contracts/costura-durabilidad/0.1/run-state.schema.json",
+  "title": "RunState",
+  "description": "El diario completo de un run. Un run desconocido devuelve esta misma forma con records vacio y next_seq 0.",
+  "type": "object",
+  "required": ["run_id", "next_seq", "records"],
+  "additionalProperties": false,
+  "properties": {
+    "run_id": { "type": "string", "minLength": 1 },
+    "next_seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Por donde continua el diario. Igual al numero de entradas, porque seq es contiguo desde 0."
+    },
+    "records": {
+      "type": "array",
+      "description": "En orden de seq, ascendente y sin huecos.",
+      "items": {
+        "type": "object",
+        "description": "additionalProperties es true a proposito: un journal se conserva anos y sera leido por versiones que hoy no existen. Un campo desconocido no puede ser motivo de rechazo. En la peticion de append si es false, porque alli un campo de mas es una errata en la mitad de una clave de idempotencia.",
+        "required": ["run_id", "step_id", "phase", "seq", "recorded_at"],
+        "additionalProperties": true,
+        "properties": {
+          "run_id": { "type": "string", "minLength": 1 },
+          "step_id": { "type": "string", "minLength": 1 },
+          "phase": { "enum": ["attempted", "completed"] },
+          "seq": { "type": "integer", "minimum": 0 },
+          "payload": {},
+          "recorded_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}
