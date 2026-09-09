@@ -14,10 +14,11 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["provider", "model", "priority"],
+        "required": ["provider", "model", "priority", "modality"],
         "properties": {
           "provider": { "type": "string", "enum": ["anthropic", "openai", "gemini", "prometheus_inference", "openai_compatible"] },
           "model": { "type": "string" },
+          "modality": { "type": "string", "enum": ["chat", "embedding"], "description": "MDL-011: what this model actually is. Required, and required on purpose \u2014 the failure this prevents is a bundle that names an embeddings model in a chat profile, and a bundle that says nothing about a model cannot be checked against anything. Aeon verifies the declaration, not reality: an embeddings model declared as chat is still routed. Checking against the provider's live catalog is a separate, heavier feature." },
           "priority": { "type": "integer", "minimum": 0, "description": "Lower = tried first; drives fallback cascade." },
           "tool_calling": { "type": "string", "enum": ["native", "emulated"] },
           "caching_capability": { "type": "string", "enum": ["automatic_prefix", "explicit_breakpoints", "none"] },
