@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -44,7 +45,7 @@ func (h *OpenAICompatibleHandlers) chatCompletions(w http.ResponseWriter, r *htt
 
 	candidates, dataSensitivity, err := h.Bundle.ResolveProfile(profile)
 	if err != nil {
-		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", err.Error())
+		writeOpenAIError(w, resolveErrorStatus(err), resolveErrorType(err), err.Error())
 		return
 	}
 
@@ -81,4 +82,21 @@ func writeOpenAIError(w http.ResponseWriter, status int, errType, message string
 	writeJSON(w, status, map[string]any{
 		"error": map[string]any{"message": message, "type": errType},
 	})
+}
+
+// resolveErrorStatus and resolveErrorType keep a policy denial distinguishable from "you asked for a
+// profile that does not exist" (MDL-011). Both used to be a 404 invalid_request_error, which is the
+// shape of a client typo — and a caller cannot act on a denial it cannot tell apart from a typo.
+func resolveErrorStatus(err error) int {
+	if errors.Is(err, modelgateway.ErrCandidateModalityMismatch) {
+		return http.StatusForbidden
+	}
+	return http.StatusNotFound
+}
+
+func resolveErrorType(err error) string {
+	if errors.Is(err, modelgateway.ErrCandidateModalityMismatch) {
+		return "aeon_policy_denied"
+	}
+	return "invalid_request_error"
 }

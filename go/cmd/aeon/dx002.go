@@ -64,6 +64,7 @@ profiles:
     candidates:
       - provider: openai_compatible
         model: local-default
+        modality: chat
         priority: 0
 `
 
