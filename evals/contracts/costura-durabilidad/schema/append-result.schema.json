@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aeon-ai.dev/contracts/costura-durabilidad/0.1/append-result.schema.json",
+  "title": "CheckpointAppendResult",
+  "description": "Hechos sobre la escritura. Ninguna decision.",
+  "type": "object",
+  "required": ["seq", "duplicate", "payload_diverged"],
+  "additionalProperties": false,
+  "properties": {
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Posicion en el diario. En un duplicado, la de la entrada que ya existia."
+    },
+    "duplicate": {
+      "type": "boolean",
+      "description": "La identidad ya estaba registrada y no se escribio nada. Es un exito, no un error."
+    },
+    "payload_diverged": {
+      "type": "boolean",
+      "description": "Llego un duplicado con payload distinto del almacenado. Gana el almacenado; la divergencia se reporta en vez de tragarse. Comparacion semantica, no de bytes."
+    }
+  }
+}
