@@ -48,6 +48,11 @@ func (h *OpenAICompatibleHandlers) chatCompletions(w http.ResponseWriter, r *htt
 		return
 	}
 
+	if stream, _ := body["stream"].(bool); stream {
+		h.streamChatCompletions(w, r, candidates, body, dataSensitivity)
+		return
+	}
+
 	result, err := h.Gateway.Decide(r.Context(), candidates, body, dataSensitivity)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadGateway, "aeon_routing_error", err.Error())

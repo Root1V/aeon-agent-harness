@@ -176,7 +176,11 @@ func TestRunControllerLifecycle(t *testing.T) {
 		// Same pause trick, but this time to make the cancel target deterministic: without it, a
 		// single-node graph might already be SUCCEEDED before the cancel request lands.
 		postAction(t, srv, runID, "pause")
-		time.Sleep(500 * time.Millisecond)
+		// Wait for the run to actually report PAUSED rather than sleeping and hoping. A fixed sleep
+		// loses this race under load — observed for real: the workflow completed before the pause
+		// signal was processed and the run reached SUCCEEDED, failing a test that is not about
+		// timing at all.
+		waitForStatus(t, srv, runID, "PAUSED", 15*time.Second)
 
 		postAction(t, srv, runID, "cancel")
 		waitForStatus(t, srv, runID, "CANCELLED", 15*time.Second)
