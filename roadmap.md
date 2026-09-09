@@ -1168,7 +1168,7 @@ hueco real de Aeon que existiría igual sin Synaptum — el Model Gateway no tie
 
 | ID | Feature | Estado | Criterio de DONE | PR |
 |---|---|---|---|---|
-| INT-008 | Streaming con cancelación en el Model Gateway | `TODO` | `TestModelGatewayStreamsAndCancelsMidStream` en verde — `/v1/chat/completions` con `"stream": true` transmite deltas reales por SSE, y una cancelación a mitad de stream **corta la generación aguas arriba de verdad** (el upstream observa el cierre), no descarta el resultado tras recibirlo entero. Es donde se juega `P5` del acuerdo tripartito, la única pregunta abierta capaz de invalidar trabajo ya empezado | — |
+| INT-008 | Streaming con cancelación en el Model Gateway | `DONE` | `TestModelGatewayStreamsAndCancelsMidStream` en verde — `/v1/chat/completions` con `"stream": true` transmite deltas reales por SSE desde un servidor upstream real, y una cancelación a mitad de stream **corta la generación aguas arriba de verdad**: el upstream de prueba registra que observó la desconexión y se detuvo tras 2 de 50 chunks, en vez de completar y ser descartado localmente. Es la respuesta empírica a `P5` del acuerdo tripartito para el salto que Aeon controla. Más `TestGatewayDecideStream` (7 subtests) sobre las reglas de routing en streaming | go/internal/providers/streaming.go, go/internal/providers/openai_compatible/streaming.go, go/internal/modelgateway/streaming.go, go/internal/api/openai_compatible_streaming.go |
 | INT-009 | `Checkpointer` — costura de durabilidad | `TODO` | `TestCheckpointerDeduplicatesByStepIdentity` en verde — `append` es idempotente por `(run_id, step_id, phase)` bajo ejecución *at-least-once* de Activities de Temporal, y `load` reconstruye un estado equivalente | — |
 | INT-010 | Costura de aplicación — forma y medición | `TODO` | `TestEnforcementSeamDeniesWithDisposition` en verde — la costura devuelve un tipo con disposición (`deny_step`/`terminate_run`/`require_approval`), no un booleano; más medición real gateway HTTP remoto vs proxy de egress local, con streaming | — |
 | OBS-004 | Nivel de durabilidad como campo consultable del run | `TODO` | `TestRunReportsDurabilityLevel` en verde — el nivel (paso vs Activity) es campo del run y atributo de traza, consultable durante un incidente sin leer documentación | — |
@@ -1209,6 +1209,28 @@ que se use o no es política — decidido conjuntamente con Axonium.
 Consecuencia sobre Modo A: se congela. Si Synaptum es la capa de autoría, el DSL de grafos nativo de
 Aeon (`RUN-002`) deja de crecer y se queda como el caso mínimo sin framework — compromiso adquirido
 por escrito con el otro equipo, no una decisión reversible unilateralmente.
+
+`INT-008` (streaming) cierra el primer elemento de la fase y responde `P5` para el salto que Aeon
+controla. Tres decisiones de diseño que merecen quedar escritas, porque ninguna era obvia:
+
+- **`StreamingProvider` es una interfaz opcional**, no un método más en `Provider`. Un adaptador que
+  no la implementa se sirve igual —una sola llamada entregada como un único chunk— así que el
+  endpoint funciona contra los cinco proveedores desde el primer día, al coste honesto de que esa
+  llamada no se puede cancelar a mitad de generación. `StreamResult.Streamed` lo reporta para que un
+  aplicador de presupuesto sepa cuál de las dos garantías tiene, en vez de deducirlo.
+- **La forma de la costura es `yield func(Chunk) error`**, no un canal ni un iterador. Devolver error
+  desde `yield` significa «para ahora», y es lo que desenrolla toda la cadena hasta cerrar la
+  conexión upstream. Un canal habría requerido una goroutine por llamada y una disciplina de cierre
+  que se rompe justo en el camino de error.
+- **El fallback se detiene en cuanto se entrega el primer chunk.** Reintentar otro candidato después
+  empalmaría la salida de dos modelos distintos en una sola respuesta. Un fallo posterior se propaga
+  tal cual; verificado con un test dedicado, porque es exactamente el tipo de regresión que un
+  refactor introduce sin darse cuenta.
+
+Lo que `INT-008` **no** resuelve, y queda anotado: el `Usage` que viaja en el stream conserva la
+forma actual de dos contadores (`prompt_tokens`/`completion_tokens`), no los cinco campos que fija
+`H3` del acuerdo tripartito. Cambiar esa forma toca lo que el ledger de FinOps (`OBS-003`) lee en
+cada llamada, así que pertenece al vocabulario compartido (`FND-004`), no a esta feature.
 
 ## F5 — Learning Lab (semanas 24+)
 
