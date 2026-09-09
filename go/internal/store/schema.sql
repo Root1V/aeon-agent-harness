@@ -103,3 +103,23 @@ CREATE TABLE IF NOT EXISTS model_quality_scores (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (provider, model)
 );
+
+-- INT-009 (durability seam): the append-only run journal the Synaptum framework writes through.
+-- The PRIMARY KEY is the idempotency contract, not a convenience index: (run_id, step_id, phase)
+-- is exactly the identity under which a duplicate append must be a no-op, and Postgres enforcing it
+-- means a caller that skips Checkpointer.Append's own duplicate check still cannot double-write.
+-- seq is contiguous per run (assigned under a per-run advisory lock — see store.Checkpointer),
+-- which is what makes RunState.NextSeq mean "where the journal continues" rather than "some number
+-- larger than the last one".
+CREATE TABLE IF NOT EXISTS run_checkpoints (
+    run_id      TEXT NOT NULL,
+    step_id     TEXT NOT NULL,
+    phase       TEXT NOT NULL,
+    seq         BIGINT NOT NULL,
+    payload     JSONB,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (run_id, step_id, phase),
+    CONSTRAINT run_checkpoints_phase_valid CHECK (phase IN ('attempted', 'completed')),
+    CONSTRAINT run_checkpoints_seq_unique UNIQUE (run_id, seq)
+);
+CREATE INDEX IF NOT EXISTS run_checkpoints_run_seq_idx ON run_checkpoints (run_id, seq);

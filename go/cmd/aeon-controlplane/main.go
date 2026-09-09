@@ -71,7 +71,13 @@ func main() {
 	breakerHandlers := &api.CircuitBreakerHandlers{Registry: s.AgentRegistry(), Breaker: circuitbreaker.New(circuitbreaker.DefaultThresholds)}
 	breakerHandlers.Register(mux)
 
+	// INT-009: the durability seam. It lives here rather than in aeon-runcontroller because the
+	// journal is persistence, and this is the process that owns Postgres — but note the consequence:
+	// a framework using the seam talks to the control plane, not to the run controller.
+	checkpointHandlers := &api.CheckpointHandlers{Checkpointer: s.Checkpointer()}
+	checkpointHandlers.Register(mux)
+
 	srv := httpserver.New("aeon-controlplane", mux)
-	log.Println("aeon-controlplane starting (Agent/Tool registries + Memory Store/Candidate Pipeline + circuit breaker live; policy/approvals not yet implemented — see roadmap.md F0/F4)")
+	log.Println("aeon-controlplane starting (Agent/Tool registries + Memory Store/Candidate Pipeline + circuit breaker + checkpoint seam live; policy/approvals not yet implemented — see roadmap.md F0/F4)")
 	httpserver.MustListenAndServe(srv)
 }
