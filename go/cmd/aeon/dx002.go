@@ -64,7 +64,7 @@ profiles:
     candidates:
       - provider: openai_compatible
         model: local-default
-        modality: chat
+        modality: text
         inference_class: local
         priority: 0
     # MDL-008: local inference resolves in Prometheus, and nowhere else, unless an exception names

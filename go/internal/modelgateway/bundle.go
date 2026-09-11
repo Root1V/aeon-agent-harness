@@ -68,8 +68,23 @@ type RoutingConstraints struct {
 // ErrProfileNotFound is returned when a requested profile has no entry in the bundle.
 var ErrProfileNotFound = errors.New("modelgateway: profile not found in ModelPolicyBundle")
 
-// ModalityChat is the only modality a chat profile may route to.
-const ModalityChat = "chat"
+// The modalities a candidate can declare. These are the Prometheus catalog's own values
+// (contratos/gateway-prometheus/modalidades.md), adopted rather than translated — a private
+// vocabulary would need a mapping, and the mapping is the part that goes wrong.
+const (
+	ModalityText      = "text"
+	ModalityVision    = "vision"
+	ModalityEmbedding = "embedding"
+	ModalityImage     = "image"
+)
+
+// chatServableModalities is the correspondence that is NOT one to one, and the reason this is a set
+// rather than an equality check: text and vision are BOTH served on /v1/chat/completions. A vision
+// model is called exactly like a text one; the only difference is that it accepts image_url content
+// parts. The first version of this check compared against a single "chat" value and would have
+// rejected a perfectly valid vision model — failing the whole profile, which is the consequence
+// deliberately chosen for a *bad* candidate, applied to a good one.
+var chatServableModalities = map[string]bool{ModalityText: true, ModalityVision: true}
 
 // ErrCandidateModalityMismatch is MDL-011: a candidate in a chat profile is not a chat model, or
 // does not say what it is.
@@ -125,13 +140,16 @@ func (doc ModelPolicyBundleDoc) ResolveProfile(profile string) ([]Candidate, str
 			if err := checkInferenceClass(profile, c, p.LocalInference); err != nil {
 				return nil, "", err
 			}
-			if c.Modality != ModalityChat {
+			// An unknown value is denied rather than guessed. The catalog will grow (audio, rerank),
+			// and a new value treated as chat produces a billable call with degenerate output —
+			// exactly the failure this check exists to prevent.
+			if !chatServableModalities[c.Modality] {
 				declared := c.Modality
 				if declared == "" {
 					declared = "nothing"
 				}
-				return nil, "", fmt.Errorf("%w: profile %q candidate %s/%s declares %s",
-					ErrCandidateModalityMismatch, profile, c.Provider, c.Model, declared)
+				return nil, "", fmt.Errorf("%w: profile %q candidate %s/%s declares %s, and a chat profile serves only %s or %s",
+					ErrCandidateModalityMismatch, profile, c.Provider, c.Model, declared, ModalityText, ModalityVision)
 			}
 			candidates[i] = Candidate{Provider: c.Provider, Model: c.Model, Priority: c.Priority}
 		}
