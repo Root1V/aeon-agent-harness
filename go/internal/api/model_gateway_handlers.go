@@ -106,6 +106,7 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 	if h.Ledger == nil {
 		return
 	}
+	cacheRead, cacheWrite := usageCacheTokens(result.Output)
 	entry := store.CostEntry{
 		Provider:         result.ProviderUsed,
 		Model:            result.Model,
@@ -115,6 +116,8 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 		CostUSD:          costUSD,
 		RunID:            runID,
 		AgentManifestRef: agentManifestRef,
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
 	}
 	if err := h.Ledger.Record(r.Context(), entry); err != nil {
 		log.Printf("aeon-modelgw: recording FinOps cost event: %v", err)
@@ -128,6 +131,23 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 func usageTokens(output map[string]any) (prompt, completion int) {
 	usage, _ := output["usage"].(map[string]any)
 	return toInt(usage["prompt_tokens"]), toInt(usage["completion_tokens"])
+}
+
+// usageCacheTokens reads MDL-012's cache counters, preserving the difference between a provider
+// that reported nothing (key absent -> nil) and one that reported zero. Reading these with toInt
+// like the other two counters would quietly turn every non-caching provider into a measured cold
+// cache.
+func usageCacheTokens(output map[string]any) (read, write *int) {
+	usage, _ := output["usage"].(map[string]any)
+	return optionalInt(usage["cache_read_tokens"]), optionalInt(usage["cache_write_tokens"])
+}
+
+func optionalInt(v any) *int {
+	if v == nil {
+		return nil
+	}
+	n := toInt(v)
+	return &n
 }
 
 func toInt(v any) int {

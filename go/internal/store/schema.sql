@@ -123,3 +123,10 @@ CREATE TABLE IF NOT EXISTS run_checkpoints (
     CONSTRAINT run_checkpoints_seq_unique UNIQUE (run_id, seq)
 );
 CREATE INDEX IF NOT EXISTS run_checkpoints_run_seq_idx ON run_checkpoints (run_id, seq);
+
+-- MDL-012: cache accounting. Nullable on purpose — NULL means the provider reported no cache
+-- information for that call, which is a different fact from a 0 meaning "nothing was cached".
+-- Collapsing the two would turn an unmeasured cache into a cold one and put a fabricated fact in
+-- the ledger.
+ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER;
+ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS cache_write_tokens INTEGER;

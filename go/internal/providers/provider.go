@@ -44,3 +44,19 @@ func NormalizedChatResponse(model, content, finishReason string, promptTokens, c
 		},
 	}
 }
+
+// NormalizedChatResponseWithUsage is NormalizedChatResponse for an adapter whose provider reports
+// cache accounting (MDL-012). The cache counters appear in the usage block only when the provider
+// actually reported them: an absent key means "not reported", which is a different fact from a zero
+// and has to stay distinguishable all the way to the ledger.
+func NormalizedChatResponseWithUsage(model, content, finishReason string, u Usage) map[string]any {
+	response := NormalizedChatResponse(model, content, finishReason, u.PromptTokens, u.CompletionTokens)
+	usage, _ := response["usage"].(map[string]any)
+	if u.CacheReadTokens != nil {
+		usage["cache_read_tokens"] = *u.CacheReadTokens
+	}
+	if u.CacheWriteTokens != nil {
+		usage["cache_write_tokens"] = *u.CacheWriteTokens
+	}
+	return response
+}

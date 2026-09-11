@@ -80,6 +80,11 @@ type anthropicResponse struct {
 	Usage      struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
+		// Pointers, not ints: an absent field means this response carried no cache accounting at
+		// all, which is a different fact from "nothing was cached" and must stay that way as far as
+		// the FinOps ledger (MDL-012).
+		CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
 	} `json:"usage"`
 }
 
@@ -164,7 +169,7 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 		}
 	}
 
-	return providers.NormalizedChatResponse(parsed.Model, text.String(), parsed.StopReason, parsed.Usage.InputTokens, parsed.Usage.OutputTokens), nil
+	return providers.NormalizedChatResponseWithUsage(parsed.Model, text.String(), parsed.StopReason, anthropicUsage(parsed)), nil
 }
 
 // CachingCapability: Anthropic supports explicit cache-control breakpoints, not automatic prefix
@@ -173,3 +178,34 @@ func (a *Adapter) CachingCapability() string { return "explicit_breakpoints" }
 
 // CostModel: billed per token, both input and output.
 func (a *Adapter) CostModel() string { return "token_based" }
+
+// anthropicUsage maps Anthropic's token accounting onto the shape agreed with the Synaptum and
+// Axonium teams, where the input counter is the TOTAL input and cache_read is the subset of it that
+// came from cache.
+//
+// This is the one adapter where that mapping is arithmetic rather than a copy. Anthropic reports
+// input_tokens EXCLUDING cached reads, so the inclusive convention requires adding them; every
+// OpenAI-shaped provider already reports the total and the adapter copies it. The convention was
+// argued on the premise that copying cannot be done wrong — true, but it does not cover this
+// provider, and this is exactly where the arithmetic gets forgotten.
+//
+// Falsifying this is cheap and worth doing if anything looks off: send one request with a cached
+// prefix and compare input_tokens + cache_read_input_tokens against the total the provider bills.
+// If Anthropic ever reports input_tokens inclusively, this addition becomes a double count.
+//
+// cache_creation_input_tokens is reported but deliberately NOT added: by the same agreement,
+// cache_write is not part of input. Note the consequence, which MDL-012 does not close — cache
+// writes are billed at a premium and the ModelPolicyBundle has no cache rates, so those tokens are
+// now visible in the ledger without being priced. Visible and unpriced beats invisible.
+func anthropicUsage(parsed anthropicResponse) providers.Usage {
+	u := providers.Usage{
+		PromptTokens:     parsed.Usage.InputTokens,
+		CompletionTokens: parsed.Usage.OutputTokens,
+		CacheReadTokens:  parsed.Usage.CacheReadInputTokens,
+		CacheWriteTokens: parsed.Usage.CacheCreationInputTokens,
+	}
+	if parsed.Usage.CacheReadInputTokens != nil {
+		u.PromptTokens += *parsed.Usage.CacheReadInputTokens
+	}
+	return u
+}
