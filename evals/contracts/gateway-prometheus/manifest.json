@@ -1,0 +1,435 @@
+{
+  "$comment": "Language-neutral contract cases. Every SDK replays these against its own HTTP mock and asserts the stated expectations, so identical behavior is enforced by construction rather than by parallel hand-written suites that drift. The error taxonomy itself lives in ../errors.json and is asserted separately; these cases cover behavior that only concrete wire data can express.",
+  "version": 2,
+  "field_paths": "Dotted, with integer segments indexing into lists: 'choices.0.finish_reason'. A path resolves against the parsed result object, using the SDK's own accessors where it exposes them (for example 'content' and 'usage.total_tokens').",
+  "cases": [
+    {
+      "id": "chat-completion-basic",
+      "operation": "chat.completions.create",
+      "request": {
+        "model": "qwen3-0-6b-iq4-nl-local-2",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with exactly: hello"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "body_file": "chat_completion_finished.json"
+      },
+      "expect": {
+        "kind": "ok",
+        "fields": {
+          "content": "hello",
+          "model": "qwen3-0-6b-iq4-nl-local-1",
+          "usage.prompt_tokens": 13,
+          "usage.completion_tokens": 68,
+          "usage.total_tokens": 81,
+          "choices.0.finish_reason": "stop"
+        }
+      },
+      "$comment": "Recorded from a live deployment on 2026-09-11. response.model is NOT the requested id: the gateway routes -local-2 to -local-1, so a consumer must never assert that the two match."
+    },
+    {
+      "id": "chat-completion-tool-calls",
+      "$comment": "AUTHORED, not recorded: this shape has not been reproduced against a live deployment yet. Tool calls are passed through untouched; the gateway does not interpret them. content is null when the model returns calls instead of prose. The content assertion is withheld: for a null content Python reports None and Go reports \"\", a real divergence tracked as AXO-53 rather than hidden by a lenient runner.",
+      "operation": "chat.completions.create",
+      "request": {
+        "model": "llama3-8b-q4",
+        "messages": [
+          {
+            "role": "user",
+            "content": "weather in Lima?"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "body_file": "chat_completion_tool_calls.json"
+      },
+      "expect": {
+        "kind": "ok",
+        "fields": {
+          "choices.0.finish_reason": "tool_calls",
+          "tool_calls.0.id": "call_1"
+        }
+      }
+    },
+    {
+      "id": "chat-completion-backend-timings",
+      "$comment": "Recorded. A reasoning model with a small max_tokens never leaves the reasoning phase: content is empty, finish_reason is length, and there is usage to pay for. Also pins that cache_read is read from the reported prompt_tokens_details rather than derived from timings on this path.",
+      "operation": "chat.completions.create",
+      "request": {
+        "model": "qwen3-0-6b-iq4-nl-local-2",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Say hello"
+          }
+        ],
+        "max_tokens": 24
+      },
+      "response": {
+        "status": 200,
+        "body_file": "chat_completion.json"
+      },
+      "expect": {
+        "kind": "ok",
+        "fields": {
+          "content": "",
+          "choices.0.finish_reason": "length",
+          "timings.predicted_n": 24,
+          "timings.cache_n": 9,
+          "usage.total_tokens": 34,
+          "usage.prompt_tokens_details.cached_tokens": 9
+        }
+      }
+    },
+    {
+      "id": "chat-rate-limit-headers-on-success",
+      "$comment": "The budget must be readable before a 429 is ever seen, so a caller can slow down rather than only react.",
+      "operation": "chat.completions.create",
+      "request": {
+        "model": "qwen3-0-6b-iq4-nl-local-2",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Reply with exactly: hello"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "body_file": "chat_completion_finished.json",
+        "headers": {
+          "X-Request-ID": "5c1e2b3a-0000-4000-8000-000000000000",
+          "X-Trace-ID": "b04044d6-0000-4000-8000-000000000000",
+          "X-RateLimit-Limit-Requests": "60",
+          "X-RateLimit-Remaining-Requests": "59",
+          "X-RateLimit-Reset-Requests": "1700000060",
+          "X-RateLimit-Limit-Tokens": "100000",
+          "X-RateLimit-Remaining-Tokens": "99986",
+          "X-RateLimit-Reset-Tokens": "1700000060"
+        }
+      },
+      "expect": {
+        "kind": "ok",
+        "fields": {
+          "meta.request_id": "5c1e2b3a-0000-4000-8000-000000000000",
+          "meta.trace_id": "b04044d6-0000-4000-8000-000000000000",
+          "meta.rate_limit.remaining_requests": 59,
+          "meta.rate_limit.remaining_tokens": 99986
+        }
+      }
+    },
+    {
+      "id": "catalog-list",
+      "operation": "models.list",
+      "response": {
+        "status": 200,
+        "body_file": "models_catalog.json"
+      },
+      "expect": {
+        "kind": "ok",
+        "fields": {
+          "data.0.modality": "text",
+          "data.1.modality": "text",
+          "data.2.modality": "embedding",
+          "data.3.modality": "image",
+          "data.4.modality": "vision",
+          "data.5.modality": "text",
+          "data.0.id": "gpt-oss-20b-mxfp4",
+          "data.0.context_length": 131072
+        }
+      },
+      "$comment": "Recorded. All four modality values are live; text and vision are BOTH served on the chat endpoint, so the mapping to a consumer's own vocabulary is not one to one."
+    },
+    {
+      "id": "catalog-mine-empty",
+      "$comment": "AUTHORED, not recorded: this shape has not been reproduced against a live deployment yet. A token holding an inference scope but no model grants gets an empty list, not an error.",
+      "operation": "models.mine",
+      "response": {
+        "status": 200,
+        "body_file": "models_mine_empty.json"
+      },
+      "expect": {
+        "kind": "ok",
+        "fields": {
+          "data": []
+        }
+      }
+    },
+    {
+      "id": "catalog-mine-granted",
+      "$comment": "Recorded. models.mine() is a strict subset of the public catalog: access is deny-by-default and granted per model, so the catalog answers 'what exists' and this answers 'what may I call'. Note gpt-oss-20b-mxfp4 is in the catalog and absent here.",
+      "operation": "models.mine",
+      "request": null,
+      "response": {
+        "status": 200,
+        "body_file": "models_mine.json"
+      },
+      "expect": {
+        "kind": "ok",
+        "fields": {
+          "data.0.id": "qwen3-0-6b-iq4-nl-local-2",
+          "data.1.id": "qwen3-embedding-0-6b-q8-0-local",
+          "data.2.id": "sd-turbo-test",
+          "data.3.id": "qwen3vl-8b-q4"
+        }
+      }
+    },
+    {
+      "id": "embeddings-batch",
+      "$comment": "Recorded. completion_tokens is absent because there is no generation phase -- not zero.",
+      "operation": "embeddings.create",
+      "request": {
+        "model": "qwen3-embedding-0-6b-q8-0-local",
+        "input": [
+          "first text",
+          "second text"
+        ]
+      },
+      "response": {
+        "status": 200,
+        "body_file": "embeddings.json"
+      },
+      "expect": {
+        "kind": "ok",
+        "fields": {
+          "data.0.index": 0,
+          "data.1.index": 1,
+          "usage.prompt_tokens": 6,
+          "usage.completion_tokens": null
+        }
+      }
+    },
+    {
+      "id": "images-base64",
+      "$comment": "AUTHORED, not recorded: this shape has not been reproduced against a live deployment yet. Images come back inline as base64, never as a URL; decoding and persisting is the caller's job.",
+      "operation": "images.generate",
+      "request": {
+        "model": "sd-turbo",
+        "prompt": "a photo of a cat",
+        "n": 1,
+        "size": "512x512"
+      },
+      "response": {
+        "status": 200,
+        "body_file": "images.json"
+      },
+      "expect": {
+        "kind": "ok",
+        "fields": {
+          "output_format": "png",
+          "data.0.b64_json": "aVZCT1J3MEtHZ28="
+        }
+      }
+    },
+    {
+      "id": "stream-basic",
+      "$comment": "Recorded. Ends with [DONE] TWICE -- the backend sends one and the gateway appends its own -- so a client must stop at the first. No usage chunk arrives at all, so the counts come from the final chunk's timings and are flagged estimated.",
+      "operation": "chat.completions.stream",
+      "request": {
+        "model": "qwen3-0-6b-iq4-nl-local-2",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Count 1 2 3"
+          }
+        ],
+        "max_tokens": 24
+      },
+      "response": {
+        "status": 200,
+        "sse_file": "chat_stream_ok.sse"
+      },
+      "expect": {
+        "kind": "stream",
+        "content": "",
+        "chunks": 24,
+        "usage": {
+          "prompt_tokens": 15,
+          "completion_tokens": 24,
+          "cache_read_tokens": 14,
+          "estimated": true
+        }
+      }
+    },
+    {
+      "id": "stream-usage-chunk",
+      "$comment": "AUTHORED, not recorded: this shape has not been reproduced against a live deployment yet. Backends that do report usage take precedence over any figure derived from timings.",
+      "operation": "chat.completions.stream",
+      "request": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hi"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "sse_file": "chat_stream_usage.sse"
+      },
+      "expect": {
+        "kind": "stream",
+        "content": "Hi",
+        "chunks": 2,
+        "usage": {
+          "prompt_tokens": 5,
+          "completion_tokens": 9,
+          "estimated": false
+        }
+      }
+    },
+    {
+      "id": "stream-terminates-immediately",
+      "operation": "chat.completions.stream",
+      "request": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hi"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "sse_file": "chat_stream_empty.sse"
+      },
+      "expect": {
+        "kind": "stream",
+        "content": "",
+        "chunks": 0,
+        "usage": null
+      },
+      "$comment": "AUTHORED, not recorded: this shape has not been reproduced against a live deployment yet."
+    },
+    {
+      "id": "stream-interrupted",
+      "$comment": "AUTHORED, not recorded: this shape has not been reproduced against a live deployment yet. The status is 200 and the headers are already committed, so only the in-band chunk reveals the failure. Detection must key off the presence of an 'error' field rather than its message. The partial output received first must survive on the raised error.",
+      "operation": "chat.completions.stream",
+      "request": {
+        "model": "m",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hi"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "sse_file": "chat_stream_interrupted.sse"
+      },
+      "expect": {
+        "kind": "stream_error",
+        "error": "stream-interrupted",
+        "partial_content": "Hello, wor"
+      }
+    },
+    {
+      "id": "error-unknown-model",
+      "$comment": "Recorded from a live deployment on 2026-09-11.",
+      "operation": "chat.completions.create",
+      "request": {
+        "model": "no-existe",
+        "messages": [
+          {
+            "role": "user",
+            "content": "x"
+          }
+        ]
+      },
+      "response": {
+        "status": 400,
+        "body_file": "err_unknown_model.json"
+      },
+      "expect": {
+        "kind": "error",
+        "error_type_suffix": "unknown-model",
+        "retryable": false,
+        "has_request_id": true,
+        "has_trace_id": true
+      }
+    },
+    {
+      "id": "error-forbidden-missing-model-scope",
+      "$comment": "Recorded from a live deployment on 2026-09-11.",
+      "operation": "chat.completions.create",
+      "request": {
+        "model": "qwen3-0-6b-iq4-nl-local-1",
+        "messages": [
+          {
+            "role": "user",
+            "content": "x"
+          }
+        ]
+      },
+      "response": {
+        "status": 403,
+        "body_file": "err_forbidden.json"
+      },
+      "expect": {
+        "kind": "error",
+        "error_type_suffix": "forbidden",
+        "retryable": false,
+        "has_request_id": true,
+        "has_trace_id": true
+      }
+    },
+    {
+      "id": "error-modality-mismatch",
+      "$comment": "Recorded from a live deployment on 2026-09-11.",
+      "operation": "embeddings.create",
+      "request": {
+        "model": "qwen3-0-6b-iq4-nl-local-2",
+        "input": [
+          "x"
+        ]
+      },
+      "response": {
+        "status": 400,
+        "body_file": "err_modality.json"
+      },
+      "expect": {
+        "kind": "error",
+        "error_type_suffix": "modality-mismatch",
+        "retryable": false,
+        "has_request_id": true,
+        "has_trace_id": true
+      }
+    },
+    {
+      "id": "error-validation",
+      "$comment": "Recorded from a live deployment on 2026-09-11.",
+      "operation": "chat.completions.create",
+      "request": {
+        "model": "qwen3-0-6b-iq4-nl-local-2",
+        "messages": [
+          {
+            "role": "user",
+            "content": "x"
+          }
+        ]
+      },
+      "response": {
+        "status": 422,
+        "body_file": "err_422.json"
+      },
+      "expect": {
+        "kind": "error",
+        "error_type_suffix": "validation-error",
+        "retryable": false,
+        "has_request_id": true,
+        "has_trace_id": true
+      }
+    }
+  ],
+  "$recording": "Cases marked AUTHORED are written from the integration guide; the rest were recorded from a live deployment on 2026-09-11. Only the recorded ones are evidence about the gateway.",
+  "$version_note": "Bumped to 2 on 2026-09-11 when the corpus was re-recorded from a live deployment (AXO-47). Bodies were replaced and chat_completion_timings.json was removed, which broke a consumer referencing it by name. Anything vendoring these files should compare this number against its own copy: a bump means bodies moved."
+}

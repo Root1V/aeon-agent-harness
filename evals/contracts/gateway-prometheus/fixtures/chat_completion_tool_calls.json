@@ -1,0 +1,22 @@
+{
+  "id": "chatcmpl-tool",
+  "object": "chat.completion",
+  "model": "llama3-8b-q4",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_1",
+            "type": "function",
+            "function": { "name": "get_weather", "arguments": "{\"city\":\"Lima\"}" }
+          }
+        ]
+      },
+      "finish_reason": "tool_calls"
+    }
+  ]
+}

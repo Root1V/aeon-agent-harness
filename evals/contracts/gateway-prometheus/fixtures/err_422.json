@@ -1,0 +1,22 @@
+{
+  "type": "https://prometheus.internal/errors/validation-error",
+  "title": "Validation Error",
+  "status": 422,
+  "detail": "body.messages: Field required",
+  "instance": "/v1/chat/completions",
+  "request_id": "f8828324-1ede-44fc-938f-04c2d1b260d4",
+  "trace_id": "f516c6335ae0bff53b0ed04ca3a3f022",
+  "errors": [
+    {
+      "type": "missing",
+      "loc": [
+        "body",
+        "messages"
+      ],
+      "msg": "Field required",
+      "input": {
+        "model": "qwen3-0-6b-iq4-nl-local-2"
+      }
+    }
+  ]
+}

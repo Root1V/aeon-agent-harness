@@ -1,0 +1,37 @@
+{
+  "choices": [
+    {
+      "finish_reason": "length",
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "",
+        "reasoning_content": "Okay, the user just said \"say hello\". I need to respond appropriately. Since I'm an AI assistant"
+      }
+    }
+  ],
+  "created": 1789159125,
+  "model": "qwen3-0-6b-iq4-nl-local-1",
+  "system_fingerprint": "b10101-4310aa4f8",
+  "object": "chat.completion",
+  "usage": {
+    "completion_tokens": 24,
+    "prompt_tokens": 10,
+    "total_tokens": 34,
+    "prompt_tokens_details": {
+      "cached_tokens": 9
+    }
+  },
+  "id": "chatcmpl-aVuZZCNxDNIoSpFOyDEa7mlim1mvsZyJ",
+  "timings": {
+    "cache_n": 9,
+    "prompt_n": 1,
+    "prompt_ms": 13.896,
+    "prompt_per_token_ms": 13.896,
+    "prompt_per_second": 71.96315486470927,
+    "predicted_n": 24,
+    "predicted_ms": 65.776,
+    "predicted_per_token_ms": 2.7406666666666664,
+    "predicted_per_second": 364.8747263439553
+  }
+}

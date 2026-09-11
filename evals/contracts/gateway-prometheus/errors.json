@@ -1,0 +1,172 @@
+{
+  "$comment": "Error catalog for the Prometheus Gateway, derived from spec/prometheus-gateway.md §5.2. Every language SDK maps its exception/error types from this file so the taxonomy cannot drift between SDKs. `suffix` is the last path segment of the problem-details `type` URI and is the stable field to branch on; `detail` is human-readable and may change wording.",
+  "envelopes": {
+    "gateway": {
+      "$comment": "RFC 9457 problem details, Content-Type: application/problem+json. Returned by every gateway endpoint.",
+      "media_type": "application/problem+json",
+      "fields": [
+        "type",
+        "title",
+        "status",
+        "detail",
+        "instance",
+        "request_id",
+        "trace_id"
+      ],
+      "optional_fields": {
+        "retry_after": "Integer seconds. Present on rate-limit errors, which also omit trace_id. Confirmed by the platform team: the Retry-After header and this field are written from the same variable in the same call, so they cannot disagree — either source may be read.",
+        "trace_id": "Omitted by the rate-limiting middleware envelope."
+      }
+    },
+    "oauth": {
+      "$comment": "RFC 6749 §5.2, returned by the auth-service token endpoint only. Deliberately a different shape from the gateway envelope.",
+      "fields": [
+        "error",
+        "error_description"
+      ]
+    }
+  },
+  "gateway_errors": [
+    {
+      "status": 400,
+      "suffix": "unknown-model",
+      "meaning": "Model ID is not registered. Checked before any scope check, so an unrecognized model is always 400, never 403.",
+      "retryable": false
+    },
+    {
+      "status": 400,
+      "suffix": "modality-mismatch",
+      "meaning": "Endpoint or content type does not match the model's modality, e.g. an image content part sent to a non-vision model, or a non-embedding model on /v1/embeddings.",
+      "retryable": false
+    },
+    {
+      "status": 400,
+      "suffix": "context-exceeded",
+      "meaning": "Request exceeds the model's context window.",
+      "retryable": false,
+      "remedy": "Shrink the request."
+    },
+    {
+      "status": 401,
+      "suffix": "missing-credentials",
+      "meaning": "Absent or malformed Authorization header, or a token passed as a query parameter.",
+      "retryable": false
+    },
+    {
+      "status": 401,
+      "suffix": "invalid-token",
+      "meaning": "Signature, algorithm, issuer, audience or sub-claim validation failed.",
+      "retryable": false
+    },
+    {
+      "status": 401,
+      "suffix": "token-expired",
+      "meaning": "The JWT exp has passed.",
+      "retryable": true,
+      "retry_policy": "refresh_then_retry_once"
+    },
+    {
+      "status": 401,
+      "suffix": "token-revoked",
+      "meaning": "Token or client was explicitly revoked by an admin.",
+      "retryable": false,
+      "remedy": "New credentials are required from the platform operator."
+    },
+    {
+      "status": 402,
+      "suffix": "spend-cap-exceeded",
+      "meaning": "The client has hit its configured monthly spend cap.",
+      "retryable": false,
+      "remedy": "The cap must be raised, or wait for the next billing month."
+    },
+    {
+      "status": 403,
+      "suffix": "forbidden",
+      "meaning": "Missing inference:read / inference:stream, or missing the specific model:<id> scope. Note that streaming and non-streaming require different scopes and holding one does not imply the other.",
+      "retryable": false
+    },
+    {
+      "status": 429,
+      "suffix": "rate-limit-exceeded-requests",
+      "meaning": "RPM budget exceeded. Enforced independently per client_id and per user_id.",
+      "retryable": true,
+      "retry_policy": "wait_for_retry_after"
+    },
+    {
+      "status": 502,
+      "suffix": "upstream-error",
+      "meaning": "The backend returned repeated 502/503/504s and the gateway's own 3 internal attempts were exhausted.",
+      "retryable": true,
+      "retry_policy": "at_most_once_non_streaming",
+      "$comment": "The gateway already retried 3 times. An SDK retry should be sparing, and must not fire for a request that already ran close to the full timeout."
+    },
+    {
+      "status": 503,
+      "suffix": "model-not-loaded",
+      "meaning": "Model is registered but not currently deployed or running.",
+      "retryable": false,
+      "remedy": "Requires operator action; this is not a transient condition."
+    },
+    {
+      "status": 503,
+      "suffix": "backend-unavailable",
+      "meaning": "Two distinct causes, confirmed by the platform team. Circuit breaker open: the gateway fast-failed without attempting the backend, and sets the Retry-After *header* (never a body field) from the actual expected recovery time. Genuine connection failure: no wait value is supplied at all, in neither header nor body.",
+      "retryable": true,
+      "retry_policy": "wait_for_retry_after_when_present",
+      "$comment": "When Retry-After is absent the wait is the SDK's decision, not an API fact. The platform team recommends a conservative default of 1s with doubling, rather than assuming it behaves like the circuit-breaker case."
+    },
+    {
+      "status": 503,
+      "suffix": "rate-limiting-unavailable",
+      "meaning": "The rate limiter's backing store (Redis) is down and the deployment is configured fail-closed.",
+      "retryable": true,
+      "retry_policy": "backoff"
+    },
+    {
+      "status": 503,
+      "suffix": "usage-store-unavailable",
+      "meaning": "Database read failed. Only on GET /v1/usage and /v1/usage/export.",
+      "retryable": true,
+      "retry_policy": "backoff"
+    },
+    {
+      "status": 422,
+      "suffix": "validation-error",
+      "meaning": "Request schema validation failed. Carries an additional `errors` array of field-level problems, each with `loc`, `msg`, `type` and the offending `input`, which is what tells a caller which field to fix.",
+      "retryable": false,
+      "$comment": "Verified against a live deployment on 2026-09-11. This used to be the one endpoint that broke the envelope -- FastAPI's default shape, with no request_id or trace_id -- and the platform team has since fixed it. Keep the status-keyed fallback anyway: the lesson was that an SDK must not assume every error carries a `type`."
+    }
+  ],
+  "oauth_errors": [
+    {
+      "status": 400,
+      "error": "unsupported_grant_type",
+      "meaning": "Only client_credentials and password grants exist; an SDK uses client_credentials.",
+      "retryable": false
+    },
+    {
+      "status": 400,
+      "error": "invalid_scope",
+      "meaning": "An unrecognized scope string, or one the account is not allowed to request. Asking for a scope you do not hold is an error, not a silent downgrade.",
+      "retryable": false
+    },
+    {
+      "status": 401,
+      "error": "invalid_client",
+      "meaning": "Bad client_id or client_secret.",
+      "retryable": false
+    },
+    {
+      "status": 401,
+      "error": "unauthorized_client",
+      "meaning": "The account is deactivated.",
+      "retryable": false
+    }
+  ],
+  "notes": [
+    "There is no 404 for 'model not found' on the inference endpoints; that is 400 unknown-model. Reserve 404 handling for genuinely unmapped routes.",
+    "Unknown type suffixes must not raise a parse error: fall back to a status-keyed base error, since the catalog will grow.",
+    "There is no idempotency-key mechanism in this API. A retried chat/embeddings/images request is a genuinely new generation, billable and non-replayable.",
+    "Every gateway error observed on a live deployment carries the full RFC 9457 envelope including request_id and trace_id, 422 included. Fall back by status regardless: an SDK that hard-fails on an error without a `type` would break the moment one appears, and one did for a while."
+  ]
+}

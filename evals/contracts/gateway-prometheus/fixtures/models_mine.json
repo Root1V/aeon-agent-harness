@@ -1,0 +1,45 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "qwen3-0-6b-iq4-nl-local-2",
+      "object": "model",
+      "owned_by": "prometheus",
+      "context_length": 4096,
+      "family": "",
+      "quantization": "IQ4_NL",
+      "modality": "text",
+      "served_by": 2
+    },
+    {
+      "id": "qwen3-embedding-0-6b-q8-0-local",
+      "object": "model",
+      "owned_by": "prometheus",
+      "context_length": 4096,
+      "family": "",
+      "quantization": "Q8_0",
+      "modality": "embedding",
+      "served_by": 1
+    },
+    {
+      "id": "sd-turbo-test",
+      "object": "model",
+      "owned_by": "prometheus",
+      "context_length": 0,
+      "family": "sd-turbo",
+      "quantization": "Q8_0",
+      "modality": "image",
+      "served_by": 1
+    },
+    {
+      "id": "qwen3vl-8b-q4",
+      "object": "model",
+      "owned_by": "prometheus",
+      "context_length": 8192,
+      "family": "qwen3vl",
+      "quantization": "Q4_K_M",
+      "modality": "vision",
+      "served_by": 1
+    }
+  ]
+}

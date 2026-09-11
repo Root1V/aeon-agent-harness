@@ -1,0 +1,6 @@
+data: {"choices":[{"index":0,"delta":{"content":"Hello, wor"}}]}
+
+data: {"error": "stream interrupted"}
+
+data: [DONE]
+
