@@ -1,0 +1,9 @@
+{
+  "type": "https://prometheus.internal/errors/forbidden",
+  "title": "Forbidden",
+  "status": 403,
+  "detail": "This client is not authorized to use model 'qwen3-0-6b-iq4-nl-local-1'. Contact the platform operator to request access.",
+  "instance": "/v1/chat/completions",
+  "request_id": "f54ce752-e49c-4c28-8e9d-0cf7395e7cdc",
+  "trace_id": "7fb02c37fba379d1d995adf177e038da"
+}

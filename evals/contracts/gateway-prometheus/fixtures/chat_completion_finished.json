@@ -1,0 +1,37 @@
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "hello",
+        "reasoning_content": "Okay, the user wants me to reply with exactly \"hello\". Let me check the context. The user might be testing if I'm responding with that message. I need to make sure I stick to that. I should confirm my response without adding anything else. Let me just say \"hello\" as instructed.\n"
+      }
+    }
+  ],
+  "created": 1789159196,
+  "model": "qwen3-0-6b-iq4-nl-local-1",
+  "system_fingerprint": "b10101-4310aa4f8",
+  "object": "chat.completion",
+  "usage": {
+    "completion_tokens": 68,
+    "prompt_tokens": 13,
+    "total_tokens": 81,
+    "prompt_tokens_details": {
+      "cached_tokens": 3
+    }
+  },
+  "id": "chatcmpl-KQuXMIOpR6UahYEXOSwro1jsxHCAeGZ1",
+  "timings": {
+    "cache_n": 3,
+    "prompt_n": 10,
+    "prompt_ms": 10.696,
+    "prompt_per_token_ms": 1.0695999999999999,
+    "prompt_per_second": 934.9289454001496,
+    "predicted_n": 68,
+    "predicted_ms": 178.82,
+    "predicted_per_token_ms": 2.629705882352941,
+    "predicted_per_second": 380.27066323677445
+  }
+}

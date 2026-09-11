@@ -77,6 +77,7 @@ func (a *Adapter) DecideStream(ctx context.Context, renderedContext map[string]a
 	// deltas but not for a provider that batches, so raise the ceiling rather than fail mid-stream.
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
+	sawFinishReason := false
 	for scanner.Scan() {
 		// Check cancellation between events too, not only inside yield: a provider that stops
 		// sending without closing would otherwise leave this loop blocked on Scan.
@@ -90,7 +91,10 @@ func (a *Adapter) DecideStream(ctx context.Context, renderedContext map[string]a
 		}
 		payload := strings.TrimPrefix(line, sseDataPrefix)
 		if payload == sseDone {
-			return nil
+			// [DONE] ends the stream, but it is not itself a finish reason. Falling through to the
+			// terminal-chunk logic below is what makes an empty stream — valid per the shared
+			// contract — report a normal stop instead of nothing at all.
+			break
 		}
 
 		var parsed streamChunk
@@ -101,7 +105,10 @@ func (a *Adapter) DecideStream(ctx context.Context, renderedContext map[string]a
 		chunk := providers.Chunk{Model: parsed.Model}
 		if len(parsed.Choices) > 0 {
 			chunk.Delta = parsed.Choices[0].Delta.Content
-			chunk.FinishReason = parsed.Choices[0].FinishReason
+			if raw := parsed.Choices[0].FinishReason; raw != "" {
+				chunk.FinishReason = NormalizeFinishReason(raw)
+				sawFinishReason = true
+			}
 		}
 		if parsed.Usage != nil {
 			chunk.Usage = &providers.Usage{
@@ -117,6 +124,16 @@ func (a *Adapter) DecideStream(ctx context.Context, renderedContext map[string]a
 
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("openai_compatible: reading stream: %w", err)
+	}
+
+	// A stream that ends without ever stating a reason still ended, and the shared contract says an
+	// absent reason is a normal stop. Emitting it as a terminal chunk keeps the rule in one place:
+	// otherwise every consumer has to decide separately what an empty reason means, and an empty
+	// stream (valid, per the contract) would look indistinguishable from a truncated one.
+	if !sawFinishReason {
+		if err := yield(providers.Chunk{FinishReason: NormalizeFinishReason("")}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

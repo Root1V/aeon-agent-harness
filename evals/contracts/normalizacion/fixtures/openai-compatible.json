@@ -1,0 +1,176 @@
+{
+  "contract": "normalizacion",
+  "version": "0.1-draft",
+  "dialect": "openai-compatible",
+  "$comment": "Cada caso toma un cuerpo del cable de ../../gateway-prometheus/fixtures y declara la proyeccion unificada que cualquier implementacion correcta debe producir. Los cuerpos no se duplican aqui: se referencian. Tras AXO-47 la mayoria son GRABACIONES REALES contra el despliegue, no cuerpos escritos desde la guia — lo que cambia lo que un verde demuestra.",
+  "body_root": "../../gateway-prometheus/fixtures",
+  "cases": [
+    {
+      "name": "una respuesta que nunca sale de la fase de razonamiento",
+      "why": "Grabacion real. content vacio, finish_reason length, y Usage que pagar. Un cliente que solo mire el texto ve una respuesta vacia sin explicacion; con el razonamiento conservado hay algo que registrar.",
+      "body_file": "chat_completion.json",
+      "expect": {
+        "text": "",
+        "content_kinds": [
+          "thinking"
+        ],
+        "finish_reason": "length",
+        "model": "qwen3-0-6b-iq4-nl-local-1",
+        "usage": {
+          "input": 10,
+          "output": 24,
+          "cache_read": 9,
+          "reasoning": null,
+          "cache_write": null,
+          "estimated": false
+        }
+      }
+    },
+    {
+      "name": "razonamiento y respuesta llegan separados y no se concatenan",
+      "why": "Grabacion real del mismo modelo cuando si termina. El texto es 'hello' y el razonamiento son 68 tokens que no deben aparecer en el.",
+      "body_file": "chat_completion_finished.json",
+      "expect": {
+        "text": "hello",
+        "content_kinds": [
+          "thinking",
+          "text"
+        ],
+        "finish_reason": "stop",
+        "usage": {
+          "input": 13,
+          "output": 68,
+          "cache_read": 3,
+          "estimated": false
+        }
+      }
+    },
+    {
+      "name": "input incluye lo cacheado, confirmado por datos reales",
+      "why": "prompt_tokens=10 y timings dice prompt_n=1 + cache_n=9. La convencion inclusiva no es una eleccion nuestra: es lo que el proveedor reporta.",
+      "body_file": "chat_completion.json",
+      "expect": {
+        "usage": {
+          "input": 10,
+          "cache_read": 9
+        }
+      }
+    },
+    {
+      "name": "si hay usage reportado, timings no lo sustituye",
+      "why": "El cuerpo trae los dos. Derivar cuando hay medicion convertiria una cifra exacta en estimada, y marcaria estimated donde no toca.",
+      "body_file": "chat_completion_finished.json",
+      "expect": {
+        "usage": {
+          "input": 13,
+          "estimated": false
+        }
+      }
+    },
+    {
+      "name": "los argumentos de una tool call llegan decodificados",
+      "why": "El cable los entrega como cadena JSON. Dejarlos sin parsear obliga al bucle a adivinar si recibio un objeto o su serializacion.",
+      "body_file": "chat_completion_tool_calls.json",
+      "expect": {
+        "content_kinds": [
+          "tool_call"
+        ],
+        "finish_reason": "tool_calls",
+        "text": "",
+        "tool_calls": [
+          {
+            "id": "call_1",
+            "name": "get_weather",
+            "arguments": {
+              "city": "Lima"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "sin usage y sin timings, todos los contadores quedan sin medir",
+      "why": "Cero diria 'no hubo'. La verdad es 'nadie lo midio', y confundirlas hace creer que escribir en cache es gratis.",
+      "body_file": "chat_completion_tool_calls.json",
+      "expect": {
+        "usage": {
+          "input": null,
+          "output": null,
+          "reasoning": null,
+          "cache_read": null,
+          "cache_write": null,
+          "estimated": false
+        }
+      }
+    },
+    {
+      "name": "el razonamiento tiene su propio ciclo en streaming",
+      "why": "Grabacion real de 22 deltas de razonamiento y ningun delta de texto. Acumularlo sin emitirlo dejaria a quien consume sin nada que ver durante toda la generacion. El stream real termina en 'length': el modelo se quedo razonando hasta agotar el limite.",
+      "body_file": "chat_stream_ok.sse",
+      "stream": true,
+      "expect": {
+        "text": "",
+        "content_kinds": [
+          "thinking"
+        ],
+        "finish_reason": "length",
+        "usage": {
+          "input": 15,
+          "cache_read": 14,
+          "output": 24,
+          "reasoning": null,
+          "cache_write": null,
+          "estimated": true
+        }
+      }
+    },
+    {
+      "name": "stream de texto con consumo en el evento final",
+      "why": "El ultimo evento lleva la respuesta acumulada completa: quien consumio los deltas no deberia tener que reconstruirla.",
+      "body_file": "chat_stream_usage.sse",
+      "stream": true,
+      "expect": {
+        "event_kinds": [
+          "stream_start",
+          "text_start",
+          "text_delta",
+          "text_end",
+          "finish"
+        ],
+        "text": "Hi",
+        "finish_reason": "stop",
+        "usage": {
+          "input": 5,
+          "output": 9,
+          "estimated": false
+        }
+      }
+    },
+    {
+      "name": "un stream vacio no es un error",
+      "why": "[DONE] sin ningun chunk es una respuesta legitima. Tratarlo como fallo obligaria a cada llamante a distinguir dos formas de no recibir texto.",
+      "body_file": "chat_stream_empty.sse",
+      "stream": true,
+      "expect": {
+        "text": "",
+        "finish_reason": "stop",
+        "usage": {
+          "input": null,
+          "output": null,
+          "estimated": false
+        }
+      }
+    },
+    {
+      "name": "una interrupcion a mitad levanta error y conserva lo ya emitido",
+      "why": "Los deltas ya entregados se generaron y se pagaron. Retirarlos haria invisible un coste que existe.",
+      "body_file": "chat_stream_interrupted.sse",
+      "stream": true,
+      "expect_error": true,
+      "expect": {
+        "partial_text": "Hello, wor"
+      }
+    }
+  ],
+  "body_manifest_version": 1
+}

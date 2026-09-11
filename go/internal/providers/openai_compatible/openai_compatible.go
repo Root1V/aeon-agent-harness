@@ -110,8 +110,25 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 
 	choice := parsed.Choices[0]
 	return providers.NormalizedChatResponse(
-		parsed.Model, choice.Message.Content, choice.FinishReason, parsed.Usage.PromptTokens, parsed.Usage.CompletionTokens,
+		parsed.Model, choice.Message.Content, NormalizeFinishReason(choice.FinishReason), parsed.Usage.PromptTokens, parsed.Usage.CompletionTokens,
 	), nil
+}
+
+// NormalizeFinishReason applies the shared contract's finish-reason table
+// (evals/contracts/normalizacion/spec.md): the four known reasons pass through, and an absent or
+// unknown one becomes "stop".
+//
+// Mapping an unknown value to "stop" is lossy and is the contract's call, not ours — several
+// OpenAI-compatible servers simply omit the field on a normal completion, and a consumer that has
+// to special-case an empty string learns nothing the mapping does not already tell it. Found by
+// running Synaptum's corpus: an empty stream produced no reason at all.
+func NormalizeFinishReason(reason string) string {
+	switch reason {
+	case "stop", "length", "tool_calls", "content_filter":
+		return reason
+	default:
+		return "stop"
+	}
 }
 
 // CachingCapability: most self-hosted serving stacks have no prompt caching — ADR-003's Budgeter
