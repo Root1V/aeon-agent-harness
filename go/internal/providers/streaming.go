@@ -17,14 +17,28 @@ type Chunk struct {
 	Usage        *Usage
 }
 
-// Usage is the token accounting a provider reports. Deliberately the same two counters
-// NormalizedChatResponse already emits, so the FinOps ledger consumes a streamed call exactly like
-// a non-streamed one. Extending this to the tripartite agreement's five-field shape
-// (input/output/reasoning/cache_read/cache_write, decision H3) belongs with the shared vocabulary
-// (FND-004), not here — doing it now would change what OBS-003's ledger reads for every caller.
+// Usage is the token accounting a provider reports.
+//
+// PromptTokens follows the convention agreed with the Synaptum and Axonium teams: it is the TOTAL
+// input, cached tokens included, and CacheReadTokens says how many of them were served from cache.
+// A consumer can therefore read PromptTokens without knowing which provider produced it. Note what
+// that costs: the convention was argued on the grounds that adapters copy rather than compute, and
+// that is true of OpenAI-shaped providers but not of Anthropic, which reports the two counters
+// disjointly — see the anthropic adapter, which must add.
+//
+// CacheReadTokens and CacheWriteTokens are pointers because three states matter and two would lose
+// one: nil means the provider does not report caching at all, while a zero means it reported that
+// nothing was cached. Collapsing them turns an unmeasured cache into a cold one, and FinOps would
+// record a fabricated fact.
+//
+// CacheWriteTokens is NOT part of PromptTokens, by the same agreement. Reasoning tokens, the fifth
+// field of decision H3, still belong with the shared vocabulary (FND-004) — the cache pair is here
+// now because its absence is a live undercount, not a missing feature.
 type Usage struct {
 	PromptTokens     int
 	CompletionTokens int
+	CacheReadTokens  *int
+	CacheWriteTokens *int
 }
 
 // StreamingProvider is an OPTIONAL capability on top of Provider. An adapter that implements it can
