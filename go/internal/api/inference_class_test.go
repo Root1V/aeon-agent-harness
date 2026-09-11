@@ -42,7 +42,7 @@ func TestLocalInferenceOutsidePrometheusIsDenied(t *testing.T) {
 	local := func(provider, model string) modelgateway.CandidateDoc {
 		return modelgateway.CandidateDoc{
 			Provider: provider, Model: model,
-			Modality: modelgateway.ModalityChat, InferenceClass: modelgateway.InferenceClassLocal,
+			Modality: modelgateway.ModalityText, InferenceClass: modelgateway.InferenceClassLocal,
 		}
 	}
 
@@ -75,7 +75,7 @@ func TestLocalInferenceOutsidePrometheusIsDenied(t *testing.T) {
 		// the failure mode this exists for.
 		srv, provider := newInferenceClassTestServer(t, []modelgateway.ModelProfileDoc{
 			{Profile: "silent", Candidates: []modelgateway.CandidateDoc{
-				{Provider: "openai_compatible", Model: "who-knows", Modality: modelgateway.ModalityChat},
+				{Provider: "openai_compatible", Model: "who-knows", Modality: modelgateway.ModalityText},
 			}},
 		})
 

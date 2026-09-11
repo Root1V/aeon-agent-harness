@@ -37,7 +37,7 @@ func newModalityTestServer(t *testing.T) (*httptest.Server, *countingProvider) {
 	bundle := modelgateway.ModelPolicyBundleDoc{
 		Profiles: []modelgateway.ModelProfileDoc{
 			{Profile: "chat-ok", Candidates: []modelgateway.CandidateDoc{
-				{Provider: "prometheus_inference", Model: "chat-model", Modality: modelgateway.ModalityChat, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
+				{Provider: "prometheus_inference", Model: "chat-model", Modality: modelgateway.ModalityText, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
 			}},
 			// The real misconfiguration: an embeddings model sitting in a chat profile.
 			{Profile: "chat-with-embeddings-model", Candidates: []modelgateway.CandidateDoc{
@@ -47,10 +47,26 @@ func newModalityTestServer(t *testing.T) (*httptest.Server, *countingProvider) {
 			{Profile: "chat-undeclared", Candidates: []modelgateway.CandidateDoc{
 				{Provider: "prometheus_inference", Model: "who-knows", InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
 			}},
+			// text and vision are both served on /v1/chat/completions, so a vision candidate is a
+			// perfectly good one. The first version of this check compared against a single "chat"
+			// value and would have rejected this — failing the whole profile, which is what a *bad*
+			// candidate deserves, applied to a good one. Found by Axonium against the real
+			// deployment, where a vision model is running right now.
+			{Profile: "chat-vision", Candidates: []modelgateway.CandidateDoc{
+				{Provider: "prometheus_inference", Model: "qwen3vl", Modality: modelgateway.ModalityVision, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
+			}},
+			// An image model is not chat-servable, and a value the catalog may add tomorrow is not
+			// either — deny, do not guess.
+			{Profile: "chat-image", Candidates: []modelgateway.CandidateDoc{
+				{Provider: "prometheus_inference", Model: "sd-turbo", Modality: modelgateway.ModalityImage, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
+			}},
+			{Profile: "chat-future", Candidates: []modelgateway.CandidateDoc{
+				{Provider: "prometheus_inference", Model: "whisper", Modality: "audio", InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
+			}},
 			// A misclassified candidate must not be rescued by a healthy sibling: the bundle is
 			// wrong, and routing around the error would hide it.
 			{Profile: "chat-mixed", Candidates: []modelgateway.CandidateDoc{
-				{Provider: "prometheus_inference", Model: "chat-model", Modality: modelgateway.ModalityChat, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
+				{Provider: "prometheus_inference", Model: "chat-model", Modality: modelgateway.ModalityText, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
 				{Provider: "prometheus_inference", Model: "embed-model", Modality: "embedding", InferenceClass: modelgateway.InferenceClassLocal, Priority: 1},
 			}},
 		},
@@ -132,6 +148,30 @@ func TestEmbeddingModelRoutedAsChatIsRejected(t *testing.T) {
 		errObj, _ := parsed["error"].(map[string]any)
 		if errObj["type"] != "invalid_request_error" {
 			t.Errorf("error type = %v, want invalid_request_error", errObj["type"])
+		}
+	})
+
+	t.Run("a vision candidate routes: the correspondence is not one to one", func(t *testing.T) {
+		srv, provider := newModalityTestServer(t)
+
+		if status, _ := postChatCompletion(t, srv, chatBody("chat-vision")); status != http.StatusOK {
+			t.Fatalf("status = %d, want 200 — text and vision are both served by the chat endpoint", status)
+		}
+		if provider.calls.Load() != 1 {
+			t.Fatalf("provider calls = %d, want 1", provider.calls.Load())
+		}
+	})
+
+	t.Run("an image model and an unknown modality are both denied", func(t *testing.T) {
+		for _, profile := range []string{"chat-image", "chat-future"} {
+			srv, provider := newModalityTestServer(t)
+			status, _ := postChatCompletion(t, srv, chatBody(profile))
+			if status != http.StatusForbidden {
+				t.Errorf("%s: status = %d, want 403", profile, status)
+			}
+			if provider.calls.Load() != 0 {
+				t.Errorf("%s: the provider was called %d time(s)", profile, provider.calls.Load())
+			}
 		}
 	})
 
