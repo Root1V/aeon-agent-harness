@@ -12,53 +12,43 @@
       "served_by": 1
     },
     {
-      "id": "qwen3-0-6b-iq4-nl-local-2",
+      "id": "qwen3-0.6b",
       "object": "model",
       "owned_by": "prometheus",
       "context_length": 4096,
-      "family": "",
+      "family": "qwen3",
       "quantization": "IQ4_NL",
       "modality": "text",
       "served_by": 2
     },
     {
-      "id": "qwen3-embedding-0-6b-q8-0-local",
+      "id": "qwen3-embedding",
       "object": "model",
       "owned_by": "prometheus",
       "context_length": 4096,
-      "family": "",
+      "family": "qwen3",
       "quantization": "Q8_0",
       "modality": "embedding",
       "served_by": 1
     },
     {
-      "id": "sd-turbo-test",
+      "id": "sd-turbo",
       "object": "model",
       "owned_by": "prometheus",
-      "context_length": 0,
+      "context_length": null,
       "family": "sd-turbo",
       "quantization": "Q8_0",
       "modality": "image",
       "served_by": 1
     },
     {
-      "id": "qwen3vl-8b-q4",
+      "id": "qwen3-vl-8b",
       "object": "model",
       "owned_by": "prometheus",
       "context_length": 8192,
       "family": "qwen3vl",
       "quantization": "Q4_K_M",
       "modality": "vision",
-      "served_by": 1
-    },
-    {
-      "id": "qwen3-0-6b-iq4-nl-local-1",
-      "object": "model",
-      "owned_by": "prometheus",
-      "context_length": 4096,
-      "family": "",
-      "quantization": "IQ4_NL",
-      "modality": "text",
       "served_by": 1
     }
   ]

@@ -2,8 +2,8 @@
   "type": "https://prometheus.internal/errors/modality-mismatch",
   "title": "Modality Mismatch",
   "status": 400,
-  "detail": "Model 'qwen3-0-6b-iq4-nl-local-2' is not an embedding model (modality='text'). Use GET /v1/models to find an embedding-capable model.",
-  "instance": "/v1/embeddings",
-  "request_id": "8fa4fe4a-7c91-4b84-918e-fa390fbc1c10",
-  "trace_id": "c779b61508e49132d5ded2313e841e76"
+  "detail": "Model 'qwen3-embedding' does not support chat completions (modality='embedding'). Use /v1/embeddings or /v1/images/generations for that modality instead.",
+  "instance": "/v1/chat/completions",
+  "request_id": "498f18d6-4a76-441a-a656-2b04c52fbe98",
+  "trace_id": "7d4c7b83cc614796f011c1b991570848"
 }

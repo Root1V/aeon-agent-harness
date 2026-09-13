@@ -4,8 +4,8 @@
   "status": 422,
   "detail": "body.messages: Field required",
   "instance": "/v1/chat/completions",
-  "request_id": "f8828324-1ede-44fc-938f-04c2d1b260d4",
-  "trace_id": "f516c6335ae0bff53b0ed04ca3a3f022",
+  "request_id": "16c207cb-f59a-4eb5-9519-4fab0b4aba6e",
+  "trace_id": "647efab1853ba8d920665b20056ac80f",
   "errors": [
     {
       "type": "missing",
@@ -15,7 +15,7 @@
       ],
       "msg": "Field required",
       "input": {
-        "model": "qwen3-0-6b-iq4-nl-local-2"
+        "model": "qwen3-0.6b"
       }
     }
   ]

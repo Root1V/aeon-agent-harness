@@ -1,5 +1,5 @@
 {
-  "model": "qwen3-embedding-0-6b-q8-0-local",
+  "model": "qwen3-embedding",
   "object": "list",
   "usage": {
     "prompt_tokens": 6,

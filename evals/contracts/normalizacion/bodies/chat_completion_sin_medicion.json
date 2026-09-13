@@ -1,0 +1,17 @@
+{
+  "$authored": "NO es una grabacion. Escrito a mano por Synaptum el 2026-09-13 porque el caso que necesita este cuerpo -- ningun contador medido -- ya no se puede grabar contra Prometheus: desde el manifest v8 toda respuesta trae usage y timings. El cuerpo se conserva porque la ausencia de medicion si ocurre con otros dialectos OpenAI-compatible, y porque distinguir 'nadie lo midio' de 'se midio y fue cero' es una propiedad del vocabulario, no de este despliegue.",
+  "id": "chatcmpl-sin-medicion",
+  "object": "chat.completion",
+  "created": 1757779200,
+  "model": "qwen3-0.6b",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "listo"
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}

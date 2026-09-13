@@ -1,9 +1,13 @@
 {
   "contract": "normalizacion",
-  "version": "0.1-draft",
+  "version": "0.2-draft",
   "dialect": "openai-compatible",
-  "$comment": "Cada caso toma un cuerpo del cable de ../../gateway-prometheus/fixtures y declara la proyeccion unificada que cualquier implementacion correcta debe producir. Los cuerpos no se duplican aqui: se referencian. Tras AXO-47 la mayoria son GRABACIONES REALES contra el despliegue, no cuerpos escritos desde la guia — lo que cambia lo que un verde demuestra.",
+  "$comment": "Cada caso toma un cuerpo del cable y declara la proyeccion unificada que cualquier implementacion correcta debe producir. Los cuerpos no se duplican aqui: se referencian.",
+  "$v02": "La regrabacion del manifest v8 rompio cinco casos de la v0.1 sin que ninguna implementacion hubiera cambiado. La causa era nuestra: el corpus fijaba CIFRAS (137 tokens de salida, cache_read 14, un id de replica como modelo) que pertenecen a una grabacion concreta y no a la especificacion. Un caso dorado que se cae al regrabar no estaba comprobando conformidad, estaba comprobando que nadie tocara el fixture. Desde la v0.2 un contador solo se fija cuando el valor ES la afirmacion -- null o cero, que son las que distinguen los tres estados de Usage -- y el resto se expresa como estado medido/sin-medir y como relaciones entre contadores.",
   "body_root": "../../gateway-prometheus/fixtures",
+  "authored_root": "../bodies",
+  "$body_root": "Los cuerpos con 'authored': true se resuelven contra authored_root y NO son grabaciones; cada uno explica en el propio fichero por que no puede serlo. Los demas vienen del manifest de Axonium.",
+  "body_manifest_version": 8,
   "cases": [
     {
       "name": "una respuesta que nunca sale de la fase de razonamiento",
@@ -15,20 +19,32 @@
           "thinking"
         ],
         "finish_reason": "length",
-        "model": "qwen3-0-6b-iq4-nl-local-1",
+        "usage_state": {
+          "input": "measured",
+          "output": "measured",
+          "cache_read": "measured",
+          "reasoning": "unmeasured",
+          "cache_write": "unmeasured"
+        },
         "usage": {
-          "input": 10,
-          "output": 24,
-          "cache_read": 9,
-          "reasoning": null,
-          "cache_write": null,
           "estimated": false
-        }
+        },
+        "usage_relations": [
+          ["input", ">=", "cache_read"]
+        ]
+      }
+    },
+    {
+      "name": "el modelo de la respuesta es el que sirvio, y no se normaliza al pedido",
+      "why": "Axonium reporto el 2026-09-11 que pedir -local-2 devolvia -local-1, y pregunto si algun caso dorado afirmaba que el model unificado era el pedido. Este lo afirmaba de hecho, fijando el id de una replica, y la regrabacion lo tiro. Bajo el catalogo de slugs del v8 el gateway responde con el MODELO y la replica viaja en la cabecera X-Prometheus-Instance, asi que la pregunta se cierra sola: el adaptador copia lo que el cuerpo dice y no lo sustituye por lo que el llamante pidio. Normalizarlo de vuelta borraria la unica evidencia de que hubo redireccion.",
+      "body_file": "chat_completion.json",
+      "expect": {
+        "model": "qwen3-0.6b"
       }
     },
     {
       "name": "razonamiento y respuesta llegan separados y no se concatenan",
-      "why": "Grabacion real del mismo modelo cuando si termina. El texto es 'hello' y el razonamiento son 68 tokens que no deben aparecer en el.",
+      "why": "Grabacion real del mismo modelo cuando si termina. El texto es exactamente 'hello'; el razonamiento que lo precede no debe aparecer en el, y el orden de las partes dice cual fue primero.",
       "body_file": "chat_completion_finished.json",
       "expect": {
         "text": "hello",
@@ -36,50 +52,46 @@
           "thinking",
           "text"
         ],
-        "finish_reason": "stop",
-        "usage": {
-          "input": 13,
-          "output": 68,
-          "cache_read": 3,
-          "estimated": false
-        }
+        "finish_reason": "stop"
       }
     },
     {
-      "name": "input incluye lo cacheado, confirmado por datos reales",
-      "why": "prompt_tokens=10 y timings dice prompt_n=1 + cache_n=9. La convencion inclusiva no es una eleccion nuestra: es lo que el proveedor reporta.",
-      "body_file": "chat_completion.json",
+      "name": "input incluye lo cacheado, confirmado por tres grabaciones",
+      "why": "En las tres respuestas no-streaming del v8 se cumple prompt_tokens == prompt_n + cache_n (1+9=10, 10+3=13, 1+153=154). La convencion inclusiva no es una eleccion nuestra: es lo que el proveedor reporta, y ahora con tres puntos de dato en vez de uno.",
+      "body_file": "chat_completion_tool_calls.json",
       "expect": {
-        "usage": {
-          "input": 10,
-          "cache_read": 9
-        }
+        "usage_state": {
+          "input": "measured",
+          "cache_read": "measured"
+        },
+        "usage_relations": [
+          ["input", ">=", "cache_read"]
+        ]
       }
     },
     {
       "name": "si hay usage reportado, timings no lo sustituye",
-      "why": "El cuerpo trae los dos. Derivar cuando hay medicion convertiria una cifra exacta en estimada, y marcaria estimated donde no toca.",
+      "why": "El cuerpo trae los dos, y con cifras que coinciden -- asi que el valor no distingue las dos rutas y el bit si. Derivar cuando hay medicion marcaria estimated donde no toca, convirtiendo una cifra exacta en estimada sin cambiar ningun numero: el fallo no se veria al comparar totales, solo al confiar en ellos.",
       "body_file": "chat_completion_finished.json",
       "expect": {
         "usage": {
-          "input": 13,
           "estimated": false
         }
       }
     },
     {
       "name": "los argumentos de una tool call llegan decodificados",
-      "why": "El cable los entrega como cadena JSON. Dejarlos sin parsear obliga al bucle a adivinar si recibio un objeto o su serializacion.",
+      "why": "El cable los entrega como cadena JSON. Dejarlos sin parsear obliga al bucle a adivinar si recibio un objeto o su serializacion. La grabacion del v8 trae ademas razonamiento antes de la llamada, que es el caso normal en un modelo de razonamiento y no un adorno: el contenido es thinking + tool_call, sin parte de texto.",
       "body_file": "chat_completion_tool_calls.json",
       "expect": {
         "content_kinds": [
+          "thinking",
           "tool_call"
         ],
         "finish_reason": "tool_calls",
         "text": "",
         "tool_calls": [
           {
-            "id": "call_1",
             "name": "get_weather",
             "arguments": {
               "city": "Lima"
@@ -90,9 +102,11 @@
     },
     {
       "name": "sin usage y sin timings, todos los contadores quedan sin medir",
-      "why": "Cero diria 'no hubo'. La verdad es 'nadie lo midio', y confundirlas hace creer que escribir en cache es gratis.",
-      "body_file": "chat_completion_tool_calls.json",
+      "why": "Cero diria 'no hubo'. La verdad es 'nadie lo midio', y confundirlas hace creer que escribir en cache es gratis. Este caso usaba una grabacion que perdio la propiedad al regrabarse -- desde el v8 toda respuesta de Prometheus trae usage -- asi que el cuerpo pasa a ser escrito a mano y lo dice. La propiedad sigue siendo del vocabulario, no de este despliegue.",
+      "body_file": "chat_completion_sin_medicion.json",
+      "authored": true,
       "expect": {
+        "text": "listo",
         "usage": {
           "input": null,
           "output": null,
@@ -105,7 +119,7 @@
     },
     {
       "name": "el razonamiento tiene su propio ciclo en streaming",
-      "why": "Grabacion real de 22 deltas de razonamiento y ningun delta de texto. Acumularlo sin emitirlo dejaria a quien consume sin nada que ver durante toda la generacion. El stream real termina en 'length': el modelo se quedo razonando hasta agotar el limite.",
+      "why": "Grabacion real de 22 deltas de razonamiento y ningun delta de texto. Acumularlo sin emitirlo dejaria a quien consume sin nada que ver durante toda la generacion. El stream real termina en 'length': el modelo se quedo razonando hasta agotar el limite. Sin chunk de usage, los contadores salen de timings y por eso estimated es true.",
       "body_file": "chat_stream_ok.sse",
       "stream": true,
       "expect": {
@@ -113,15 +127,76 @@
         "content_kinds": [
           "thinking"
         ],
+        "event_kinds_collapsed": [
+          "stream_start",
+          "reasoning_start",
+          "reasoning_delta",
+          "reasoning_end",
+          "finish"
+        ],
         "finish_reason": "length",
         "usage": {
-          "input": 15,
-          "cache_read": 14,
-          "output": 24,
-          "reasoning": null,
-          "cache_write": null,
           "estimated": true
-        }
+        },
+        "usage_state": {
+          "input": "measured",
+          "output": "measured",
+          "cache_read": "measured",
+          "reasoning": "unmeasured",
+          "cache_write": "unmeasured"
+        },
+        "usage_relations": [
+          ["input", ">=", "cache_read"]
+        ]
+      }
+    },
+    {
+      "name": "la fase de razonamiento se cierra al empezar la tool call, no al terminar el stream",
+      "why": "Cuerpo que Axonium grabo a peticion nuestra: 75 deltas de razonamiento, luego 8 fragmentos de una tool call, y NINGUN delta de texto. Encontro un fallo real nuestro: cerrabamos el ciclo de razonamiento solo al llegar 'content', asi que con una tool call el reasoning_end caia en mitad de la llamada -- el bloque de pensamiento seguia abierto mientras los argumentos ya estaban llegando. La fase de razonamiento termina cuando empieza cualquier otra cosa, no solo el texto. El fixture escrito a mano que teniamos antes no podia encontrarlo porque no era un stream.",
+      "body_file": "chat_stream_tool_calls.sse",
+      "stream": true,
+      "expect": {
+        "text": "",
+        "event_kinds_collapsed": [
+          "stream_start",
+          "reasoning_start",
+          "reasoning_delta",
+          "reasoning_end",
+          "tool_call_start",
+          "tool_call_delta",
+          "tool_call_end",
+          "finish"
+        ],
+        "finish_reason": "tool_calls",
+        "content_kinds": [
+          "thinking",
+          "tool_call"
+        ],
+        "tool_calls": [
+          {
+            "name": "get_weather",
+            "arguments": {
+              "city": "Lima"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "los fragmentos de una tool call se correlacionan por index y se parsean una sola vez",
+      "why": "Axonium midio que el id, el type y el name llegan SOLO en el primer fragmento y que ninguno de los siguientes es JSON valido por separado. Un diseno que espere id en cada delta pierde la segunda herramienta de una llamada paralela; uno que parsee cada trozo falla en el camino feliz. Se acumula por index y se parsea al cerrar. Ademas: la llamada aparece pasado el chunk 75 de 86, asi que un timeout de inactividad sobre 'no ha llegado nada util' mata llamadas sanas.",
+      "body_file": "chat_stream_tool_calls.sse",
+      "stream": true,
+      "expect": {
+        "tool_call_ids_are_nonempty": true,
+        "tool_calls": [
+          {
+            "name": "get_weather",
+            "arguments": {
+              "city": "Lima"
+            }
+          }
+        ]
       }
     },
     {
@@ -140,15 +215,17 @@
         "text": "Hi",
         "finish_reason": "stop",
         "usage": {
-          "input": 5,
-          "output": 9,
           "estimated": false
+        },
+        "usage_state": {
+          "input": "measured",
+          "output": "measured"
         }
       }
     },
     {
       "name": "un stream vacio no es un error",
-      "why": "[DONE] sin ningun chunk es una respuesta legitima. Tratarlo como fallo obligaria a cada llamante a distinguir dos formas de no recibir texto.",
+      "why": "El centinela sin ningun chunk es una respuesta legitima. Tratarlo como fallo obligaria a cada llamante a distinguir dos formas de no recibir texto.",
       "body_file": "chat_stream_empty.sse",
       "stream": true,
       "expect": {
@@ -162,8 +239,19 @@
       }
     },
     {
+      "name": "un solo centinela por respuesta, y se para en el primero",
+      "why": "Hasta el v8 el gateway reenviaba el [DONE] del backend y anadia el suyo. Un cliente correcto paraba en el primero -- y todo lo que registraba la peticion vivia pasado ese punto, asi que el streaming no se facturaba. Ya viene uno solo. El caso fija la conducta del cliente y no la del cable: quien pare en el primer centinela tiene que producir el mismo resultado llegue uno o lleguen dos, porque el cable puede volver a cambiar y esto no.",
+      "body_file": "chat_stream_usage.sse",
+      "stream": true,
+      "expect": {
+        "stops_at_first_sentinel": true,
+        "text": "Hi",
+        "finish_reason": "stop"
+      }
+    },
+    {
       "name": "una interrupcion a mitad levanta error y conserva lo ya emitido",
-      "why": "Los deltas ya entregados se generaron y se pagaron. Retirarlos haria invisible un coste que existe.",
+      "why": "Los deltas ya entregados se generaron y se pagaron. Retirarlos haria invisible un coste que existe -- y desde el v8 ese coste es real tambien para el proveedor: un cliente que cuelga a mitad paga lo que se le envio.",
       "body_file": "chat_stream_interrupted.sse",
       "stream": true,
       "expect_error": true,
@@ -171,6 +259,5 @@
         "partial_text": "Hello, wor"
       }
     }
-  ],
-  "body_manifest_version": 1
+  ]
 }

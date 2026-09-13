@@ -4,6 +4,6 @@
   "status": 400,
   "detail": "Model 'no-existe' is not registered. Use GET /v1/models for the list of available models.",
   "instance": "/v1/chat/completions",
-  "request_id": "aa43b060-2afe-4623-ab12-63898656c4ba",
-  "trace_id": "ceb5dda565e8487c6a5eb3e1c423dcb2"
+  "request_id": "fd9c6858-f030-4e01-b93a-b975f5185305",
+  "trace_id": "5d4ba1f4ebf14885fd9f5b6866a2009f"
 }

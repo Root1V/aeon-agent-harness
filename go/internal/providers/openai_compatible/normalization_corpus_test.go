@@ -24,6 +24,18 @@ type normCorpus struct {
 	Dialect  string     `json:"dialect"`
 	BodyRoot string     `json:"body_root"`
 	Cases    []normCase `json:"cases"`
+	// BodyManifestVersion is the version of the body corpus these expectations were written
+	// against. Checking it is not bookkeeping: the bodies live in a different published corpus and
+	// are re-recorded independently, so a stale vendored copy pairs today's expectations with
+	// yesterday's bodies and produces results that look real. This runner's first outing did
+	// exactly that and nobody noticed, including the runner.
+	BodyManifestVersion int `json:"body_manifest_version"`
+	// AuthoredRoot holds bodies written by hand rather than recorded. They exist because some
+	// properties stopped having a real recording — after the v8 re-record every Prometheus response
+	// carries usage, so "nobody measured" had nowhere left to come from. Keeping them in their own
+	// directory, flagged per case, is what stops a hand-written body from being read as evidence
+	// about the platform.
+	AuthoredRoot string `json:"authored_root"`
 }
 
 type normCase struct {
@@ -31,6 +43,7 @@ type normCase struct {
 	Why      string          `json:"why"`
 	BodyFile string          `json:"body_file"`
 	Stream   bool            `json:"stream"`
+	Authored bool            `json:"authored"`
 	Expect   json.RawMessage `json:"expect"`
 	Error    json.RawMessage `json:"error"`
 }
@@ -313,14 +326,24 @@ func TestNormalizationCorpusAgainstThisAdapter(t *testing.T) {
 		t.Fatalf("parsing the shared corpus: %v", err)
 	}
 	bodyRoot := filepath.Join(filepath.Dir(corpusPath), filepath.FromSlash(corpus.BodyRoot))
-	t.Logf("corpus %s %s (%s): %d cases", corpus.Contract, corpus.Version, corpus.Dialect, len(corpus.Cases))
+	authoredRoot := bodyRoot
+	if corpus.AuthoredRoot != "" {
+		authoredRoot = filepath.Join(filepath.Dir(corpusPath), filepath.FromSlash(corpus.AuthoredRoot))
+	}
+	assertBodiesMatchCorpus(t, bodyRoot, corpus.BodyManifestVersion)
+	t.Logf("corpus %s %s (%s): %d cases, bodies manifest v%d",
+		corpus.Contract, corpus.Version, corpus.Dialect, len(corpus.Cases), corpus.BodyManifestVersion)
 
 	var passed, gapped int
 	var divergences []string
 
 	for _, tc := range corpus.Cases {
 		t.Run(tc.Name, func(t *testing.T) {
-			body, err := os.ReadFile(filepath.Join(bodyRoot, tc.BodyFile))
+			root := bodyRoot
+			if tc.Authored {
+				root = authoredRoot
+			}
+			body, err := os.ReadFile(filepath.Join(root, tc.BodyFile))
 			if err != nil {
 				t.Fatalf("reading body %s: %v", tc.BodyFile, err)
 			}
@@ -384,5 +407,30 @@ func TestNormalizationCorpusAgainstThisAdapter(t *testing.T) {
 		passed, len(corpus.Cases), gapped, len(divergences))
 	for _, d := range divergences {
 		t.Logf("DIVERGENCIA: %s", d)
+	}
+}
+
+// assertBodiesMatchCorpus refuses to run expectations against a body corpus they were not written
+// for. Both corpora are vendored copies of files published elsewhere and re-recorded on their own
+// schedule, so drifting apart is the normal state, not the exceptional one — and a run against
+// mismatched bodies fails in a way that looks like a finding.
+func assertBodiesMatchCorpus(t *testing.T, bodyRoot string, want int) {
+	t.Helper()
+	if want == 0 {
+		t.Fatal("the corpus does not declare body_manifest_version — cannot tell which bodies it was written against")
+	}
+	raw, err := os.ReadFile(filepath.Join(bodyRoot, "..", "manifest.json"))
+	if err != nil {
+		t.Fatalf("reading the body manifest: %v", err)
+	}
+	var manifest struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatalf("parsing the body manifest: %v", err)
+	}
+	if manifest.Version != want {
+		t.Fatalf("the vendored bodies are manifest v%d but this corpus was written against v%d — re-vendor from the shared folder before reading anything into the result",
+			manifest.Version, want)
 	}
 }

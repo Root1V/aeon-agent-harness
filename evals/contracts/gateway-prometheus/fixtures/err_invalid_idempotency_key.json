@@ -1,0 +1,1 @@
+{"type":"https://prometheus.internal/errors/invalid-idempotency-key","title":"Invalid Idempotency Key","status":400,"detail":"Idempotency-Key must be at most 255 characters.","instance":"/v1/chat/completions","request_id":"1de6b83a-902e-40f1-acbe-88a15048e120","trace_id":"cd6d6bf6d6134645715e4cbed490a9c2"}
