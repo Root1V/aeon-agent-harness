@@ -26,10 +26,17 @@ def test_resolve_candidates_returns_the_real_reasoning_high_candidates():
 
 
 def test_resolve_candidates_returns_the_real_reasoning_local_candidate():
+    """The local profile is the one that has to name models that exist: it is the only one this
+    project can actually call today. Both ids below were read from a live GET /v1/models on
+    2026-09-13 — the previous "local-default" was a placeholder and would have 404'd on the first
+    real call, which is exactly what happened when one was finally made."""
     bundle = load_model_policy_bundle(BUNDLE_PATH)
     candidates = resolve_candidates(bundle, "reasoning-local")
 
-    assert candidates == [{"provider": "prometheus_inference", "model": "local-default", "priority": 0}]
+    assert candidates == [
+        {"provider": "prometheus_inference", "model": "gpt-oss-20b-mxfp4", "priority": 0},
+        {"provider": "prometheus_inference", "model": "qwen3-0.6b", "priority": 1},
+    ]
 
 
 def test_resolve_candidates_rejects_an_unknown_profile():

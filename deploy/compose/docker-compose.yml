@@ -200,9 +200,19 @@ services:
       # OBS-003: durable FinOps cost ledger + GET /finops/costs dashboard. Optional — without it,
       # /decide still computes and returns cost_usd per call, it just isn't recorded anywhere.
       AEON_PG_DSN: postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable
+      # MDL-006: the Prometheus URLs in .env are written for host-side use (127.0.0.1), which
+      # inside a container means the container itself — verified: unreachable. These override them
+      # with the host's view of the same service, and stay overridable for a deployment where
+      # Prometheus is not on the developer's machine. Both values are the same service seen from a
+      # different network namespace, not different endpoints.
+      PROMETHEUS_AUTH_URL: "${PROMETHEUS_AUTH_URL_IN_CONTAINER:-http://host.docker.internal:9000}"
+      PROMETHEUS_GATEWAY_URL: "${PROMETHEUS_GATEWAY_URL_IN_CONTAINER:-http://host.docker.internal:8020}"
     env_file:
       - path: ../../.env
         required: false
+    extra_hosts:
+      # Docker Desktop provides this automatically; Linux hosts need it declared.
+      - "host.docker.internal:host-gateway"
     volumes:
       - ../../examples:/examples:ro
     ports:

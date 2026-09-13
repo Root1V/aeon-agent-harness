@@ -244,6 +244,7 @@ en `backlog.md`). Se documentan como trabajo futuro explícito, no como huecos s
 | F3 | Memoria gobernada | 100% (6/6) | `DONE` |
 | F4 | Trust e interoperabilidad | 100% (14/14) | `DONE` |
 | F4.5 | Costura Synaptum + Axonium (interop de runtime) | 38% (6/16) | `IN_PROGRESS` |
+| F4.6 | Del arnés al ejemplo real | 0% (0/6) | `IN_PROGRESS` |
 | F5 | Learning Lab | 0% | `TODO` |
 
 Bloqueos abiertos: **uno real, y es externo** — `FND-004` y la suite de conformidad de F4.5 dependen
@@ -1288,6 +1289,45 @@ no significa nada en el camino real. El append diferido es una feature aparte y 
 pregunta abierta en el canal —qué garantía se espera de un append diferido que no llegó a disco
 cuando el proceso cae— cuya respuesta decide si basta con agrupar escrituras o hace falta un journal
 de escritura por delante.
+
+## F4.6 — Del arnés al ejemplo real
+
+Nace de una pregunta directa del dueño del proyecto: *«necesito ya usar este proyecto en un ejemplo
+real»*. Al ir a contestarla con hechos en vez de con el roadmap aparecieron tres huecos que **ninguna
+feature declara**, porque cada una cumple su criterio por separado y el hueco está entre ellas.
+
+**El arnés es real: el agente no tiene manos.**
+
+1. **El worker no ejecuta ninguna tool.** [`execute_tool`](python/aeon_worker/activities/tool_activities.py)
+   escribe la *intención* en un fichero local y devuelve `{"status": "written"}`. Su propio docstring
+   lo dice. El Tool Gateway existe, tiene política Cedar y está probado — y **el worker no lo llama**.
+   El `artifact.write` de los tests «funciona» sin escribir ningún fichero. Y como los cinco
+   adaptadores de frameworks (Modo B) pasan por esa misma función, ninguno ejecuta nada tampoco.
+2. **No hay tabla de deduplicación de ejecución.** El Tool Registry *exige* `idempotency_key_fields`
+   a toda tool con efectos, pero nada deduplica al ejecutar: la única dedupe real es el
+   `EffectsLedger` de fichero que el propio código marca «Not for production use». La propiedad que
+   `test_crash_resume_no_duplicate_write` demuestra es cierta, y descansa sobre esa pieza.
+3. **El pipeline nunca ha hablado con un modelo real.** El test E2E de `DX-001` usa un doble HTTP
+   para el Model Gateway, y el bundle del ejemplo nombra `claude-opus-5` y `gpt-5.1`, que son
+   marcadores — con una key real darían 404.
+
+Decisión del dueño sobre el ejemplo: **inferencia en Prometheus**, y el agente tiene que **revisar
+documentos y buscar en la web**. Eso fija las tools a construir.
+
+| ID | Feature | Estado | Criterio de DONE | PR |
+|---|---|---|---|---|
+| TOOL-004 | El worker ejecuta de verdad, a través del Tool Gateway | `TODO` | `TestWorkerToolCallExecutesThroughTheGatewayAndDeduplicates` en verde — `execute_tool` llama al `aeon-toolgw` real en vez del ledger de fichero, **la política Cedar se aplica en el camino real** (una tool fuera del manifiesto no se ejecuta, y el test lo comprueba observando que no ocurrió el efecto, no leyendo un objeto de decisión), y un reintento con la misma `idempotency_key` **no repite el efecto**. Requiere primero la dedupe de abajo: cablear sin ella cambiaría una garantía probada por ninguna | — |
+| TOOL-005 | Tabla de deduplicación de ejecución en Postgres | `TODO` | `TestToolExecutionIsDeduplicatedByIdempotencyKey` en verde — `POST /execute` acepta `idempotency_key`, y una segunda llamada con la misma clave devuelve el resultado registrado **sin volver a ejecutar**. Es lo que hoy no existe: el registry exige `idempotency_key_fields` y nadie los usa al ejecutar. Misma forma que `INT-009` —la clave primaria *es* el contrato— y con la distinción que ya aprendimos ahí: un duplicado con resultado distinto conserva el primero y **reporta la divergencia** | — |
+| TOOL-006 | `search.rag` real sobre documentos | `TODO` | `TestSearchRagReturnsRealPassagesFromIndexedDocuments` en verde — indexado real a pgvector (ya está en el compose) con **embeddings de Prometheus** (`qwen3-embedding-0-6b-q8-0-local`, modalidad `embedding` del catálogo), y recuperación que devuelve pasajes con su locator. Sin locator no hay `EvidencePacket` posible, y sin eso el Citation Verifier no tiene contra qué verificar | — |
+| TOOL-007 | `search.web` real | `TODO` | `TestSearchWebReturnsRealResults` en verde contra un proveedor de búsqueda real. Hoy [`executor.go`](go/internal/toolexec/executor.go) devuelve sus propios argumentos. Detrás de una interfaz con un proveedor concreto, no acoplado: la clave y el proveedor son del despliegue, no del arnés | — |
+| MDL-016 | El razonamiento no se pierde ni se paga a ciegas | `TODO` | `TestReasoningContentSurvivesNormalization` en verde — el mensaje de Prometheus trae `reasoning_content` junto a `content` y **nuestro adaptador lo descarta**. Verificado en la primera llamada real contra el despliegue (2026-09-13): con `max_tokens: 20` la respuesta vuelve **vacía**, `finish_reason: length`, 20 tokens de salida facturados y ninguna explicación de por qué no hay texto. `gpt-oss-20b-mxfp4` es de razonamiento, así que esto no es un caso raro: es el comportamiento normal del modelo del ejemplo. Solapa con `FND-004` (parte `thinking` y el contador `reasoning` de `H3`) pero **no espera a ratificar H1**: sin esto, un agente con presupuesto ajustado produce respuestas vacías caras y quien las mira no puede distinguirlas de un fallo. Es el primer caso del corpus de normalización de Synaptum, materializado en la llamada número uno | — |
+| MDL-015 | El pipeline habla con Prometheus de verdad | `TODO` | `TestDeepResearchAgainstRealPrometheus` en verde — el ejemplo completo contra la plataforma real, no un doble HTTP, con el `ModelPolicyBundle` apuntando a modelos que existen. Cierra el hueco 3: hoy `DX-001` prueba el pipeline y `MDL-006` prueba el adaptador, **y nada prueba los dos juntos** | — |
+
+**Nota sobre por qué esto no estaba visible.** Las 13 features de F2 están `DONE` con test real y ninguna
+miente. El hueco vive *entre* features: `TOOL-001` prueba que el gateway ejecuta y aplica política,
+`RUN-004` prueba que el worker no repite un efecto confirmado, y nadie probaba que **el worker pasara
+por el gateway**. Es el tipo de agujero que una suite por feature no puede ver y que aparece a la
+primera pregunta de «¿puedo usarlo?».
 
 ## F5 — Learning Lab (semanas 24+)
 

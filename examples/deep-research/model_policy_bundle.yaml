@@ -46,11 +46,23 @@ profiles:
         max_context_tokens: 1000000
   - profile: reasoning-local
     candidates:
+      # Verificado contra el despliegue real el 2026-09-13: estos son ids del catálogo
+      # (GET /v1/models), no marcadores. `local-default` no existía y habría dado 404 en la
+      # primera llamada. gpt-oss-20b-mxfp4 es de razonamiento y emite reasoning_content — ver
+      # MDL-016: hoy lo descartamos, así que con max_tokens ajustado la respuesta vuelve vacía.
       - provider: prometheus_inference
-        model: local-default
+        model: gpt-oss-20b-mxfp4
         modality: text
         inference_class: local
         priority: 0
+        tool_calling: emulated
+        caching_capability: none
+        cost_model: compute_based
+      - provider: prometheus_inference
+        model: qwen3-0.6b
+        modality: text
+        inference_class: local
+        priority: 1
         tool_calling: emulated
         caching_capability: none
         cost_model: compute_based
