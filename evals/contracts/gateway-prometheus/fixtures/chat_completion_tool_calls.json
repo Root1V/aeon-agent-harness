@@ -1,22 +1,47 @@
 {
-  "id": "chatcmpl-tool",
-  "object": "chat.completion",
-  "model": "llama3-8b-q4",
   "choices": [
     {
+      "finish_reason": "tool_calls",
       "index": 0,
       "message": {
         "role": "assistant",
-        "content": null,
+        "content": "",
+        "reasoning_content": "Okay, the user is asking about the weather in Lima. I need to use the get_weather function for that. Let me check the function parameters. The required parameter is \"city\", and the user mentioned \"Lima\". So I should call the function with city set to \"Lima\". I'll make sure to format the tool call correctly in JSON within the specified XML tags.\n",
         "tool_calls": [
           {
-            "id": "call_1",
             "type": "function",
-            "function": { "name": "get_weather", "arguments": "{\"city\":\"Lima\"}" }
+            "function": {
+              "name": "get_weather",
+              "arguments": "{\"city\": \"Lima\"}"
+            },
+            "id": "LULjccrVy004l2Bfqk2XhxDPpJ6VNbE3"
           }
         ]
-      },
-      "finish_reason": "tool_calls"
+      }
     }
-  ]
+  ],
+  "created": 1789257091,
+  "model": "qwen3-0.6b",
+  "system_fingerprint": "b10101-4310aa4f8",
+  "object": "chat.completion",
+  "usage": {
+    "completion_tokens": 102,
+    "prompt_tokens": 154,
+    "total_tokens": 256,
+    "prompt_tokens_details": {
+      "cached_tokens": 153
+    }
+  },
+  "id": "chatcmpl-3xfHzwsdFDWL7NWXKDfamnA1XogriMtj",
+  "timings": {
+    "cache_n": 153,
+    "prompt_n": 1,
+    "prompt_ms": 13.671,
+    "prompt_per_token_ms": 13.671,
+    "prompt_per_second": 73.1475385853266,
+    "predicted_n": 102,
+    "predicted_ms": 274.664,
+    "predicted_per_token_ms": 2.69278431372549,
+    "predicted_per_second": 371.36282876532783
+  }
 }

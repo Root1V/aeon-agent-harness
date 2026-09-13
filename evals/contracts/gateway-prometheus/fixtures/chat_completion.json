@@ -6,12 +6,12 @@
       "message": {
         "role": "assistant",
         "content": "",
-        "reasoning_content": "Okay, the user just said \"say hello\". I need to respond appropriately. Since I'm an AI assistant"
+        "reasoning_content": "Okay, the user just said \"Say hello\". I need to respond in a friendly and welcoming way. Let"
       }
     }
   ],
-  "created": 1789159125,
-  "model": "qwen3-0-6b-iq4-nl-local-1",
+  "created": 1789257012,
+  "model": "qwen3-0.6b",
   "system_fingerprint": "b10101-4310aa4f8",
   "object": "chat.completion",
   "usage": {
@@ -22,16 +22,16 @@
       "cached_tokens": 9
     }
   },
-  "id": "chatcmpl-aVuZZCNxDNIoSpFOyDEa7mlim1mvsZyJ",
+  "id": "chatcmpl-vArhN1NenSsowfU2MurDxqTyrBKuvT8N",
   "timings": {
     "cache_n": 9,
     "prompt_n": 1,
-    "prompt_ms": 13.896,
-    "prompt_per_token_ms": 13.896,
-    "prompt_per_second": 71.96315486470927,
+    "prompt_ms": 18.067,
+    "prompt_per_token_ms": 18.067,
+    "prompt_per_second": 55.3495322964521,
     "predicted_n": 24,
-    "predicted_ms": 65.776,
-    "predicted_per_token_ms": 2.7406666666666664,
-    "predicted_per_second": 364.8747263439553
+    "predicted_ms": 68.623,
+    "predicted_per_token_ms": 2.859291666666667,
+    "predicted_per_second": 349.7369686548242
   }
 }

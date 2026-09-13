@@ -6,32 +6,32 @@
       "message": {
         "role": "assistant",
         "content": "hello",
-        "reasoning_content": "Okay, the user wants me to reply with exactly \"hello\". Let me check the context. The user might be testing if I'm responding with that message. I need to make sure I stick to that. I should confirm my response without adding anything else. Let me just say \"hello\" as instructed.\n"
+        "reasoning_content": "Okay, the user wants me to reply exactly with \"hello\". But wait, the original query was in Chinese, right? The user might be expecting a Chinese greeting. However, the current context is in English. Hmm, maybe the user made a mistake? Or perhaps they just want me to confirm \"hello\" regardless of the language.\n\nBut the instruction says to reply exactly with \"hello\". So even if the original message was in Chinese, I should stick to \"hello\". Let me make sure I'm not missing anything. The user might have confused the language or made a typo. Either way, I should respond with \"hello\" as instructed.\n"
       }
     }
   ],
-  "created": 1789159196,
-  "model": "qwen3-0-6b-iq4-nl-local-1",
+  "created": 1789257012,
+  "model": "qwen3-0.6b",
   "system_fingerprint": "b10101-4310aa4f8",
   "object": "chat.completion",
   "usage": {
-    "completion_tokens": 68,
+    "completion_tokens": 137,
     "prompt_tokens": 13,
-    "total_tokens": 81,
+    "total_tokens": 150,
     "prompt_tokens_details": {
       "cached_tokens": 3
     }
   },
-  "id": "chatcmpl-KQuXMIOpR6UahYEXOSwro1jsxHCAeGZ1",
+  "id": "chatcmpl-CFuXBGczrZQW9QEkAaMtJLISu6I95mr8",
   "timings": {
     "cache_n": 3,
     "prompt_n": 10,
-    "prompt_ms": 10.696,
-    "prompt_per_token_ms": 1.0695999999999999,
-    "prompt_per_second": 934.9289454001496,
-    "predicted_n": 68,
-    "predicted_ms": 178.82,
-    "predicted_per_token_ms": 2.629705882352941,
-    "predicted_per_second": 380.27066323677445
+    "prompt_ms": 10.207,
+    "prompt_per_token_ms": 1.0207000000000002,
+    "prompt_per_second": 979.7198001371606,
+    "predicted_n": 137,
+    "predicted_ms": 350.261,
+    "predicted_per_token_ms": 2.5566496350364964,
+    "predicted_per_second": 391.1368950582565
   }
 }

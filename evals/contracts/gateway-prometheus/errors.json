@@ -135,6 +135,42 @@
       "meaning": "Request schema validation failed. Carries an additional `errors` array of field-level problems, each with `loc`, `msg`, `type` and the offending `input`, which is what tells a caller which field to fix.",
       "retryable": false,
       "$comment": "Verified against a live deployment on 2026-09-11. This used to be the one endpoint that broke the envelope -- FastAPI's default shape, with no request_id or trace_id -- and the platform team has since fixed it. Keep the status-keyed fallback anyway: the lesson was that an SDK must not assume every error carries a `type`."
+    },
+    {
+      "status": 400,
+      "suffix": "unknown-instance",
+      "meaning": "The X-Prometheus-Instance request header names something that does not serve the requested model. A pin never silently falls back to another instance.",
+      "retryable": false,
+      "$comment": "Verified live 2026-09-12. Not retryable by re-sending the same pin: a pinned request whose instance is unavailable returns 503 backend-unavailable instead, and the platform confirmed a pin should be kept across a client retry rather than dropped."
+    },
+    {
+      "status": 400,
+      "suffix": "invalid-idempotency-key",
+      "meaning": "The Idempotency-Key is malformed -- today, longer than 255 characters. A 400 rather than a conflict because it never conflicted with anything.",
+      "retryable": false,
+      "$comment": "Axonium checks the length client-side and refuses before the wire, so a caller normally sees the SDK's own InvalidRequest error instead. That is an optimisation, not a workaround: it saves a round trip and carries the same meaning. Documented in the platform's answers of 2026-09-12; NOT yet verified against a deployment, which was down when this landed."
+    },
+    {
+      "status": 409,
+      "suffix": "idempotency-key-reuse",
+      "meaning": "The same key was already used for a different request. The fingerprint covers path and body, so a different endpoint counts as a different request.",
+      "retryable": false,
+      "$comment": "Never retried: the caller must use a fresh key per logical request. Retrying cannot help. Documented in the platform's answers of 2026-09-12; NOT yet verified against a deployment, which was down when this landed."
+    },
+    {
+      "status": 409,
+      "suffix": "idempotency-in-progress",
+      "meaning": "The first request with this key is still running.",
+      "retryable": true,
+      "retry_policy": "wait_for_retry_after",
+      "$comment": "The ONLY idempotency refusal worth retrying, and the only one that carries Retry-After -- derived from the model's observed p95 latency minus how long the first request has already run. Retrying is safe because it cannot start a second generation: it either waits, replays, or refuses again. Documented in the platform's answers of 2026-09-12; NOT yet verified against a deployment, which was down when this landed."
+    },
+    {
+      "status": 409,
+      "suffix": "idempotency-response-not-retained",
+      "meaning": "The original request succeeded but its response exceeded the 1 MiB retention cap, so it was not stored.",
+      "retryable": false,
+      "$comment": "Never retried, and it carries good news: this refusal is proof the original worked. Retrying would generate a second time for a result that already exists. Documented in the platform's answers of 2026-09-12; NOT yet verified against a deployment, which was down when this landed."
     }
   ],
   "oauth_errors": [
@@ -167,6 +203,8 @@
     "There is no 404 for 'model not found' on the inference endpoints; that is 400 unknown-model. Reserve 404 handling for genuinely unmapped routes.",
     "Unknown type suffixes must not raise a parse error: fall back to a status-keyed base error, since the catalog will grow.",
     "There is no idempotency-key mechanism in this API. A retried chat/embeddings/images request is a genuinely new generation, billable and non-replayable.",
-    "Every gateway error observed on a live deployment carries the full RFC 9457 envelope including request_id and trace_id, 422 included. Fall back by status regardless: an SDK that hard-fails on an error without a `type` would break the moment one appears, and one did for a while."
+    "Every gateway error observed on a live deployment carries the full RFC 9457 envelope including request_id and trace_id, 422 included. Fall back by status regardless: an SDK that hard-fails on an error without a `type` would break the moment one appears, and one did for a while.",
+    "Idempotency-Key covers /v1/chat/completions, /v1/embeddings and /v1/images/generations, AND streaming -- with a boundary that matters. If the gateway's stream from the model completed and it was the client's connection that dropped, the key replays the stored SSE body byte for byte, arriving as one flush rather than paced out. If the model's own stream broke mid-generation there is nothing complete to replay and the key frees itself, so a retry is a genuine new generation. 24h window, scoped per client, 255-character keys, 1 MiB retention cap.",
+    "A stream that breaks mid-answer is now BILLED for what it generated; it used to be billed as zero by defect, because token counts arrive only on a final frame a broken stream never sends. Every usage row now carries an `interrupted` flag, exported in the CSV, so a charge for an answer never fully received is disputable with evidence. A stream that broke before producing anything is still not charged."
   ]
 }

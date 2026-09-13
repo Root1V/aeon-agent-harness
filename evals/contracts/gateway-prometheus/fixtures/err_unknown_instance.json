@@ -1,0 +1,9 @@
+{
+  "type": "https://prometheus.internal/errors/unknown-instance",
+  "title": "Unknown Instance",
+  "status": 400,
+  "detail": "No instance '#99' serves model 'qwen3-0.6b'. Drop the X-Prometheus-Instance header to let the gateway choose.",
+  "instance": "/v1/chat/completions",
+  "request_id": "74568872-37ab-43a1-85f4-4a5c2da2c6c5",
+  "trace_id": "9a4e39e9e492e17efb41ed0f264f4a9a"
+}
