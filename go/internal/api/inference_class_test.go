@@ -29,16 +29,18 @@ func chatFor(profile string) map[string]any {
 	return map[string]any{"model": profile, "messages": []any{map[string]any{"role": "user", "content": "hola"}}}
 }
 
-// TestLocalInferenceOutsidePrometheusIsDenied is MDL-008's acceptance test.
+// TestUndeclaredLocalInferenceProviderIsDenied is MDL-008's acceptance test, renamed by MDL-017
+// because its old name described a rule the harness should never have held.
 //
-// The platform rule, set by the project owner, is that all local inference resolves in Prometheus
-// and the only door is the Axonium SDK. The shape of the enforcement was fixed in the tripartite
-// agreement, and it is the part that matters: **default-deny with a nominal exception**, never
+// One deployment's standing rule — "all local inference resolves in Prometheus, and the only door is
+// the Axonium SDK" — is a fact about that deployment. The harness's job is to enforce whatever rule
+// a bundle declares, for whoever declares it. The shape of the enforcement is what matters and it
+// did not change: **default-deny with a nominal exception**, never
 // default-allow with a deny rule layered on top. The difference is not stylistic. A deny rule only
 // ever fires on candidates someone remembered to annotate, and the candidates nobody annotated are
 // exactly where mistakes live — so "we enforce this as policy" would quietly degrade into "we
 // intended to enforce it".
-func TestLocalInferenceOutsidePrometheusIsDenied(t *testing.T) {
+func TestUndeclaredLocalInferenceProviderIsDenied(t *testing.T) {
 	local := func(provider, model string) modelgateway.CandidateDoc {
 		return modelgateway.CandidateDoc{
 			Provider: provider, Model: model,
@@ -92,12 +94,33 @@ func TestLocalInferenceOutsidePrometheusIsDenied(t *testing.T) {
 		}
 	})
 
-	t.Run("prometheus needs no exception — it is the door", func(t *testing.T) {
+	t.Run("no provider serves local inference by birthright, not even the platform's own", func(t *testing.T) {
+		// This subtest asserted the opposite until MDL-017: prometheus_inference was allowed without
+		// any declaration, because the routing core had its name compiled in. That made the harness
+		// work for exactly one organisation while claiming to be provider-agnostic — it honoured
+		// ADR-004's letter (no adapter import) and broke its point.
 		srv, provider := newInferenceClassTestServer(t, []modelgateway.ModelProfileDoc{
-			{Profile: "local-prometheus", Candidates: []modelgateway.CandidateDoc{local("prometheus_inference", "local-default")}},
+			{Profile: "undeclared", Candidates: []modelgateway.CandidateDoc{local("prometheus_inference", "some-model")}},
 		})
 
-		if status, _ := postChatCompletion(t, srv, chatFor("local-prometheus")); status != http.StatusOK {
+		if status, _ := postChatCompletion(t, srv, chatFor("undeclared")); status != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403 — a provider with no declaration is denied whoever it is", status)
+		}
+		if provider.calls.Load() != 0 {
+			t.Fatalf("the provider was called %d time(s)", provider.calls.Load())
+		}
+	})
+
+	t.Run("a declared provider serves it, and the declaration is the only reason", func(t *testing.T) {
+		srv, provider := newInferenceClassTestServer(t, []modelgateway.ModelProfileDoc{
+			{
+				Profile:        "declared",
+				Candidates:     []modelgateway.CandidateDoc{local("prometheus_inference", "some-model")},
+				LocalInference: &modelgateway.LocalInferenceException{Environment: "prod", AllowedProviders: []string{"prometheus_inference"}},
+			},
+		})
+
+		if status, _ := postChatCompletion(t, srv, chatFor("declared")); status != http.StatusOK {
 			t.Fatalf("status = %d, want 200", status)
 		}
 		if provider.calls.Load() != 1 {

@@ -32,6 +32,10 @@ type Candidate struct {
 	Provider string
 	Model    string
 	Priority int // lower tries first
+	// InNetwork says this candidate's provider is one the profile declared as in-network, which is
+	// what data_sensitivity=restricted filters on. Resolved from the bundle rather than decided
+	// here: which providers never leave the network is a fact about a deployment.
+	InNetwork bool
 }
 
 // ErrAllCandidatesFailed wraps the per-candidate attempt log when every candidate in a Decide call
@@ -39,14 +43,16 @@ type Candidate struct {
 var ErrAllCandidatesFailed = errors.New("modelgateway: all candidates failed")
 
 // ErrNoRestrictedCandidate is returned when dataSensitivity="restricted" is requested but no
-// candidate names the prometheus_inference provider — restricted data must never fall through to
-// a cloud provider just because no local candidate was configured (ADR-004).
-var ErrNoRestrictedCandidate = errors.New("modelgateway: data_sensitivity=restricted requires a prometheus_inference candidate, none configured")
-
-// restrictedProvider is the only provider allowed when a call is marked data_sensitivity=restricted
-// (proto/schemas/model_profile.schema.json's routing_constraints) — sensitive data must never
-// leave the local network.
-const restrictedProvider = "prometheus_inference"
+// candidate is served by a provider the profile declares as in-network — restricted data must never
+// fall through to a provider outside the network just because none was configured (ADR-004).
+//
+// Note what this deliberately does NOT do: name a provider. Which providers are in-network is a
+// property of a deployment, not of a harness, so it is declared in the ModelPolicyBundle and read
+// from there (MDL-017). An earlier version had "prometheus_inference" as a constant in this file —
+// it honoured ADR-004's letter (this package imports no adapter) while breaking its point, because
+// a routing core that knows one platform's name by heart is coupled to it whether it imports the
+// package or not.
+var ErrNoRestrictedCandidate = errors.New("modelgateway: data_sensitivity=restricted requires a candidate from a provider the profile declares in-network, none configured")
 
 // AttemptRecord logs one candidate's outcome, successful or not — this is what makes routing
 // decisions observable rather than a black box, and is exactly what the future OBS-001 tracing
@@ -77,8 +83,8 @@ type QualityGate interface {
 	IsDegraded(ctx context.Context, provider, model string) bool
 }
 
-// Gateway holds registered provider adapters, keyed by name (proto/schemas/model_profile.schema.json's
-// candidates[].provider enum: anthropic, openai, gemini, prometheus_inference, openai_compatible).
+// Gateway holds registered provider adapters, keyed by whatever name the bundle uses for them. The
+// names are data: this package never compares one against a literal.
 type Gateway struct {
 	providers map[string]providers.Provider
 	// Quality is optional and nil-safe (MDL-002): nil means no quality gating at all, identical to
@@ -103,12 +109,9 @@ func (g *Gateway) RegisterProvider(name string, p providers.Provider) {
 func (g *Gateway) Decide(
 	ctx context.Context, candidates []Candidate, renderedContext map[string]any, dataSensitivity string,
 ) (*DecisionResult, error) {
-	pool := candidates
-	if dataSensitivity == "restricted" {
-		pool = filterByProvider(candidates, restrictedProvider)
-		if len(pool) == 0 {
-			return nil, ErrNoRestrictedCandidate
-		}
+	pool, err := g.restrictPool(candidates, dataSensitivity)
+	if err != nil {
+		return nil, err
 	}
 
 	sorted := make([]Candidate, len(pool))
@@ -157,12 +160,24 @@ func (g *Gateway) Decide(
 	return nil, fmt.Errorf("%w: %+v", ErrAllCandidatesFailed, attempts)
 }
 
-func filterByProvider(candidates []Candidate, provider string) []Candidate {
+// restrictPool narrows the candidates to those the profile declares in-network when the call is
+// marked restricted. A candidate carries that declaration itself (Candidate.InNetwork), resolved
+// from the bundle — so the rule is enforced here and decided there.
+//
+// Failing closed is the point: no declaration means no candidate qualifies, which is an error
+// rather than a quiet fall-through to whatever was configured.
+func (g *Gateway) restrictPool(candidates []Candidate, dataSensitivity string) ([]Candidate, error) {
+	if dataSensitivity != "restricted" {
+		return candidates, nil
+	}
 	var out []Candidate
 	for _, c := range candidates {
-		if c.Provider == provider {
+		if c.InNetwork {
 			out = append(out, c)
 		}
 	}
-	return out
+	if len(out) == 0 {
+		return nil, ErrNoRestrictedCandidate
+	}
+	return out, nil
 }

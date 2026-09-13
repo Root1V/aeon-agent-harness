@@ -34,11 +34,14 @@ func newModalityTestServer(t *testing.T) (*httptest.Server, *countingProvider) {
 	gw := modelgateway.New()
 	gw.RegisterProvider("prometheus_inference", provider)
 
+	// Every profile below declares who may serve its local candidates: since MDL-017 no provider is
+	// allowed by birthright, so without this the modality assertions would pass for the wrong reason.
+	local := &modelgateway.LocalInferenceException{Environment: "test", AllowedProviders: []string{"prometheus_inference"}}
 	bundle := modelgateway.ModelPolicyBundleDoc{
 		Profiles: []modelgateway.ModelProfileDoc{
 			{Profile: "chat-ok", Candidates: []modelgateway.CandidateDoc{
 				{Provider: "prometheus_inference", Model: "chat-model", Modality: modelgateway.ModalityText, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
-			}},
+			}, LocalInference: local},
 			// The real misconfiguration: an embeddings model sitting in a chat profile.
 			{Profile: "chat-with-embeddings-model", Candidates: []modelgateway.CandidateDoc{
 				{Provider: "prometheus_inference", Model: "embed-model", Modality: "embedding", InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
@@ -46,7 +49,7 @@ func newModalityTestServer(t *testing.T) (*httptest.Server, *countingProvider) {
 			// The silent version of the same mistake: the bundle never says what the model is.
 			{Profile: "chat-undeclared", Candidates: []modelgateway.CandidateDoc{
 				{Provider: "prometheus_inference", Model: "who-knows", InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
-			}},
+			}, LocalInference: local},
 			// text and vision are both served on /v1/chat/completions, so a vision candidate is a
 			// perfectly good one. The first version of this check compared against a single "chat"
 			// value and would have rejected this — failing the whole profile, which is what a *bad*
@@ -54,21 +57,21 @@ func newModalityTestServer(t *testing.T) (*httptest.Server, *countingProvider) {
 			// deployment, where a vision model is running right now.
 			{Profile: "chat-vision", Candidates: []modelgateway.CandidateDoc{
 				{Provider: "prometheus_inference", Model: "qwen3vl", Modality: modelgateway.ModalityVision, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
-			}},
+			}, LocalInference: local},
 			// An image model is not chat-servable, and a value the catalog may add tomorrow is not
 			// either — deny, do not guess.
 			{Profile: "chat-image", Candidates: []modelgateway.CandidateDoc{
 				{Provider: "prometheus_inference", Model: "sd-turbo", Modality: modelgateway.ModalityImage, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
-			}},
+			}, LocalInference: local},
 			{Profile: "chat-future", Candidates: []modelgateway.CandidateDoc{
 				{Provider: "prometheus_inference", Model: "whisper", Modality: "audio", InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
-			}},
+			}, LocalInference: local},
 			// A misclassified candidate must not be rescued by a healthy sibling: the bundle is
 			// wrong, and routing around the error would hide it.
 			{Profile: "chat-mixed", Candidates: []modelgateway.CandidateDoc{
 				{Provider: "prometheus_inference", Model: "chat-model", Modality: modelgateway.ModalityText, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0},
 				{Provider: "prometheus_inference", Model: "embed-model", Modality: "embedding", InferenceClass: modelgateway.InferenceClassLocal, Priority: 1},
-			}},
+			}, LocalInference: local},
 		},
 	}
 

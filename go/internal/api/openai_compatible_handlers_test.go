@@ -46,9 +46,15 @@ func newOpenAICompatibleTestServer(t *testing.T, providerFails bool) *httptest.S
 		Profiles: []modelgateway.ModelProfileDoc{
 			{Profile: "reasoning-test", Candidates: []modelgateway.CandidateDoc{{Provider: "fake", Model: "fake-model-v1", Modality: modelgateway.ModalityText, InferenceClass: modelgateway.InferenceClassCloud, Priority: 0}}},
 			{
-				Profile:            "restricted-test",
-				Candidates:         []modelgateway.CandidateDoc{{Provider: "prometheus_inference", Model: "fake-model-v1", Modality: modelgateway.ModalityText, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0}},
-				RoutingConstraints: &modelgateway.RoutingConstraints{DataSensitivity: "restricted"},
+				Profile:    "restricted-test",
+				Candidates: []modelgateway.CandidateDoc{{Provider: "prometheus_inference", Model: "fake-model-v1", Modality: modelgateway.ModalityText, InferenceClass: modelgateway.InferenceClassLocal, Priority: 0}},
+				RoutingConstraints: &modelgateway.RoutingConstraints{
+					DataSensitivity: "restricted",
+					// MDL-017: the profile says which providers never leave the network. The harness
+					// no longer recognises any by name.
+					InNetworkProviders: []string{"prometheus_inference"},
+				},
+				LocalInference: &modelgateway.LocalInferenceException{Environment: "test", AllowedProviders: []string{"prometheus_inference"}},
 			},
 		},
 	}

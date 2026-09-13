@@ -106,28 +106,33 @@ func TestModelGatewayRoutingFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("data_sensitivity=restricted only ever tries prometheus_inference, even if it's lower priority", func(t *testing.T) {
+	t.Run("data_sensitivity=restricted only ever tries an in-network candidate, even if it's lower priority", func(t *testing.T) {
+		// The provider names here are arbitrary on purpose: what makes a candidate eligible is the
+		// profile declaring it in-network, not what it is called. Before MDL-017 this test passed
+		// for the wrong reason — the routing core recognised one specific name.
 		gw := New()
-		gw.RegisterProvider("anthropic", &fakeProvider{responded: map[string]any{"leaked": true}})
-		gw.RegisterProvider("prometheus_inference", &fakeProvider{responded: map[string]any{"local": true}})
+		gw.RegisterProvider("some-cloud", &fakeProvider{responded: map[string]any{"leaked": true}})
+		gw.RegisterProvider("some-in-network", &fakeProvider{responded: map[string]any{"local": true}})
 
 		result, err := gw.Decide(context.Background(), []Candidate{
-			{Provider: "anthropic", Model: "m1", Priority: 0}, // would win on priority alone
-			{Provider: "prometheus_inference", Model: "m2", Priority: 1},
+			{Provider: "some-cloud", Model: "m1", Priority: 0}, // would win on priority alone
+			{Provider: "some-in-network", Model: "m2", Priority: 1, InNetwork: true},
 		}, map[string]any{}, "restricted")
 
 		if err != nil {
 			t.Fatalf("Decide: %v", err)
 		}
-		if result.ProviderUsed != "prometheus_inference" {
-			t.Fatalf("ProviderUsed = %q, want prometheus_inference — restricted data must never even attempt a cloud candidate", result.ProviderUsed)
+		if result.ProviderUsed != "some-in-network" {
+			t.Fatalf("ProviderUsed = %q, want the in-network one — restricted data must never even attempt a candidate outside the network", result.ProviderUsed)
 		}
 		if len(result.Attempts) != 1 {
 			t.Fatalf("expected exactly 1 attempt (anthropic must never be tried at all for restricted data), got %+v", result.Attempts)
 		}
 	})
 
-	t.Run("data_sensitivity=restricted with no local candidate configured fails clearly", func(t *testing.T) {
+	t.Run("data_sensitivity=restricted with nothing declared in-network fails clearly", func(t *testing.T) {
+		// Fail closed: an undeclared topology is not an open one. A candidate that simply never got
+		// the declaration must not serve restricted data by default.
 		gw := New()
 		gw.RegisterProvider("anthropic", &fakeProvider{responded: map[string]any{}})
 

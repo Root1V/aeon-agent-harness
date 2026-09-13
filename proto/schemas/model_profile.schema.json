@@ -43,7 +43,8 @@
   "routing_constraints": {
       "type": "object",
       "properties": {
-        "data_sensitivity": { "type": "string", "enum": ["public", "internal", "restricted"], "description": "restricted forces provider=prometheus_inference only (never leaves the network)." }
+        "data_sensitivity": { "type": "string", "enum": ["public", "internal", "restricted"], "description": "restricted routes only to candidates whose provider is listed in in_network_providers, and fails closed when none is. Which providers those are is a fact about a deployment, so it is declared here rather than known by the harness (MDL-017)." },
+     "in_network_providers": { "type": "array", "items": { "type": "string" }, "description": "MDL-017: the providers whose traffic never leaves the network, for this profile. Deliberately not the same list as local_inference.providers \u2014 a self-hosted model in a private VPC is in-network without being local inference." }
       }
     }
   }

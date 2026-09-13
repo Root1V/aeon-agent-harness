@@ -68,3 +68,11 @@ profiles:
         cost_model: compute_based
     routing_constraints:
       data_sensitivity: restricted
+      # MDL-017: el arnés no conoce ningún proveedor por su nombre. Quién no sale de la red es un
+      # hecho de ESTE despliegue y se declara aquí; en otro despliegue será otro.
+      in_network_providers: [prometheus_inference]
+    # Y quién puede servir inferencia local, con el entorno al que pertenece la declaración. Ningún
+    # proveedor lo puede por defecto, tampoco la plataforma propia.
+    local_inference:
+      environment: local-dev
+      allowed_providers: [prometheus_inference]
