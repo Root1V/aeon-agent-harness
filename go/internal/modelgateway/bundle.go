@@ -27,8 +27,9 @@ type ModelProfileDoc struct {
 	RoutingConstraints *RoutingConstraints      `json:"routing_constraints,omitempty" yaml:"routing_constraints,omitempty"`
 }
 
-// LocalInferenceException names which providers other than prometheus_inference may serve local
-// inference, and for which declared environment.
+// LocalInferenceException names which providers may serve local inference, and for which declared
+// environment. There is no implicit one: a candidate declaring inference_class=local is denied
+// unless a profile lists its provider here.
 //
 // It lives in the bundle — in Git, under review — rather than in an environment variable, because
 // an exception nobody can diff is not an exception, it is a hole. Environment is not decoration
@@ -63,6 +64,16 @@ type CandidateDoc struct {
 // the local network).
 type RoutingConstraints struct {
 	DataSensitivity string `json:"data_sensitivity,omitempty" yaml:"data_sensitivity,omitempty"`
+	// InNetworkProviders names the providers that satisfy data_sensitivity=restricted for this
+	// profile — the ones whose traffic never leaves the network. The harness has no opinion about
+	// which those are: that is a fact about a deployment's topology, and hardcoding one platform's
+	// name here is what MDL-017 removed.
+	//
+	// Deliberately NOT the same list as local_inference.providers, for the reason MDL-008 already
+	// recorded about these two rules: a self-hosted model in a private VPC is in-network without
+	// being local inference, and folding them together would let one declaration quietly widen the
+	// other.
+	InNetworkProviders []string `json:"in_network_providers,omitempty" yaml:"in_network_providers,omitempty"`
 }
 
 // ErrProfileNotFound is returned when a requested profile has no entry in the bundle.
@@ -108,11 +119,6 @@ const (
 	InferenceClassCloud = "cloud"
 )
 
-// localInferenceProvider is the platform's single door for local inference: the project's standing
-// rule is that all local inference resolves in Prometheus. Any other provider serving local
-// inference needs a named exception.
-const localInferenceProvider = restrictedProvider
-
 // ErrInferenceClassUndeclared is MDL-008's default-deny: a candidate that does not say where it
 // runs is denied, not assumed to be safe.
 //
@@ -124,7 +130,7 @@ var ErrInferenceClassUndeclared = errors.New("modelgateway: candidate does not d
 
 // ErrLocalInferenceProviderDenied is MDL-008's enforcement: a candidate declares it runs locally,
 // but its provider is neither Prometheus nor named as an exception for a declared environment.
-var ErrLocalInferenceProviderDenied = errors.New("modelgateway: local inference is only served by prometheus_inference unless a named exception allows this provider")
+var ErrLocalInferenceProviderDenied = errors.New("modelgateway: local inference is only served by a provider the profile declares for it")
 
 // ResolveProfile returns the candidates (in whatever order the bundle declares them — Decide sorts
 // by Priority itself) and routing data_sensitivity, if any, for a named capability profile. A
@@ -134,6 +140,12 @@ func (doc ModelPolicyBundleDoc) ResolveProfile(profile string) ([]Candidate, str
 	for _, p := range doc.Profiles {
 		if p.Profile != profile {
 			continue
+		}
+		inNetwork := map[string]bool{}
+		if p.RoutingConstraints != nil {
+			for _, provider := range p.RoutingConstraints.InNetworkProviders {
+				inNetwork[provider] = true
+			}
 		}
 		candidates := make([]Candidate, len(p.Candidates))
 		for i, c := range p.Candidates {
@@ -151,7 +163,7 @@ func (doc ModelPolicyBundleDoc) ResolveProfile(profile string) ([]Candidate, str
 				return nil, "", fmt.Errorf("%w: profile %q candidate %s/%s declares %s, and a chat profile serves only %s or %s",
 					ErrCandidateModalityMismatch, profile, c.Provider, c.Model, declared, ModalityText, ModalityVision)
 			}
-			candidates[i] = Candidate{Provider: c.Provider, Model: c.Model, Priority: c.Priority}
+			candidates[i] = Candidate{Provider: c.Provider, Model: c.Model, Priority: c.Priority, InNetwork: inNetwork[c.Provider]}
 		}
 		dataSensitivity := ""
 		if p.RoutingConstraints != nil {
@@ -200,9 +212,9 @@ func checkInferenceClass(profile string, c CandidateDoc, exception *LocalInferen
 	case InferenceClassCloud:
 		return nil
 	case InferenceClassLocal:
-		if c.Provider == localInferenceProvider {
-			return nil
-		}
+		// No provider is allowed here by birthright. A standing rule like "all local inference
+		// resolves in platform X" is true of a deployment, and belongs in that deployment's bundle —
+		// a harness that ships it as a constant works for exactly one organisation (MDL-017).
 		if exception != nil && exception.Environment != "" {
 			for _, allowed := range exception.AllowedProviders {
 				if allowed == c.Provider {

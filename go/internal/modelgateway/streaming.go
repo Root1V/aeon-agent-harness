@@ -37,12 +37,9 @@ func (g *Gateway) DecideStream(
 	ctx context.Context, candidates []Candidate, renderedContext map[string]any, dataSensitivity string,
 	yield func(providers.Chunk) error,
 ) (*StreamResult, error) {
-	pool := candidates
-	if dataSensitivity == "restricted" {
-		pool = filterByProvider(candidates, restrictedProvider)
-		if len(pool) == 0 {
-			return nil, ErrNoRestrictedCandidate
-		}
+	pool, err := g.restrictPool(candidates, dataSensitivity)
+	if err != nil {
+		return nil, err
 	}
 
 	sorted := make([]Candidate, len(pool))

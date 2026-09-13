@@ -107,8 +107,18 @@ services:
     volumes:
       - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
     ports:
-      - "4317:4317"  # OTLP gRPC
-      - "4318:4318"  # OTLP HTTP
+      # Host-side ports are overridable and default well away from the OTLP defaults, same reasoning
+      # as postgres above. Observed directly on a developer machine: another observability stack held
+      # 4317/4318 AND 14317/14318, so this container failed to start and took two tracing tests with
+      # it. That failure is easy to misread — the tests report "no such host" for otel-collector,
+      # because the container never came up at all, and the real message is in compose's output
+      # rather than the test's.
+      #
+      # Container-internal ports are unchanged, so everything inside the compose network (the test
+      # container included) still reaches otel-collector:4318 by service name. These publications
+      # exist only for a process running on the host; set the variables if these collide too.
+      - "${AEON_OTLP_GRPC_PORT:-24317}:4317"  # OTLP gRPC
+      - "${AEON_OTLP_HTTP_PORT:-24318}:4318"  # OTLP HTTP
     depends_on: [tempo]
 
   tempo:
