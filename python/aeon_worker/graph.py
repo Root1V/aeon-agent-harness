@@ -152,6 +152,11 @@ class GraphExecutionState:
     """
 
     run_id: str
+    # TOOL-004: the principal the Tool Gateway evaluates Cedar policy against. Empty means the run
+    # has no agent identity, which the gateway path refuses rather than defaulting — a call with no
+    # principal is a call no policy can deny, and a default principal would make every per-agent
+    # rule in the bundle apply to whoever happened to be running.
+    agent_manifest_ref: str = ""
     context: dict[str, Any] = field(default_factory=dict)
     step_seq: int = 0
     # RUN-001 (Run Controller): when set, checked before every node. A caller pauses a run purely
@@ -246,6 +251,7 @@ async def _execute_tool_call(node: dict[str, Any], state: GraphExecutionState) -
         step_seq=state.next_step_seq(),
         tool_name=node["tool_name"],
         tool_args=node.get("tool_args", {}),
+        agent_manifest_ref=state.agent_manifest_ref,
     )
     output: ExecuteToolOutput = await workflow.execute_activity(
         execute_tool_activity,

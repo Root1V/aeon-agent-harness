@@ -46,9 +46,16 @@ type RunInfo struct {
 // idempotency key, docs/adr/0001) and part of the Temporal workflow ID. budgets is optional
 // (RUN-003) — pass nil for no limits — and is shaped like {"max_tool_calls": int,
 // "max_depth": int, "deadline_seconds": int}; see graph_run.py's _budget_policy_from_request.
-func (c *Controller) Start(ctx context.Context, runID string, graph map[string]any, budgets map[string]any) (*RunInfo, error) {
+func (c *Controller) Start(ctx context.Context, runID string, graph map[string]any, budgets map[string]any, agentManifestRef string) (*RunInfo, error) {
 	workflowID := "graph-run-" + runID
 	input := map[string]any{"run_id": runID, "graph": graph}
+	// TOOL-004: the principal the Tool Gateway evaluates policy against. It already arrived at the
+	// API (A5 uses it to refuse a quarantined agent) and simply never reached the worker, so every
+	// tool call the worker made was unattributable — and a per-agent policy cannot govern a call
+	// that carries no agent.
+	if agentManifestRef != "" {
+		input["agent_manifest_ref"] = agentManifestRef
+	}
 	if budgets != nil {
 		input["budgets"] = budgets
 	}

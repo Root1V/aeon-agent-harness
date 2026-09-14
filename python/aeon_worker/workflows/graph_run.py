@@ -148,6 +148,7 @@ class GraphRunWorkflow:
         approvals_req = request.get("approvals") or {}
         state = GraphExecutionState(
             run_id=request["run_id"],
+            agent_manifest_ref=request.get("agent_manifest_ref", ""),
             is_paused=lambda: self._paused,
             budgets=budgets,
             await_approval=self._await_approval,

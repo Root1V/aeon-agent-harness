@@ -270,6 +270,11 @@ services:
       temporal:
         condition: service_healthy
     environment:
+      # TOOL-004: this stack's worker still uses the ledger that executes nothing, and says so out
+      # loud rather than defaulting to it. Flipping it to AEON_TOOLGW_ADDR waits for real tools
+      # (TOOL-006/TOOL-007) and for the policy bundle to permit what the example actually calls —
+      # today artifact.write, which the Go executor does not register and the bundle does not allow.
+      AEON_TOOL_EXECUTION_MODE: local-ledger
       <<: *common-env
       AEON_TEMPORAL_ADDRESS: temporal:7233
       AEON_MODELGW_ADDR: modelgw:9402
@@ -278,7 +283,11 @@ services:
       # Dockerfile.python: context is python/ alone), so it must be mounted and pointed to here,
       # or the worker crashes on startup before ever connecting to Temporal.
       AEON_SCHEMAS_DIR: /proto
-      AEON_TOOLGW_ADDR: toolgw:9403
+      # AEON_TOOLGW_ADDR lived here and the worker never read it — declared wiring that did nothing,
+      # which is how the gap TOOL-004 fixes stayed invisible. It comes back the day this stack can
+      # run the example's tools for real: today artifact.write is neither registered in the Go
+      # executor nor permitted by policy_bundle.yaml, so pointing the worker at the gateway now
+      # would turn a passing suite into a denied one without any tool becoming more real.
     volumes:
       - ../../proto:/proto:ro
 
