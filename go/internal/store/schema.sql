@@ -193,3 +193,8 @@ CREATE INDEX IF NOT EXISTS rag_chunks_corpus_idx ON rag_chunks (corpus);
 -- que usa la búsqueda de abajo. Un índice construido con otra métrica que la consulta no produce
 -- un error, produce un orden peor sin avisar.
 CREATE INDEX IF NOT EXISTS rag_chunks_embedding_idx ON rag_chunks USING hnsw (embedding vector_cosine_ops);
+
+-- MDL-016: los tokens de razonamiento son parte de la salida y suelen ser la parte cara. Nullable
+-- por la misma razón que los de caché: un proveedor que no los desglosa no es un proveedor que
+-- razonó gratis.
+ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS reasoning_tokens INTEGER;

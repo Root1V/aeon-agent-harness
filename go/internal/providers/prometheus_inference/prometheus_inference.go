@@ -58,11 +58,19 @@ type chatCompletionResponse struct {
 		FinishReason string `json:"finish_reason"`
 		Message      struct {
 			Content string `json:"content"`
+			// MDL-016: reasoning models on this platform return their chain of thought here, and
+			// dropping it makes a token-starved answer look like an empty one for no reason.
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
+		// OpenAI's shape for the reasoning breakdown, which some servers mirror. A pointer so that
+		// "not reported" stays distinct from "reasoned for zero tokens" all the way to the ledger.
+		CompletionTokensDetails struct {
+			ReasoningTokens *int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -101,9 +109,17 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 	}
 
 	choice := parsed.Choices[0]
-	return providers.NormalizedChatResponse(
-		parsed.Model, choice.Message.Content, choice.FinishReason, parsed.Usage.PromptTokens, parsed.Usage.CompletionTokens,
-	), nil
+	return providers.NormalizedChatResponseFrom(providers.ChatResult{
+		Model:            parsed.Model,
+		Content:          choice.Message.Content,
+		ReasoningContent: choice.Message.ReasoningContent,
+		FinishReason:     choice.FinishReason,
+		Usage: providers.Usage{
+			PromptTokens:     parsed.Usage.PromptTokens,
+			CompletionTokens: parsed.Usage.CompletionTokens,
+			ReasoningTokens:  parsed.Usage.CompletionTokensDetails.ReasoningTokens,
+		},
+	}), nil
 }
 
 // CachingCapability: most local-inference setups have no prompt caching (ADR-003's Budgeter falls

@@ -95,6 +95,12 @@ func streamChunkEnvelope(id string, created int64, chunk providers.Chunk) map[st
 	if chunk.Delta != "" {
 		delta["content"] = chunk.Delta
 	}
+	// Kept in its own key rather than folded into content (MDL-016): a client rendering a live
+	// answer must be able to show deliberation differently, or not at all, and concatenating the two
+	// makes that choice for it — irreversibly, since nothing downstream can tell them apart again.
+	if chunk.ReasoningDelta != "" {
+		delta["reasoning_content"] = chunk.ReasoningDelta
+	}
 
 	choice := map[string]any{"index": 0, "delta": delta}
 	if chunk.FinishReason != "" {
