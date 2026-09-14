@@ -107,6 +107,12 @@ func main() {
 		}
 		defer s.Close()
 
+		// TOOL-005: the execution dedupe table. Without it a request carrying an idempotency_key is
+		// refused rather than executed — a caller that asked for protection must not silently get an
+		// effect instead.
+		handlers.Executions = s.ToolExecutions()
+		log.Println("aeon-toolgw: execution deduplication live (idempotency_key honoured on /execute)")
+
 		tools, err := s.ToolRegistry().List(context.Background())
 		if err != nil {
 			log.Fatalf("aeon-toolgw: listing the Tool Registry for the MCP server: %v", err)
