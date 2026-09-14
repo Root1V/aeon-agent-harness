@@ -11,10 +11,15 @@ import "context"
 // go/internal/providers/openai_compatible's stream_options handling). A nil Usage means "not
 // reported", never "zero": FinOps (OBS-003) must not record a fabricated 0 for a streamed call.
 type Chunk struct {
-	Delta        string
-	FinishReason string
-	Model        string
-	Usage        *Usage
+	Delta string
+	// ReasoningDelta carries chain-of-thought tokens, which arrive interleaved with — and before —
+	// the answer. It is a separate field because the shared normalization contract is explicit that
+	// these are two flows and must never be concatenated: a consumer showing a live answer would
+	// otherwise print the model's deliberation as if it were the reply.
+	ReasoningDelta string
+	FinishReason   string
+	Model          string
+	Usage          *Usage
 }
 
 // Usage is the token accounting a provider reports.
@@ -39,6 +44,10 @@ type Usage struct {
 	CompletionTokens int
 	CacheReadTokens  *int
 	CacheWriteTokens *int
+	// ReasoningTokens is the part of the output spent thinking rather than answering (MDL-016).
+	// Pointer for the same three-state reason as the cache counters: a provider that does not break
+	// it out is not a provider that reasoned for free.
+	ReasoningTokens *int
 }
 
 // StreamingProvider is an OPTIONAL capability on top of Provider. An adapter that implements it can

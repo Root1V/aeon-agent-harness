@@ -22,6 +22,9 @@ type CostEntry struct {
 	// see schema.sql for why that is not the same as zero.
 	CacheReadTokens  *int
 	CacheWriteTokens *int
+	// ReasoningTokens is the slice of the output spent thinking (MDL-016). Nil when the provider
+	// does not break it out — recording a zero would claim it measured and found none.
+	ReasoningTokens *int
 }
 
 // ModelTotal is one row of TotalsByModel's real SQL aggregation.
@@ -39,6 +42,7 @@ type ModelTotal struct {
 	// "of what was measured", not "of everything".
 	TotalCacheReadTokens  int64 `json:"total_cache_read_tokens"`
 	TotalCacheWriteTokens int64 `json:"total_cache_write_tokens"`
+	TotalReasoningTokens  int64 `json:"total_reasoning_tokens"`
 }
 
 // FinOpsLedger is the Postgres-backed cost ledger (OBS-003).
@@ -58,10 +62,10 @@ func (l *FinOpsLedger) Record(ctx context.Context, entry CostEntry) error {
 		agentRef = &entry.AgentManifestRef
 	}
 	_, err := l.pool.Exec(ctx,
-		`INSERT INTO model_gateway_costs (provider, model, cost_model, prompt_tokens, completion_tokens, cost_usd, run_id, agent_manifest_ref, cache_read_tokens, cache_write_tokens)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		`INSERT INTO model_gateway_costs (provider, model, cost_model, prompt_tokens, completion_tokens, cost_usd, run_id, agent_manifest_ref, cache_read_tokens, cache_write_tokens, reasoning_tokens)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		entry.Provider, entry.Model, entry.CostModel, entry.PromptTokens, entry.CompletionTokens, entry.CostUSD, runID, agentRef,
-		entry.CacheReadTokens, entry.CacheWriteTokens,
+		entry.CacheReadTokens, entry.CacheWriteTokens, entry.ReasoningTokens,
 	)
 	if err != nil {
 		return fmt.Errorf("store: recording model gateway cost: %w", err)
@@ -75,7 +79,8 @@ func (l *FinOpsLedger) Record(ctx context.Context, entry CostEntry) error {
 func (l *FinOpsLedger) TotalsByModel(ctx context.Context) ([]ModelTotal, error) {
 	rows, err := l.pool.Query(ctx,
 		`SELECT provider, model, cost_model, count(*), coalesce(sum(cost_usd), 0), coalesce(sum(prompt_tokens), 0), coalesce(sum(completion_tokens), 0),
-		        coalesce(sum(cache_read_tokens), 0), coalesce(sum(cache_write_tokens), 0)
+		        coalesce(sum(cache_read_tokens), 0), coalesce(sum(cache_write_tokens), 0),
+		        coalesce(sum(reasoning_tokens), 0)
 		 FROM model_gateway_costs
 		 GROUP BY provider, model, cost_model
 		 ORDER BY sum(cost_usd) DESC`,
@@ -89,7 +94,7 @@ func (l *FinOpsLedger) TotalsByModel(ctx context.Context) ([]ModelTotal, error) 
 	for rows.Next() {
 		var t ModelTotal
 		if err := rows.Scan(&t.Provider, &t.Model, &t.CostModel, &t.CallCount, &t.TotalCostUSD, &t.TotalPromptTokens, &t.TotalCompletionTokens,
-			&t.TotalCacheReadTokens, &t.TotalCacheWriteTokens); err != nil {
+			&t.TotalCacheReadTokens, &t.TotalCacheWriteTokens, &t.TotalReasoningTokens); err != nil {
 			return nil, fmt.Errorf("store: scanning model gateway cost total: %w", err)
 		}
 		out = append(out, t)

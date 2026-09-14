@@ -75,7 +75,6 @@ func TestWindowIsBoundedToWindowSize(t *testing.T) {
 	}
 }
 
-
 func TestOnceTrippedStaysTrippedUntilReset(t *testing.T) {
 	b := New(Thresholds{WindowSize: 3, MinSamples: 2, MaxFailureRate: 0.5})
 	b.RecordOutcome("agent", "1.0.0", Observation{Success: false})

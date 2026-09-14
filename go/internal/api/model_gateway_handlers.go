@@ -107,6 +107,7 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 		return
 	}
 	cacheRead, cacheWrite := usageCacheTokens(result.Output)
+	reasoning := optionalInt(usageBlock(result.Output)["reasoning_tokens"])
 	entry := store.CostEntry{
 		Provider:         result.ProviderUsed,
 		Model:            result.Model,
@@ -118,6 +119,7 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 		AgentManifestRef: agentManifestRef,
 		CacheReadTokens:  cacheRead,
 		CacheWriteTokens: cacheWrite,
+		ReasoningTokens:  reasoning,
 	}
 	if err := h.Ledger.Record(r.Context(), entry); err != nil {
 		log.Printf("aeon-modelgw: recording FinOps cost event: %v", err)
@@ -138,8 +140,16 @@ func usageTokens(output map[string]any) (prompt, completion int) {
 // like the other two counters would quietly turn every non-caching provider into a measured cold
 // cache.
 func usageCacheTokens(output map[string]any) (read, write *int) {
-	usage, _ := output["usage"].(map[string]any)
+	usage := usageBlock(output)
 	return optionalInt(usage["cache_read_tokens"]), optionalInt(usage["cache_write_tokens"])
+}
+
+func usageBlock(output map[string]any) map[string]any {
+	usage, _ := output["usage"].(map[string]any)
+	if usage == nil {
+		return map[string]any{}
+	}
+	return usage
 }
 
 func optionalInt(v any) *int {

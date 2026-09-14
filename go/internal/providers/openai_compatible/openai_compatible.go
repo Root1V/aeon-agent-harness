@@ -49,6 +49,10 @@ type openAICompatibleChoice struct {
 	Message      struct {
 		Role    string `json:"role"`
 		Content string `json:"content"`
+		// MDL-016: several OpenAI-compatible servers (llama.cpp among them) return the chain of
+		// thought in its own field. Reading only `content` reports an empty answer for a response
+		// that was generated and billed.
+		ReasoningContent string `json:"reasoning_content"`
 	} `json:"message"`
 }
 
@@ -59,6 +63,11 @@ type openAICompatibleResponse struct {
 	Usage   struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
+		// OpenAI's shape for the reasoning breakdown, which some servers mirror. A pointer so that
+		// "not reported" stays distinct from "reasoned for zero tokens" all the way to the ledger.
+		CompletionTokensDetails struct {
+			ReasoningTokens *int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -109,9 +118,17 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 	}
 
 	choice := parsed.Choices[0]
-	return providers.NormalizedChatResponse(
-		parsed.Model, choice.Message.Content, NormalizeFinishReason(choice.FinishReason), parsed.Usage.PromptTokens, parsed.Usage.CompletionTokens,
-	), nil
+	return providers.NormalizedChatResponseFrom(providers.ChatResult{
+		Model:            parsed.Model,
+		Content:          choice.Message.Content,
+		ReasoningContent: choice.Message.ReasoningContent,
+		FinishReason:     NormalizeFinishReason(choice.FinishReason),
+		Usage: providers.Usage{
+			PromptTokens:     parsed.Usage.PromptTokens,
+			CompletionTokens: parsed.Usage.CompletionTokens,
+			ReasoningTokens:  parsed.Usage.CompletionTokensDetails.ReasoningTokens,
+		},
+	}), nil
 }
 
 // NormalizeFinishReason applies the shared contract's finish-reason table

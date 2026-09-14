@@ -45,6 +45,41 @@ func NormalizedChatResponse(model, content, finishReason string, promptTokens, c
 	}
 }
 
+// ChatResult is everything an adapter extracted from one complete response. It exists because the
+// alternative was a sixth positional argument, and because reasoning is not a variant of content:
+// keeping them as separate fields is what stops an adapter from concatenating them "just this once".
+type ChatResult struct {
+	Model        string
+	Content      string
+	FinishReason string
+	// ReasoningContent is the model's chain of thought, which several providers return alongside
+	// the answer and in its own field (MDL-016). Discarding it is not harmless: with a tight token
+	// budget a reasoning model spends the whole allowance thinking, `content` comes back empty, and
+	// the caller sees an unexplained blank answer that was nonetheless billed. Verified against the
+	// live deployment on 2026-09-13 — max_tokens 20 produced exactly that.
+	ReasoningContent string
+	Usage            Usage
+}
+
+// NormalizedChatResponseFrom builds the normalized response from a complete ChatResult.
+//
+// reasoning_content is emitted only when the provider sent some, so its absence keeps meaning "this
+// provider does not report reasoning" rather than "it thought about nothing".
+func NormalizedChatResponseFrom(r ChatResult) map[string]any {
+	response := NormalizedChatResponseWithUsage(r.Model, r.Content, r.FinishReason, r.Usage)
+	if r.ReasoningContent == "" {
+		return response
+	}
+	choices, _ := response["choices"].([]any)
+	if len(choices) == 0 {
+		return response
+	}
+	choice, _ := choices[0].(map[string]any)
+	message, _ := choice["message"].(map[string]any)
+	message["reasoning_content"] = r.ReasoningContent
+	return response
+}
+
 // NormalizedChatResponseWithUsage is NormalizedChatResponse for an adapter whose provider reports
 // cache accounting (MDL-012). The cache counters appear in the usage block only when the provider
 // actually reported them: an absent key means "not reported", which is a different fact from a zero
@@ -57,6 +92,9 @@ func NormalizedChatResponseWithUsage(model, content, finishReason string, u Usag
 	}
 	if u.CacheWriteTokens != nil {
 		usage["cache_write_tokens"] = *u.CacheWriteTokens
+	}
+	if u.ReasoningTokens != nil {
+		usage["reasoning_tokens"] = *u.ReasoningTokens
 	}
 	return response
 }

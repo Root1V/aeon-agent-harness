@@ -26,11 +26,18 @@ type streamChunk struct {
 		FinishReason string `json:"finish_reason"`
 		Delta        struct {
 			Content string `json:"content"`
+			// MDL-016: the chain of thought streams in its own field and arrives BEFORE any answer
+			// token. A reader that only watches `content` sees nothing at all while a reasoning
+			// model works, which looks identical to a stalled stream.
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
+		PromptTokens            int `json:"prompt_tokens"`
+		CompletionTokens        int `json:"completion_tokens"`
+		CompletionTokensDetails struct {
+			ReasoningTokens *int `json:"reasoning_tokens"`
+		} `json:"completion_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -105,6 +112,7 @@ func (a *Adapter) DecideStream(ctx context.Context, renderedContext map[string]a
 		chunk := providers.Chunk{Model: parsed.Model}
 		if len(parsed.Choices) > 0 {
 			chunk.Delta = parsed.Choices[0].Delta.Content
+			chunk.ReasoningDelta = parsed.Choices[0].Delta.ReasoningContent
 			if raw := parsed.Choices[0].FinishReason; raw != "" {
 				chunk.FinishReason = NormalizeFinishReason(raw)
 				sawFinishReason = true
@@ -114,6 +122,7 @@ func (a *Adapter) DecideStream(ctx context.Context, renderedContext map[string]a
 			chunk.Usage = &providers.Usage{
 				PromptTokens:     parsed.Usage.PromptTokens,
 				CompletionTokens: parsed.Usage.CompletionTokens,
+				ReasoningTokens:  parsed.Usage.CompletionTokensDetails.ReasoningTokens,
 			}
 		}
 

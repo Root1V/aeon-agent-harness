@@ -30,7 +30,11 @@ test-go: ## Run Go tests in a throwaway container (registry Postgres tests self-
 	docker run --rm -v "$(PWD):/repo" -v /var/run/docker.sock:/var/run/docker.sock -w /repo/go golang:1.25-alpine go test ./...
 
 test-go-integration: ## Run Go tests against real Postgres + Temporal + a real worker + OTel/Tempo (starts/stops them around the run)
-	$(COMPOSE) --profile core --profile obs up -d --wait postgres temporal worker otel-collector tempo
+	# --build no es opcional. Sin él este target levanta la imagen del worker que hubiera, así que
+	# la suite puede fallar por código viejo — o, peor, PASAR probándolo. Observado las dos veces:
+	# aquí con los cambios de TOOL-004, y en test-python-integration con una toolgw anterior a
+	# TOOL-005 que ignoraba la idempotency_key por completo.
+	$(COMPOSE) --profile core --profile obs up -d --build --wait postgres temporal worker otel-collector tempo
 	docker run --rm --network aeon_default -v "$(PWD):/repo" -w /repo/go \
 		-e AEON_TEST_PG_DSN="postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable" \
 		-e AEON_TEST_TEMPORAL_ADDRESS="temporal:7233" \
