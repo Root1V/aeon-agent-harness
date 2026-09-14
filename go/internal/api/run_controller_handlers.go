@@ -102,7 +102,7 @@ func (h *RunControllerHandlers) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := h.Controller.Start(ctx, body.RunID, body.Graph, body.Budgets)
+	info, err := h.Controller.Start(ctx, body.RunID, body.Graph, body.Budgets, body.AgentManifestRef)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

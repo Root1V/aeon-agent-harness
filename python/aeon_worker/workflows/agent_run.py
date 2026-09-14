@@ -38,6 +38,7 @@ class AgentRunWorkflow:
             step_seq=request.get("step_seq", 0),
             tool_name=request["tool_name"],
             tool_args=request.get("tool_args", {}),
+            agent_manifest_ref=request.get("agent_manifest_ref", ""),
             simulate_crash_after_write=request.get("simulate_crash_after_write", False),
         )
 

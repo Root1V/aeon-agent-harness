@@ -24,6 +24,11 @@ const defaultPollInterval = 250 * time.Millisecond
 type AeonAgentExecutor struct {
 	Controller *runcontroller.Controller
 	Graph      map[string]any
+	// AgentManifestRef is the principal the Tool Gateway evaluates policy against for runs started
+	// through A2A (TOOL-004). Empty means those runs carry no agent identity, and any tool call
+	// they make is refused by the gateway path rather than run unattributed — an inbound A2A
+	// request must not be a way around the per-agent policy a native call obeys.
+	AgentManifestRef string
 	// PollEvery overrides defaultPollInterval — exposed for tests to poll faster than a real
 	// operator would ever need to.
 	PollEvery time.Duration
@@ -42,7 +47,7 @@ func (e *AeonAgentExecutor) Execute(ctx context.Context, reqCtx *a2asrv.RequestC
 		return fmt.Errorf("a2a: write working event: %w", err)
 	}
 
-	if _, err := e.Controller.Start(ctx, runID, e.Graph, nil); err != nil {
+	if _, err := e.Controller.Start(ctx, runID, e.Graph, nil, e.AgentManifestRef); err != nil {
 		return e.writeTerminal(ctx, reqCtx, q, sdka2a.TaskStateFailed, "starting the run: "+err.Error())
 	}
 

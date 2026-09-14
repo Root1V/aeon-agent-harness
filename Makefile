@@ -2,7 +2,7 @@
 COMPOSE := docker compose -f deploy/compose/docker-compose.yml
 PROFILE ?= full
 
-.PHONY: dev down logs ps build test test-go test-go-integration test-python lint roadmap-check clean
+.PHONY: dev down logs ps build test test-go test-go-integration test-python test-python-integration lint roadmap-check clean
 
 dev: ## Start the full reference stack (Temporal, Postgres, MinIO, OTel, Tempo, Grafana, gateways, worker)
 	$(COMPOSE) --profile $(PROFILE) up -d --build
@@ -40,6 +40,19 @@ test-go-integration: ## Run Go tests against real Postgres + Temporal + a real w
 		"apk add --no-cache postgresql-client >/dev/null && until pg_isready -h postgres -U aeon >/dev/null 2>&1; do sleep 1; done && go test ./... -v"
 	$(COMPOSE) --profile core --profile obs stop postgres temporal worker otel-collector tempo
 
+test-python-integration: ## Run Python tests against a real Tool Gateway + Postgres (starts/stops them around the run)
+	# TOOL-004: the worker's execute_tool talks to the real aeon-toolgw over HTTP, so proving it
+	# works needs the gateway actually running — a fake would test the request shape and nothing
+	# about policy or deduplication, which is the whole point.
+	# --build no es opcional: sin él este target levanta la imagen que hubiera, y una toolgw
+	# anterior a TOOL-005 ignora la idempotency_key por completo — el test mediría código viejo.
+	$(COMPOSE) --profile core up -d --build --wait postgres toolgw
+	docker run --rm --network aeon_default -v "$(PWD):/repo" -w /repo/python \
+		-e AEON_TEST_TOOLGW_ADDR="toolgw:9403" \
+		python:3.13-slim sh -c \
+		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q tests/integration/test_tool_execution_through_gateway.py"
+	$(COMPOSE) --profile core stop postgres toolgw
+
 test-python: ## Run Python unit + integration tests in a throwaway container via uv
 	# Mounts the whole repo, not just python/: test_contracts.py and (from DR-001) the Deep
 	# Research profile's Planner load JSON Schemas from proto/schemas and fixtures from examples/,
@@ -47,7 +60,10 @@ test-python: ## Run Python unit + integration tests in a throwaway container via
 	# '--with-editable .' only installs the package's runtime dependencies. nodejs+npm+the real
 	# `claude` CLI are installed for aeon_adapters.claude_agent_sdk's tests (INT-007) — it wraps that
 	# CLI as a subprocess, it does not reimplement it.
-	docker run --rm -v "$(PWD):/repo" -w /repo/python python:3.13-slim sh -c \
+	# AEON_TOOL_EXECUTION_MODE is explicit (TOOL-004): the worker refuses to pick an execution
+	# backend on its own, because the wrong guess — the file ledger, which runs nothing — looks
+	# exactly like a working deployment. These tests want that ledger, and now they say so.
+	docker run --rm -v "$(PWD):/repo" -w /repo/python -e AEON_TOOL_EXECUTION_MODE=local-ledger python:3.13-slim sh -c \
 		"apt-get update -qq && apt-get install -y -qq --no-install-recommends nodejs npm >/dev/null && npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 && pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q"
 
 eval-run: ## Run an EvalSuite offline (EVAL-002): make eval-run SUITE=deep_research_core [TRIALS=3]
