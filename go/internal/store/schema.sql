@@ -159,3 +159,37 @@ CREATE TABLE IF NOT EXISTS tool_executions (
     CONSTRAINT tool_executions_state_valid CHECK (state IN ('in_flight', 'completed', 'released'))
 );
 CREATE INDEX IF NOT EXISTS tool_executions_tool_idx ON tool_executions (tool_name);
+
+-- TOOL-006 (search.rag): recuperación sobre documentos reales.
+--
+-- La dimensión está fijada a 1024 porque una columna vector indexable la exige fija. Es la del
+-- modelo con el que se indexa hoy (qwen3-embedding, medido contra el despliegue el 2026-09-14);
+-- cambiar de modelo de embeddings obliga a una migración y a reindexar, y no hay forma de
+-- disimularlo.
+--
+-- embedding_model se guarda POR TROZO a propósito. Buscar con un modelo distinto del que indexó no
+-- da error: da resultados plausibles y equivocados, porque dos espacios vectoriales distintos
+-- comparan igual de bien. Guardarlo es lo único que permite negarse.
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS rag_chunks (
+    id              BIGSERIAL PRIMARY KEY,
+    corpus          TEXT NOT NULL,
+    -- El locator es lo que hace posible un EvidencePacket: sin él, el Citation Verifier (DR-005)
+    -- no tiene contra qué verificar y una cita es una afirmación sin respaldo.
+    source_path     TEXT NOT NULL,
+    chunk_index     INTEGER NOT NULL,
+    byte_start      INTEGER NOT NULL,
+    byte_end        INTEGER NOT NULL,
+    content         TEXT NOT NULL,
+    embedding_model TEXT NOT NULL,
+    embedding       vector(1024) NOT NULL,
+    indexed_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT rag_chunks_unique_locator UNIQUE (corpus, source_path, chunk_index)
+);
+
+CREATE INDEX IF NOT EXISTS rag_chunks_corpus_idx ON rag_chunks (corpus);
+-- HNSW sobre distancia coseno: es la métrica que corresponde a embeddings normalizados, y es la
+-- que usa la búsqueda de abajo. Un índice construido con otra métrica que la consulta no produce
+-- un error, produce un orden peor sin avisar.
+CREATE INDEX IF NOT EXISTS rag_chunks_embedding_idx ON rag_chunks USING hnsw (embedding vector_cosine_ops);

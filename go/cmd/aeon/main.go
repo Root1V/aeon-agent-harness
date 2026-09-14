@@ -76,6 +76,21 @@ func main() {
 			fmt.Printf("aeon eval %s: not yet implemented — see roadmap.md EVAL-003\n", os.Args[2])
 			os.Exit(2)
 		}
+	case "rag":
+		if len(os.Args) < 4 || os.Args[2] != "index" {
+			fmt.Fprintln(os.Stderr, "usage: aeon rag index <directory> [--corpus name]")
+			os.Exit(1)
+		}
+		corpus := "default"
+		for i := 4; i+1 < len(os.Args); i++ {
+			if os.Args[i] == "--corpus" {
+				corpus = os.Args[i+1]
+			}
+		}
+		if err := runRagIndex(os.Args[3], corpus); err != nil {
+			fmt.Fprintf(os.Stderr, "rag index: %v\n", err)
+			os.Exit(1)
+		}
 	case "init":
 		if len(os.Args) < 3 {
 			fmt.Fprintln(os.Stderr, "usage: aeon init <directory>")

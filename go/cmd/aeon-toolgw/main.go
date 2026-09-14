@@ -24,6 +24,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	aeonmcp "github.com/aeon-ai/aeon/go/internal/mcp"
 	"github.com/aeon-ai/aeon/go/internal/policy"
+	prometheusinference "github.com/aeon-ai/aeon/go/internal/providers/prometheus_inference"
 	"github.com/aeon-ai/aeon/go/internal/secrets"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/toolexec"
@@ -113,6 +114,21 @@ func main() {
 		handlers.Executions = s.ToolExecutions()
 		log.Println("aeon-toolgw: execution deduplication live (idempotency_key honoured on /execute)")
 
+		// TOOL-006: search.rag over indexed documents. Registered only when an embedding model is
+		// named AND the provider it needs is configured — an unregistered tool is denied with a
+		// clear "unknown tool" rather than answering from an empty corpus, which would look like a
+		// document that says nothing.
+		if embedder := ragEmbedderFromEnv(); embedder != nil {
+			corpus := os.Getenv("AEON_RAG_CORPUS")
+			if corpus == "" {
+				corpus = "default"
+			}
+			toolexec.RegisterRagTool(executor, s.RagStore(), embedder, corpus)
+			log.Printf("aeon-toolgw: search.rag live over corpus %q using embedding model %q", corpus, embedder.Model())
+		} else {
+			log.Println("aeon-toolgw: search.rag not registered (set AEON_EMBEDDING_MODEL and the Prometheus credentials)")
+		}
+
 		tools, err := s.ToolRegistry().List(context.Background())
 		if err != nil {
 			log.Fatalf("aeon-toolgw: listing the Tool Registry for the MCP server: %v", err)
@@ -127,4 +143,32 @@ func main() {
 	srv := httpserver.New("aeon-toolgw", mux)
 	log.Println("aeon-toolgw starting (policy-checked execution + outbound MCP server live; dedupe table not yet implemented — see roadmap.md RUN-004)")
 	httpserver.MustListenAndServe(srv)
+}
+
+// ragEmbedderFromEnv builds TOOL-006's embedder, or nil when this deployment has not configured one.
+//
+// Returning nil rather than a stub is deliberate: a stub embedder would let search.rag answer with
+// passages retrieved from a meaningless vector space, and the agent would cite them. A tool that is
+// not there fails loudly at the first call.
+func ragEmbedderFromEnv() *prometheusinference.Embedder {
+	model := os.Getenv("AEON_EMBEDDING_MODEL")
+	authURL := os.Getenv("PROMETHEUS_AUTH_URL")
+	gatewayURL := os.Getenv("PROMETHEUS_GATEWAY_URL")
+	clientID := os.Getenv("PROMETHEUS_CLIENT_ID")
+	clientSecret := os.Getenv("PROMETHEUS_CLIENT_SECRET")
+	if model == "" || authURL == "" || gatewayURL == "" || clientID == "" || clientSecret == "" {
+		return nil
+	}
+	return &prometheusinference.Embedder{
+		Client: &prometheusinference.Client{
+			GatewayURL: gatewayURL,
+			Tokens: &prometheusinference.TokenSource{
+				AuthURL: authURL, ClientID: clientID, ClientSecret: clientSecret,
+				// The token must carry model:<id> for the embedding model specifically. Being
+				// authorised for it is not enough — .env.example records that confirmed live.
+				Scope: "inference:read model:" + model,
+			},
+		},
+		ModelID: model,
+	}
 }
