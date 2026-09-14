@@ -130,3 +130,32 @@ CREATE INDEX IF NOT EXISTS run_checkpoints_run_seq_idx ON run_checkpoints (run_i
 -- the ledger.
 ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS cache_read_tokens INTEGER;
 ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS cache_write_tokens INTEGER;
+
+-- TOOL-005: la tabla de deduplicación de EJECUCIÓN. El Tool Registry ya exigía
+-- idempotency_key_fields a toda tool con efectos, y hasta ahora nadie los usaba al ejecutar: la
+-- única dedupe real era un fichero local marcado "not for production use".
+--
+-- La clave primaria es el contrato, igual que en run_checkpoints. Y el estado tiene tres valores
+-- por la misma razón que allí: "no está" (nunca se intentó), "reclamada sin resultado" (alguien la
+-- está ejecutando ahora, o murió a mitad) y "completada". Colapsar los dos primeros es lo que
+-- permite una segunda ejecución del mismo efecto.
+CREATE TABLE IF NOT EXISTS tool_executions (
+    idempotency_key    TEXT PRIMARY KEY,
+    tool_name          TEXT NOT NULL,
+    agent_manifest_ref TEXT NOT NULL,
+    args               JSONB,
+    result             JSONB,
+    -- failed_attempts cuenta los intentos que terminaron en error. No es cosmética: un error
+    -- libera la reclamación para que un fallo transitorio no sea permanente, y este contador es lo
+    -- único que deja ver que hubo intentos previos — el riesgo residual de que un efecto haya
+    -- aterrizado antes del error se vuelve visible en vez de silencioso.
+    failed_attempts    INTEGER NOT NULL DEFAULT 0,
+    -- El estado es explícito y no derivado de qué columnas son nulas. La primera versión lo dedujo
+    -- de completed_at, y una reclamación liberada tras un fallo quedaba indistinguible de una en
+    -- vuelo: habría bloqueado el reintento para siempre. Tres estados, nombrados.
+    state              TEXT NOT NULL DEFAULT 'in_flight',
+    claimed_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at       TIMESTAMPTZ,
+    CONSTRAINT tool_executions_state_valid CHECK (state IN ('in_flight', 'completed', 'released'))
+);
+CREATE INDEX IF NOT EXISTS tool_executions_tool_idx ON tool_executions (tool_name);
