@@ -86,21 +86,32 @@ func (h *ModelGatewayHandlers) decide(w http.ResponseWriter, r *http.Request) {
 // recordCost is OBS-003: computes a real dollar cost from this call's real token usage (when a
 // rate is configured) and durably records it — best-effort, never blocking or failing the actual
 // /decide response it's observing.
+//
+// OBS-008 changed the control flow here, and the change is the whole point. This used to return
+// early when Pricing.Rate found nothing, which was *before* the ledger write: a model with no
+// configured rate — a renamed one, most likely — left no row at all. Not a row with a null price,
+// which an audit can find and ask about, but nothing, which an audit cannot distinguish from a call
+// that never happened. Prometheus hit the same bug in their own rows and at least kept the row.
+//
+// So the cost is now recorded whether or not it could be computed, and "could not be computed" is
+// carried as nil rather than as 0. The two facts a zero used to merge — nobody priced this, and
+// this was priced at zero — are the ones a FinOps dashboard most needs apart.
 func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.DecisionResult, runID, agentManifestRef string, response map[string]any) {
-	if h.Pricing == nil {
-		return
-	}
-	rate, ok := h.Pricing.Rate(result.ProviderUsed, result.Model)
-	if !ok {
-		return
-	}
-
 	promptTokens, completionTokens := usageTokens(result.Output)
-	costUSD, priced := h.Pricing.CostUSD(result.ProviderUsed, result.Model, promptTokens, completionTokens)
 
-	response["cost_model"] = rate.CostModel
-	if priced {
-		response["cost_usd"] = costUSD
+	// Both nil until proven otherwise: no pricing table, no rate, or a cost_model this package
+	// cannot price all leave the call recorded and its cost unknown.
+	var costModel *string
+	var costUSD *float64
+	if h.Pricing != nil {
+		if rate, ok := h.Pricing.Rate(result.ProviderUsed, result.Model); ok {
+			costModel = &rate.CostModel
+			response["cost_model"] = rate.CostModel
+			if usd, priced := h.Pricing.CostUSD(result.ProviderUsed, result.Model, promptTokens, completionTokens); priced {
+				costUSD = &usd
+				response["cost_usd"] = usd
+			}
+		}
 	}
 
 	if h.Ledger == nil {
@@ -111,7 +122,7 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 	entry := store.CostEntry{
 		Provider:         result.ProviderUsed,
 		Model:            result.Model,
-		CostModel:        rate.CostModel,
+		CostModel:        costModel,
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		CostUSD:          costUSD,

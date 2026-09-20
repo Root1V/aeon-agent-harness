@@ -138,9 +138,16 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Descripción:** un proveedor `compute_based` (hoy sólo `prometheus_inference`) nunca obtiene un
   `cost_usd` real — `finops.PricingTable.CostUSD` devuelve `ok=false` a propósito para él, ya que se
   factura por segundo de GPU, no por token, y no existe ninguna instrumentación de tiempo de
-  inferencia real todavía. El dashboard lo muestra honestamente (fila con `cost_model:
-  compute_based`, sin coste inventado) pero el coste real de la inferencia local sigue siendo
-  invisible.
+  inferencia real todavía.
+  **Corregido el 2026-09-20 (`OBS-008`):** esta entrada decía que «el dashboard lo muestra
+  honestamente (fila con `cost_model: compute_based`, sin coste inventado)». Era falso, y llevaba
+  aquí escrito como propiedad correcta, que es por lo que el defecto no se veía. La respuesta de
+  `/decide` sí omitía el coste; el **ledger** escribía la fila con `cost_usd = 0` en una columna
+  `NOT NULL DEFAULT 0`, y `TotalsByModel` la sumaba y enseñaba `$0.00`. Ya está arreglado: la
+  columna es anulable y el panel no imprime cifra donde no la tiene.
+  **Y el criterio de entrada de abajo también cambió**: Axonium midió que
+  `GET /v1/usage/{request_id}` ya devuelve `cost_usd` para modelos locales, así que no hace falta
+  instrumentar tiempo de GPU — hace falta **leerlo** (`OBS-007`).
 - **Fase objetivo:** cuando el coste de inferencia local sea significativo frente al de proveedores
   cloud y valga la pena medirlo.
 - **Criterio de entrada:** existe una forma real de medir tiempo de GPU por llamada (el propio
