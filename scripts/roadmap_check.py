@@ -31,24 +31,46 @@ TEST_REF_RE = re.compile(r"`([\w./-]+)`")
 SEARCH_DIRS = [ROOT / "python", ROOT / "go", ROOT / "evals"]
 
 
-def find_reference(name: str) -> bool:
-    """True if `name` appears anywhere under the search dirs (as a def/func name, filename, or suite id)."""
-    needle = name
+# Directories that are not our source. Excluding them is not an optimisation, or not only one:
+# python/.venv alone is ~979MB across ~15k vendored files, and a test name found inside a third-party
+# package would satisfy this check for a DONE row whose test does not exist. A guard that can pass
+# for the wrong reason is worse than no guard, so the walk is restricted to code we wrote.
+EXCLUDED_DIRS = {".venv", "__pycache__", "node_modules", ".git", ".pytest_cache", ".mypy_cache", "vendor"}
+
+
+def _source_files() -> list:
+    """Every file under the search dirs, walked ONCE.
+
+    find_reference used to re-walk and re-read all of them per DONE row — ~70 full passes over a
+    gigabyte, which is why verifying the roadmap took minutes instead of a second.
+    """
+    files = []
     for d in SEARCH_DIRS:
         if not d.exists():
             continue
         for path in d.rglob("*"):
             if path.is_dir():
                 continue
-            if path.name == needle or path.stem == needle:
-                return True
+            if EXCLUDED_DIRS & set(path.parts):
+                continue
+            files.append(path)
+    return files
+
+
+_CORPUS: list | None = None
+
+
+def find_reference(name: str) -> bool:
+    """True if `name` appears anywhere under the search dirs (as a def/func name, filename, or suite id)."""
+    global _CORPUS
+    if _CORPUS is None:
+        _CORPUS = []
+        for path in _source_files():
             try:
-                text = path.read_text(errors="ignore")
+                _CORPUS.append((path.name, path.stem, path.read_text(errors="ignore")))
             except OSError:
                 continue
-            if needle in text:
-                return True
-    return False
+    return any(name == fname or name == stem or name in text for fname, stem, text in _CORPUS)
 
 
 def main() -> int:
