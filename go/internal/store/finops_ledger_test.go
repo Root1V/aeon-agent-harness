@@ -19,8 +19,8 @@ func TestFinOpsLedgerRecordsAndAggregatesRealCosts(t *testing.T) {
 	model := "test-model-" + randSuffix(t)
 
 	entries := []CostEntry{
-		{Provider: "anthropic", Model: model, CostModel: "token_based", PromptTokens: 1000, CompletionTokens: 500, CostUSD: 0.05, RunID: "run-1"},
-		{Provider: "anthropic", Model: model, CostModel: "token_based", PromptTokens: 2000, CompletionTokens: 1000, CostUSD: 0.10},
+		{Provider: "anthropic", Model: model, CostModel: tokenBased(), PromptTokens: 1000, CompletionTokens: 500, CostUSD: usd(0.05), RunID: "run-1"},
+		{Provider: "anthropic", Model: model, CostModel: tokenBased(), PromptTokens: 2000, CompletionTokens: 1000, CostUSD: usd(0.10)},
 	}
 	for _, e := range entries {
 		if err := ledger.Record(ctx, e); err != nil {
@@ -49,14 +49,20 @@ func TestFinOpsLedgerRecordsAndAggregatesRealCosts(t *testing.T) {
 	// Floating-point sums (0.05 + 0.10 in IEEE754 double precision, summed by Postgres itself) are
 	// not exactly 0.15 — a real property of DOUBLE PRECISION arithmetic, not a bug here or in the
 	// SQL. An epsilon comparison is the correct check, not exact equality.
-	if diff := found.TotalCostUSD - 0.15; diff > 1e-9 || diff < -1e-9 {
-		t.Fatalf("TotalCostUSD = %v, want ~0.15", found.TotalCostUSD)
+	if found.TotalCostUSD == nil {
+		t.Fatal("TotalCostUSD is nil for a group where every call was priced")
+	}
+	if diff := *found.TotalCostUSD - 0.15; diff > 1e-9 || diff < -1e-9 {
+		t.Fatalf("TotalCostUSD = %v, want ~0.15", *found.TotalCostUSD)
+	}
+	if found.UnpricedCalls != 0 {
+		t.Fatalf("UnpricedCalls = %d, want 0 — every call in this group carried a cost", found.UnpricedCalls)
 	}
 	if found.TotalPromptTokens != 3000 || found.TotalCompletionTokens != 1500 {
 		t.Fatalf("token totals = (%d, %d), want (3000, 1500)", found.TotalPromptTokens, found.TotalCompletionTokens)
 	}
-	if found.CostModel != "token_based" {
-		t.Fatalf("CostModel = %q, want token_based", found.CostModel)
+	if found.CostModel == nil || *found.CostModel != "token_based" {
+		t.Fatalf("CostModel = %v, want token_based", found.CostModel)
 	}
 }
 
@@ -66,7 +72,7 @@ func TestFinOpsLedgerRecordWithoutRunIDStoresNull(t *testing.T) {
 	ctx := context.Background()
 	model := "test-model-no-run-" + randSuffix(t)
 
-	if err := ledger.Record(ctx, CostEntry{Provider: "openai", Model: model, CostModel: "token_based", PromptTokens: 10, CompletionTokens: 5, CostUSD: 0.001}); err != nil {
+	if err := ledger.Record(ctx, CostEntry{Provider: "openai", Model: model, CostModel: tokenBased(), PromptTokens: 10, CompletionTokens: 5, CostUSD: usd(0.001)}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
@@ -84,3 +90,9 @@ func TestFinOpsLedgerRecordWithoutRunIDStoresNull(t *testing.T) {
 		t.Fatalf("expected a total for (openai, %s) even with no run_id, got %+v", model, totals)
 	}
 }
+
+// usd and tokenBased keep the pointer-taking out of the table literals above. The fields are
+// pointers because nil and zero are different facts (OBS-008), not because the tests need it.
+func usd(v float64) *float64 { return &v }
+
+func tokenBased() *string { s := "token_based"; return &s }

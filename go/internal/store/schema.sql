@@ -80,16 +80,30 @@ CREATE TABLE IF NOT EXISTS model_gateway_costs (
     id                  BIGSERIAL PRIMARY KEY,
     provider            TEXT NOT NULL,
     model               TEXT NOT NULL,
-    cost_model          TEXT NOT NULL,
+    -- Also nullable (OBS-008): when no rate is configured at all we do not know whether this model
+    -- is billed per token or per GPU-second, and guessing one would be a fact we invented.
+    cost_model          TEXT,
     prompt_tokens       INTEGER NOT NULL DEFAULT 0,
     completion_tokens   INTEGER NOT NULL DEFAULT 0,
-    cost_usd            DOUBLE PRECISION NOT NULL DEFAULT 0,
+    -- OBS-008: nullable on purpose. NULL means "nobody computed this" — a compute_based provider
+    -- billed by GPU-second, or a model with no configured rate. 0 means "computed, and it was
+    -- zero". A NOT NULL DEFAULT 0 here made those the same fact, and TotalsByModel summed them
+    -- into a $0.00 that looked measured.
+    cost_usd            DOUBLE PRECISION,
     run_id              TEXT,
     agent_manifest_ref  TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS model_gateway_costs_model_idx ON model_gateway_costs (provider, model);
 CREATE INDEX IF NOT EXISTS model_gateway_costs_run_idx ON model_gateway_costs (run_id);
+
+-- OBS-008: additive migration for deploys whose model_gateway_costs predates the change above,
+-- same idempotent-ALTER reasoning as MEM-005. Dropping NOT NULL is safe on existing rows; what it
+-- cannot do is recover the ones already written as 0 when the truth was "unpriced", nor the calls
+-- that left no row at all because recordCost returned before the insert.
+ALTER TABLE model_gateway_costs ALTER COLUMN cost_usd DROP DEFAULT;
+ALTER TABLE model_gateway_costs ALTER COLUMN cost_usd DROP NOT NULL;
+ALTER TABLE model_gateway_costs ALTER COLUMN cost_model DROP NOT NULL;
 
 -- MDL-002 (quality-aware routing): the current real eval score per (provider, model) — a real
 -- eval suite (e.g. provider_conformance) reports here; the Model Gateway consults it to skip a
