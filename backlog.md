@@ -69,6 +69,12 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Fase objetivo:** F4 (`A2A-001`).
 - **Criterio de entrada:** existe al menos un consumidor A2A externo real que lo necesite.
 - **Coste:** L.
+- **Nota (2026-09-20):** Synaptum pidió delegación a agentes remotos, y **no cumple este criterio**
+  — necesitan el sentido contrario. Esto es el lado *servidor* (recibimos tareas); lo suyo es
+  *egress* (emitimos hacia un agente remoto), que se abrió como `A2A-002` en el roadmap y se
+  resuelve con un proxy en el Tool Gateway, sin cliente A2A ni ciclo de vida de Task. Anotado
+  porque las dos cosas se llaman «A2A» y promover ésta creyendo que desbloquea aquélla es el error
+  fácil.
 
 ### Memoria persistente (Memory Store activo, más allá de candidatos)
 
