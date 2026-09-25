@@ -253,6 +253,11 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Criterio de entrada:** existe ese punto de finalización, y se decide qué cuenta como "fallo" a
   efectos del breaker (¿cualquier excepción no capturada? ¿sólo un budget agotado?).
 - **Coste:** M.
+- **Orden respecto a `OBS-009` (2026-09-25):** `OBS-009` va **antes o a la vez**, no después. El
+  campo de coste del endpoint es `float64` con `omitempty`, así que quien enganche este wiring pasará
+  el coste de cada run — y un run sin tarifar (hoy, toda llamada a `prometheus_inference`) viajará
+  como `0` y **bajará la media**, que es fail-open en el control. Hoy el defecto es inofensivo
+  precisamente porque nadie llama a `/outcomes`: implementar esta entrada es lo que lo enciende.
 
 ### Adaptadores de proveedor adicionales (Bedrock, Azure AI Foundry nativo, Mistral, Cohere)
 
