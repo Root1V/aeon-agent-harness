@@ -33,6 +33,9 @@ type CostEntry struct {
 	// join this row to the platform's accounting for the same call. Empty for a provider that issues
 	// none, stored as NULL.
 	ProviderRequestID string
+	// IdempotentReplayOf names the generation that was billed, when this call was served as a replay
+	// (OBS-006). Empty for a real generation.
+	IdempotentReplayOf string
 }
 
 // ModelTotal is one row of TotalsByModel's real SQL aggregation.
@@ -84,11 +87,15 @@ func (l *FinOpsLedger) Record(ctx context.Context, entry CostEntry) error {
 	if entry.ProviderRequestID != "" {
 		requestID = &entry.ProviderRequestID
 	}
+	var replayOf *string
+	if entry.IdempotentReplayOf != "" {
+		replayOf = &entry.IdempotentReplayOf
+	}
 	_, err := l.pool.Exec(ctx,
-		`INSERT INTO model_gateway_costs (provider, model, cost_model, prompt_tokens, completion_tokens, cost_usd, run_id, agent_manifest_ref, cache_read_tokens, cache_write_tokens, reasoning_tokens, provider_request_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		`INSERT INTO model_gateway_costs (provider, model, cost_model, prompt_tokens, completion_tokens, cost_usd, run_id, agent_manifest_ref, cache_read_tokens, cache_write_tokens, reasoning_tokens, provider_request_id, idempotent_replay_of)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		entry.Provider, entry.Model, entry.CostModel, entry.PromptTokens, entry.CompletionTokens, entry.CostUSD, runID, agentRef,
-		entry.CacheReadTokens, entry.CacheWriteTokens, entry.ReasoningTokens, requestID,
+		entry.CacheReadTokens, entry.CacheWriteTokens, entry.ReasoningTokens, requestID, replayOf,
 	)
 	if err != nil {
 		return fmt.Errorf("store: recording model gateway cost: %w", err)
@@ -129,12 +136,13 @@ func (l *FinOpsLedger) TotalsByModel(ctx context.Context) ([]ModelTotal, error) 
 
 // LedgerRow is one recorded cost event, read back for reconciliation (OBS-007).
 type LedgerRow struct {
-	Provider          string
-	Model             string
-	PromptTokens      int
-	CompletionTokens  int
-	CostUSD           *float64
-	ProviderRequestID string
+	Provider           string
+	Model              string
+	PromptTokens       int
+	CompletionTokens   int
+	CostUSD            *float64
+	ProviderRequestID  string
+	IdempotentReplayOf string
 }
 
 // RowsWithProviderRequestID returns the rows that CAN be reconciled: those carrying the platform's
@@ -146,7 +154,7 @@ func (l *FinOpsLedger) RowsWithProviderRequestID(ctx context.Context, provider s
 		limit = 100
 	}
 	rows, err := l.pool.Query(ctx,
-		`SELECT provider, model, prompt_tokens, completion_tokens, cost_usd, provider_request_id
+		`SELECT provider, model, prompt_tokens, completion_tokens, cost_usd, provider_request_id, coalesce(idempotent_replay_of, '')
 		   FROM model_gateway_costs
 		  WHERE provider = $1 AND provider_request_id IS NOT NULL
 		  ORDER BY id DESC
@@ -159,7 +167,7 @@ func (l *FinOpsLedger) RowsWithProviderRequestID(ctx context.Context, provider s
 	var out []LedgerRow
 	for rows.Next() {
 		var r LedgerRow
-		if err := rows.Scan(&r.Provider, &r.Model, &r.PromptTokens, &r.CompletionTokens, &r.CostUSD, &r.ProviderRequestID); err != nil {
+		if err := rows.Scan(&r.Provider, &r.Model, &r.PromptTokens, &r.CompletionTokens, &r.CostUSD, &r.ProviderRequestID, &r.IdempotentReplayOf); err != nil {
 			return nil, fmt.Errorf("store: scanning cost row: %w", err)
 		}
 		out = append(out, r)
