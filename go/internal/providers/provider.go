@@ -56,6 +56,14 @@ type ChatResult struct {
 	// replay of an identical earlier call (OBS-006). Empty when this call really generated. The usage
 	// block on a replay repeats the ORIGINAL call's tokens, so billing it again inflates the ledger.
 	IdempotentReplayOf string
+	// ServedByInstance is the deployment that actually answered, when the provider reports one.
+	//
+	// Carried here by MDL-009 because the Axonium SDK surfaces it and dropping it would waste a fact
+	// nothing else can recover. The ledger imputes cost by the bundle's model, which is correct — you
+	// pay for the profile, not the deployment — but "which deployment answered" is where an incident
+	// starts, and today it is recorded nowhere. Recording it and reconciling the discrepancy is
+	// OBS-005; this field is what makes that possible.
+	ServedByInstance string
 
 	Model        string
 	Content      string
@@ -86,6 +94,9 @@ func NormalizedChatResponseFrom(r ChatResult) map[string]any {
 	// than "unknown" — the same reason the cache counters are omitted instead of zeroed.
 	if r.IdempotentReplayOf != "" {
 		response["idempotent_replay_of"] = r.IdempotentReplayOf
+	}
+	if r.ServedByInstance != "" {
+		response["served_by_instance"] = r.ServedByInstance
 	}
 	if r.ReasoningContent == "" {
 		return response

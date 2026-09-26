@@ -49,13 +49,7 @@ func TestIdempotentReplayIsNotBilledTwice(t *testing.T) {
 		t.Skip("Prometheus credentials not set — OBS-006 needs the platform's own replay headers, which no fixture can produce honestly")
 	}
 
-	client := &prometheusinference.Client{
-		GatewayURL: gateway,
-		Tokens: &prometheusinference.TokenSource{
-			AuthURL: authURL, ClientID: clientID, ClientSecret: secret,
-			Scope: "inference:read model:" + model,
-		},
-	}
+	client := &prometheusinference.Client{GatewayURL: gateway, ClientID: clientID, ClientSecret: secret, Scope: "inference:read model:" + model}
 
 	t.Run("the platform marks a replay, and it repeats the original usage", func(t *testing.T) {
 		// Establishes the premise from the platform itself rather than from a fixture. If this ever
@@ -209,12 +203,13 @@ func usageOf(body map[string]any) (prompt, completion int) {
 // chatWithKey makes one real call under an idempotency key, returning the body, the platform's id for
 // this call, and the id of the generation it replays (empty when it really generated).
 func chatWithKey(ctx context.Context, client *prometheusinference.Client, model, key string) (map[string]any, string, string, error) {
-	return client.ChatCompletionWithMeta(ctx, map[string]any{
+	raw, meta, err := client.ChatCompletionWithMeta(ctx, map[string]any{
 		"model":                                 model,
 		"messages":                              []any{map[string]any{"role": "user", "content": "Responde solo: ok"}},
 		"max_tokens":                            20,
 		prometheusinference.IdempotencyKeyField: key,
 	})
+	return raw, meta.RequestID, meta.IdempotentReplayOf, err
 }
 
 // realPrometheusDecideServer wires the real handler against the real adapter, so the path under test

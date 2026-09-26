@@ -173,13 +173,16 @@ func ragEmbedderFromEnv() *prometheusinference.Embedder {
 	}
 	return &prometheusinference.Embedder{
 		Client: &prometheusinference.Client{
-			GatewayURL: gatewayURL,
-			Tokens: &prometheusinference.TokenSource{
-				AuthURL: authURL, ClientID: clientID, ClientSecret: clientSecret,
-				// The token must carry model:<id> for the embedding model specifically. Being
-				// authorised for it is not enough — .env.example records that confirmed live.
-				Scope: "inference:read model:" + model,
-			},
+			// MDL-009: one address. The gateway serves /oauth2/token as well as /v1/, so the
+			// separate auth URL is gone — keeping it was the footgun Axonium removed from their
+			// own SDK: two addresses to change, and forgetting the second minted tokens against
+			// the wrong party without anything failing.
+			GatewayURL:   gatewayURL,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			// The token must carry model:<id> for the embedding model specifically. Being
+			// authorised for it is not enough — confirmed live.
+			Scope: "inference:read model:" + model,
 		},
 		ModelID: model,
 	}
