@@ -47,8 +47,8 @@ func TestRecordOutcomeDoesNotTripUnderThreshold(t *testing.T) {
 
 func TestRecordOutcomeTripsOnAnomalousCost(t *testing.T) {
 	b := New(Thresholds{WindowSize: 10, MinSamples: 2, MaxFailureRate: 1.0, MaxAvgCostUSD: 1.0})
-	b.RecordOutcome("agent", "1.0.0", Observation{Success: true, CostUSD: 0.5})
-	v := b.RecordOutcome("agent", "1.0.0", Observation{Success: true, CostUSD: 5.0})
+	b.RecordOutcome("agent", "1.0.0", Observation{Success: true, CostUSD: usd(0.5)})
+	v := b.RecordOutcome("agent", "1.0.0", Observation{Success: true, CostUSD: usd(5.0)})
 	if !v.Tripped {
 		t.Fatal("expected the breaker to trip on anomalous average cost")
 	}
@@ -59,7 +59,7 @@ func TestRecordOutcomeTripsOnAnomalousCost(t *testing.T) {
 
 func TestMaxAvgCostUSDZeroDisablesCostCheck(t *testing.T) {
 	b := New(Thresholds{WindowSize: 10, MinSamples: 1, MaxFailureRate: 1.0, MaxAvgCostUSD: 0})
-	v := b.RecordOutcome("agent", "1.0.0", Observation{Success: true, CostUSD: 1_000_000})
+	v := b.RecordOutcome("agent", "1.0.0", Observation{Success: true, CostUSD: usd(1_000_000)})
 	if v.Tripped {
 		t.Fatal("expected MaxAvgCostUSD=0 to disable the cost check entirely")
 	}
@@ -108,3 +108,7 @@ func TestNewWithZeroValueThresholdsUsesDefaults(t *testing.T) {
 		t.Fatalf("thresholds = %+v, want DefaultThresholds %+v", b.thresholds, DefaultThresholds)
 	}
 }
+
+// usd keeps the pointer-taking out of the literals above. CostUSD is a pointer because nil and zero
+// are different facts (OBS-009), not because the tests wanted it.
+func usd(v float64) *float64 { return &v }

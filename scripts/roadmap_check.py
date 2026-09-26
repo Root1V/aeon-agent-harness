@@ -21,6 +21,10 @@ ROOT = Path(__file__).resolve().parent.parent
 ROADMAP = ROOT / "roadmap.md"
 
 # Matches a markdown table row: | ID | Feature | Estado | Criterio de DONE | PR |
+# LOOKS_LIKE_ROW_RE is deliberately lax: it matches the OPENING of a feature row so that a row
+# ROW_RE cannot parse is reported instead of skipped. See the failure it exists for in main().
+LOOKS_LIKE_ROW_RE = re.compile(r"^\|\s*[A-Z][A-Z0-9]*-\d+\s*\|")
+
 ROW_RE = re.compile(
     r"^\|\s*([\w-]+)\s*\|\s*(.+?)\s*\|\s*`(\w+)`\s*\|\s*(.+?)\s*\|\s*(.*?)\s*\|$"
 )
@@ -82,8 +86,19 @@ def main() -> int:
     checked = 0
 
     for line in ROADMAP.read_text().splitlines():
-        m = ROW_RE.match(line.strip())
+        stripped = line.strip()
+        m = ROW_RE.match(stripped)
         if not m:
+            # A line that OPENS like a feature row but does not parse is a failure, not something to
+            # skip. Skipping is how OBS-009 stayed invisible: its criterion had a nested markdown
+            # table embedded in it, which split the row across six physical lines, so ROW_RE never
+            # matched it and the check reported OK over a DONE row it had never looked at. A guard
+            # that silently ignores what it cannot read is a guard that passes for the wrong reason.
+            if LOOKS_LIKE_ROW_RE.match(stripped):
+                failures.append(
+                    f"{stripped[:60]!r}...: opens like a feature row but does not parse — "
+                    "most likely a newline inside its DONE criterion (keep each row on one line)"
+                )
             continue
         feature_id, feature, status, criterio, _pr = m.groups()
         if feature_id in ("ID", "---") or status not in {"DONE"}:
