@@ -49,6 +49,10 @@ func NormalizedChatResponse(model, content, finishReason string, promptTokens, c
 // alternative was a sixth positional argument, and because reasoning is not a variant of content:
 // keeping them as separate fields is what stops an adapter from concatenating them "just this once".
 type ChatResult struct {
+	// ProviderRequestID is the provider's own identifier for this call, when it issues one, used to
+	// reconcile our cost figure against theirs (OBS-007). Empty for providers that issue none.
+	ProviderRequestID string
+
 	Model        string
 	Content      string
 	FinishReason string
@@ -67,6 +71,13 @@ type ChatResult struct {
 // provider does not report reasoning" rather than "it thought about nothing".
 func NormalizedChatResponseFrom(r ChatResult) map[string]any {
 	response := NormalizedChatResponseWithUsage(r.Model, r.Content, r.FinishReason, r.Usage)
+	// OBS-007: the provider's own id for this call, when it gives one. It is the join key between our
+	// cost ledger and the platform's, and it lives nowhere else — the platform returns it in a header,
+	// so if it is not carried here it is lost by the time anything could reconcile. Absent for
+	// providers that report no such id, which is why the key is omitted rather than set to "".
+	if r.ProviderRequestID != "" {
+		response["provider_request_id"] = r.ProviderRequestID
+	}
 	if r.ReasoningContent == "" {
 		return response
 	}

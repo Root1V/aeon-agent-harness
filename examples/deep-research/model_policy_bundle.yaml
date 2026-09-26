@@ -50,6 +50,18 @@ profiles:
       # (GET /v1/models), no marcadores. `local-default` no existía y habría dado 404 en la
       # primera llamada. gpt-oss-20b-mxfp4 es de razonamiento y emite reasoning_content — ver
       # MDL-016: hoy lo descartamos, así que con max_tokens ajustado la respuesta vuelve vacía.
+      # OBS-007: token_based, and these rates are the platform's REAL ones, read from
+      # GET /v1/usage/{request_id}'s `rates` on 2026-09-26 rather than assumed.
+      #
+      # These two candidates said `compute_based` with no rates until then, on the plan's assumption
+      # that local inference bills per GPU-second. It does not: this deployment prices per token, and
+      # that wrong declaration is why every local call landed in the ledger with no cost at all — the
+      # case OBS-008 and OBS-009 then had to make honest. The reconciliation found it on its first
+      # real run, which is the only reason it is a reconciliation and not a copy.
+      #
+      # Rates go stale: they are a snapshot of a price an operator can change. The platform returns
+      # the rate it actually applied with every usage record, so OBS-007 compares against that and a
+      # drift here shows up as a `cost` divergence instead of as a quiet undercount.
       - provider: prometheus_inference
         model: gpt-oss-20b-mxfp4
         modality: text
@@ -57,7 +69,9 @@ profiles:
         priority: 0
         tool_calling: emulated
         caching_capability: none
-        cost_model: compute_based
+        cost_model: token_based
+        cost_per_million_input_tokens: 0.3067
+        cost_per_million_output_tokens: 1.052
       - provider: prometheus_inference
         model: qwen3-0.6b
         modality: text
@@ -65,7 +79,9 @@ profiles:
         priority: 1
         tool_calling: emulated
         caching_capability: none
-        cost_model: compute_based
+        cost_model: token_based
+        cost_per_million_input_tokens: 0.2
+        cost_per_million_output_tokens: 0.6
     routing_constraints:
       data_sensitivity: restricted
       # MDL-017: el arnés no conoce ningún proveedor por su nombre. Quién no sale de la red es un

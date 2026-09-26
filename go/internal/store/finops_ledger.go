@@ -29,6 +29,10 @@ type CostEntry struct {
 	// ReasoningTokens is the slice of the output spent thinking (MDL-016). Nil when the provider
 	// does not break it out — recording a zero would claim it measured and found none.
 	ReasoningTokens *int
+	// ProviderRequestID is the platform's own id for this call (OBS-007), and the only key that can
+	// join this row to the platform's accounting for the same call. Empty for a provider that issues
+	// none, stored as NULL.
+	ProviderRequestID string
 }
 
 // ModelTotal is one row of TotalsByModel's real SQL aggregation.
@@ -76,11 +80,15 @@ func (l *FinOpsLedger) Record(ctx context.Context, entry CostEntry) error {
 	if entry.AgentManifestRef != "" {
 		agentRef = &entry.AgentManifestRef
 	}
+	var requestID *string
+	if entry.ProviderRequestID != "" {
+		requestID = &entry.ProviderRequestID
+	}
 	_, err := l.pool.Exec(ctx,
-		`INSERT INTO model_gateway_costs (provider, model, cost_model, prompt_tokens, completion_tokens, cost_usd, run_id, agent_manifest_ref, cache_read_tokens, cache_write_tokens, reasoning_tokens)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		`INSERT INTO model_gateway_costs (provider, model, cost_model, prompt_tokens, completion_tokens, cost_usd, run_id, agent_manifest_ref, cache_read_tokens, cache_write_tokens, reasoning_tokens, provider_request_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		entry.Provider, entry.Model, entry.CostModel, entry.PromptTokens, entry.CompletionTokens, entry.CostUSD, runID, agentRef,
-		entry.CacheReadTokens, entry.CacheWriteTokens, entry.ReasoningTokens,
+		entry.CacheReadTokens, entry.CacheWriteTokens, entry.ReasoningTokens, requestID,
 	)
 	if err != nil {
 		return fmt.Errorf("store: recording model gateway cost: %w", err)
@@ -115,6 +123,46 @@ func (l *FinOpsLedger) TotalsByModel(ctx context.Context) ([]ModelTotal, error) 
 			return nil, fmt.Errorf("store: scanning model gateway cost total: %w", err)
 		}
 		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// LedgerRow is one recorded cost event, read back for reconciliation (OBS-007).
+type LedgerRow struct {
+	Provider          string
+	Model             string
+	PromptTokens      int
+	CompletionTokens  int
+	CostUSD           *float64
+	ProviderRequestID string
+}
+
+// RowsWithProviderRequestID returns the rows that CAN be reconciled: those carrying the platform's
+// own id for the call. Rows without one are excluded rather than reported as matching, since a row
+// with no join key is not in agreement with the platform — it is simply unchecked, and counting it as
+// agreement is how a reconciliation reports success over data it never compared.
+func (l *FinOpsLedger) RowsWithProviderRequestID(ctx context.Context, provider string, limit int) ([]LedgerRow, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := l.pool.Query(ctx,
+		`SELECT provider, model, prompt_tokens, completion_tokens, cost_usd, provider_request_id
+		   FROM model_gateway_costs
+		  WHERE provider = $1 AND provider_request_id IS NOT NULL
+		  ORDER BY id DESC
+		  LIMIT $2`, provider, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading reconcilable cost rows: %w", err)
+	}
+	defer rows.Close()
+
+	var out []LedgerRow
+	for rows.Next() {
+		var r LedgerRow
+		if err := rows.Scan(&r.Provider, &r.Model, &r.PromptTokens, &r.CompletionTokens, &r.CostUSD, &r.ProviderRequestID); err != nil {
+			return nil, fmt.Errorf("store: scanning cost row: %w", err)
+		}
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

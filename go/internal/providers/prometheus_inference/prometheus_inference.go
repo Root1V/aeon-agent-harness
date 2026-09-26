@@ -90,7 +90,7 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 		body["model"] = a.Model
 	}
 
-	raw, err := a.Client.ChatCompletion(ctx, body)
+	raw, requestID, err := a.Client.ChatCompletionWithRequestID(ctx, body)
 	if err != nil {
 		return nil, err
 	}
@@ -110,10 +110,11 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 
 	choice := parsed.Choices[0]
 	return providers.NormalizedChatResponseFrom(providers.ChatResult{
-		Model:            parsed.Model,
-		Content:          choice.Message.Content,
-		ReasoningContent: choice.Message.ReasoningContent,
-		FinishReason:     choice.FinishReason,
+		ProviderRequestID: requestID,
+		Model:             parsed.Model,
+		Content:           choice.Message.Content,
+		ReasoningContent:  choice.Message.ReasoningContent,
+		FinishReason:      choice.FinishReason,
 		Usage: providers.Usage{
 			PromptTokens:     parsed.Usage.PromptTokens,
 			CompletionTokens: parsed.Usage.CompletionTokens,

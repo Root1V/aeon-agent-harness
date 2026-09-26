@@ -130,7 +130,10 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 		AgentManifestRef: agentManifestRef,
 		CacheReadTokens:  cacheRead,
 		CacheWriteTokens: cacheWrite,
-		ReasoningTokens:  reasoning,
+		// OBS-007: the provider's id travels in the normalized response because it arrives in a
+		// response header and would otherwise be gone by now.
+		ProviderRequestID: stringField(result.Output, "provider_request_id"),
+		ReasoningTokens:   reasoning,
 	}
 	if err := h.Ledger.Record(r.Context(), entry); err != nil {
 		log.Printf("aeon-modelgw: recording FinOps cost event: %v", err)
@@ -182,4 +185,11 @@ func toInt(v any) int {
 	default:
 		return 0
 	}
+}
+
+// stringField reads an optional string from a normalized response, tolerating its absence — a
+// provider that issues no request id omits the key entirely (OBS-007).
+func stringField(output map[string]any, key string) string {
+	v, _ := output[key].(string)
+	return v
 }
