@@ -67,6 +67,12 @@ profiles:
         modality: text
         inference_class: local
         priority: 0
+        # OBS-009: cost_model is required, and this scaffold is where that requirement earns its
+        # keep. A candidate without it is skipped by the pricing table, so every call to this model
+        # would land in the FinOps ledger with no cost — silently, because nobody wrote a field.
+        # A local dev server bills nothing, so compute_based with no rates is the honest answer
+        # here; what the schema forbids is arriving at "unpriced" by omission.
+        cost_model: compute_based
     # MDL-008: local inference resolves in Prometheus, and nowhere else, unless an exception names
     # the provider and the environment it belongs to. This scaffold runs against Ollama/vLLM on a
     # developer machine, which is exactly the case the exception exists for — and writing it down

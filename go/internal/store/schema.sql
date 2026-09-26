@@ -105,6 +105,14 @@ ALTER TABLE model_gateway_costs ALTER COLUMN cost_usd DROP DEFAULT;
 ALTER TABLE model_gateway_costs ALTER COLUMN cost_usd DROP NOT NULL;
 ALTER TABLE model_gateway_costs ALTER COLUMN cost_model DROP NOT NULL;
 
+-- OBS-007: the platform's own id for this call, and the join key to its accounting. NULL for a
+-- provider that issues none, and for every row written before this column existed — which is why it
+-- is nullable rather than backfilled with a placeholder: "this provider has no request id" and "we
+-- did not record one yet" are different facts about a row, and only one of them is reconcilable.
+ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS provider_request_id TEXT;
+CREATE INDEX IF NOT EXISTS model_gateway_costs_provider_request_idx
+    ON model_gateway_costs (provider_request_id) WHERE provider_request_id IS NOT NULL;
+
 -- MDL-002 (quality-aware routing): the current real eval score per (provider, model) — a real
 -- eval suite (e.g. provider_conformance) reports here; the Model Gateway consults it to skip a
 -- degraded candidate before ever attempting it. One row per (provider, model) — the latest report
