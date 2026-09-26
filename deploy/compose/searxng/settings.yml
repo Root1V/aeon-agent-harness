@@ -1,0 +1,29 @@
+# SearXNG configuration for TOOL-007's search.web.
+#
+# use_default_settings inherits the upstream engine list and only overrides what follows, so this
+# file stays small and a SearXNG upgrade brings new engines with it.
+use_default_settings: true
+
+server:
+  # Required by SearXNG; it refuses to start without one. This value is deliberately not a secret:
+  # this instance is reachable only from inside the compose network and serves no authenticated
+  # surface. A deployment that exposes it publicly must replace this.
+  secret_key: "aeon-local-development-not-a-secret"
+  # The limiter needs Redis/Valkey and protects a PUBLIC instance from abuse. This one is private to
+  # the compose network, and leaving it on would rate-limit our own agent while adding a dependency.
+  limiter: false
+  image_proxy: false
+
+search:
+  # json is the whole point and it is NOT on by default: without it SearXNG answers a JSON request
+  # with 403, which the adapter reports by name rather than as an empty result set.
+  formats:
+    - html
+    - json
+  # A metasearch query fans out to several engines; this bounds how long we wait for the slow ones
+  # rather than for all of them.
+  default_lang: "all"
+
+outgoing:
+  request_timeout: 6.0
+  pool_connections: 50

@@ -45,8 +45,18 @@ func newTestServer(t *testing.T) *httptest.Server {
 		t.Fatalf("loading Cedar engine: %v", err)
 	}
 
+	// This test is about POLICY, not about searching: it proves a permitted tool reaches the executor
+	// and a denied one never does. So it registers its own inert search.web rather than relying on
+	// one being there — TOOL-007 removed the stub NewExecutor used to ship, precisely so that a
+	// deployment with no search provider cannot answer a search call. The double belongs here, in
+	// the test that needs it, and not in the binary.
+	executor := toolexec.NewExecutor()
+	executor.Register("search.web", func(args map[string]any) (map[string]any, error) {
+		return map[string]any{"status": "executed", "tool": "search.web", "args": args}, nil
+	})
+
 	mux := http.NewServeMux()
-	handlers := &ToolGatewayHandlers{Policy: engine, Executor: toolexec.NewExecutor()}
+	handlers := &ToolGatewayHandlers{Policy: engine, Executor: executor}
 	handlers.Register(mux)
 
 	srv := httptest.NewServer(mux)
