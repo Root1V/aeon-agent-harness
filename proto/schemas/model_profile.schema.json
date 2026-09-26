@@ -14,7 +14,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["provider", "model", "priority", "modality", "inference_class"],
+        "required": ["provider", "model", "priority", "modality", "inference_class", "cost_model"],
         "properties": {
           "provider": { "type": "string", "enum": ["anthropic", "openai", "gemini", "prometheus_inference", "openai_compatible"] },
           "model": { "type": "string" },
@@ -23,7 +23,7 @@
           "inference_class": { "type": "string", "enum": ["local", "cloud"], "description": "MDL-008: where this model actually runs. Required, and default-deny: a candidate declaring local may only be served by prometheus_inference \u2014 the platform rule is that all local inference resolves in Prometheus \u2014 unless local_inference names its provider as an exception for a named environment. Undeclared is denied, not assumed: if it were default-allow with a deny rule on top, 'we enforce this as policy' would quietly degrade into 'we intended to'." },
           "tool_calling": { "type": "string", "enum": ["native", "emulated"] },
           "caching_capability": { "type": "string", "enum": ["automatic_prefix", "explicit_breakpoints", "none"] },
-          "cost_model": { "type": "string", "enum": ["token_based", "compute_based"] },
+          "cost_model": { "type": "string", "enum": ["token_based", "compute_based"], "description": "OBS-009: required. Omitting it used to be silent — PricingRates skips a candidate with no cost_model, so every call to that model was recorded with no cost, and the circuit breaker averaged those unknowns as $0. Declaring compute_based with no per-token rate is still perfectly valid: what is no longer valid is arriving there because nobody wrote the field. Adopted from Prometheus, who closed the same gap in their own registry after adding two modalities to it and not to the price table — eleven usage rows landed at a null cost. Their rule: not having a price must be a decision someone made, not a line nobody wrote." },
           "cost_per_million_input_tokens": { "type": "number", "minimum": 0, "description": "OBS-003 FinOps: real USD rate per 1M input/prompt tokens. Only meaningful when cost_model=token_based; list pricing is a starting point, confirm against your actual provider contract." },
           "cost_per_million_output_tokens": { "type": "number", "minimum": 0, "description": "OBS-003 FinOps: real USD rate per 1M output/completion tokens. Only meaningful when cost_model=token_based." },
           "max_context_tokens": { "type": "integer" }

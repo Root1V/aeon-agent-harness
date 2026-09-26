@@ -33,8 +33,13 @@ func (h *CircuitBreakerHandlers) Register(mux *http.ServeMux) {
 }
 
 type recordOutcomeRequest struct {
-	Success bool    `json:"success"`
-	CostUSD float64 `json:"cost_usd,omitempty"`
+	Success bool `json:"success"`
+	// CostUSD is a POINTER, and that is OBS-009's fix rather than a style choice. As a float64 with
+	// omitempty, a caller that omitted the field — a compute_based run, a model with no configured
+	// rate — was indistinguishable from one reporting $0, and the breaker averaged those zeros into
+	// its cost threshold. The more unpriced spend a version had, the safer it looked. A pointer makes
+	// "not reported" arrive as nil, and the breaker then averages only what was measured.
+	CostUSD *float64 `json:"cost_usd"`
 }
 
 func (h *CircuitBreakerHandlers) recordOutcome(w http.ResponseWriter, r *http.Request) {

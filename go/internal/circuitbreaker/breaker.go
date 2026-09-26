@@ -41,7 +41,13 @@ var DefaultThresholds = Thresholds{WindowSize: 10, MinSamples: 5, MaxFailureRate
 // Observation is one real run's outcome, as reported by whatever eventually calls RecordOutcome.
 type Observation struct {
 	Success bool
-	CostUSD float64
+	// CostUSD is nil when this run's cost is not known — a compute_based provider, a model with no
+	// configured rate. It used to be a plain float64, so an unknown cost arrived as 0 and DRAGGED THE
+	// AVERAGE DOWN: the more unpriced spend a version accumulated, the safer it looked, which is
+	// fail-open in the one control meant to catch a runaway agent. OBS-009. Measured, with identical
+	// real spend of $20 in both cases: ten runs at $2.00 tripped; the same ten interleaved with ten
+	// unpriced runs did not.
+	CostUSD *float64
 }
 
 // Verdict is RecordOutcome's result: whether this observation tripped the breaker, and — only when
@@ -103,16 +109,20 @@ func (b *Breaker) RecordOutcome(name, version string, obs Observation) Verdict {
 		return Verdict{}
 	}
 
-	var failures int
+	var failures, priced int
 	var totalCost float64
 	for _, o := range window {
 		if !o.Success {
 			failures++
 		}
-		totalCost += o.CostUSD
+		// Only priced runs contribute, to the sum AND to the divisor. Averaging known spend over the
+		// whole window would be the same defect with the zero moved into the denominator.
+		if o.CostUSD != nil {
+			totalCost += *o.CostUSD
+			priced++
+		}
 	}
 	failureRate := float64(failures) / float64(len(window))
-	avgCost := totalCost / float64(len(window))
 
 	if failureRate > b.thresholds.MaxFailureRate {
 		b.quarantine[key] = true
@@ -120,11 +130,23 @@ func (b *Breaker) RecordOutcome(name, version string, obs Observation) Verdict {
 			"failure rate %.2f over the last %d run(s) exceeds threshold %.2f", failureRate, len(window), b.thresholds.MaxFailureRate,
 		)}
 	}
-	if b.thresholds.MaxAvgCostUSD > 0 && avgCost > b.thresholds.MaxAvgCostUSD {
-		b.quarantine[key] = true
-		return Verdict{Tripped: true, Reason: fmt.Sprintf(
-			"average cost $%.4f over the last %d run(s) exceeds threshold $%.4f", avgCost, len(window), b.thresholds.MaxAvgCostUSD,
-		)}
+	// The cost check runs over the priced runs only, and says so in the reason. A threshold compared
+	// against an average of nothing would never fire; comparing it against an average of what was
+	// actually measured fires on real spend regardless of how much unpriced traffic sits beside it.
+	if b.thresholds.MaxAvgCostUSD > 0 && priced > 0 {
+		avgCost := totalCost / float64(priced)
+		if avgCost > b.thresholds.MaxAvgCostUSD {
+			b.quarantine[key] = true
+			unpriced := len(window) - priced
+			reason := fmt.Sprintf("average cost $%.4f over the last %d priced run(s) exceeds threshold $%.4f",
+				avgCost, priced, b.thresholds.MaxAvgCostUSD)
+			if unpriced > 0 {
+				// Naming the uncovered runs matters for the same reason the FinOps dashboard names
+				// them (OBS-008): a figure that covers part of the window reads as covering all of it.
+				reason += fmt.Sprintf(" (%d further run(s) in the window had no known cost)", unpriced)
+			}
+			return Verdict{Tripped: true, Reason: reason}
+		}
 	}
 	return Verdict{}
 }
