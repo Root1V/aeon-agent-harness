@@ -52,6 +52,10 @@ type ChatResult struct {
 	// ProviderRequestID is the provider's own identifier for this call, when it issues one, used to
 	// reconcile our cost figure against theirs (OBS-007). Empty for providers that issue none.
 	ProviderRequestID string
+	// IdempotentReplayOf names the generation that was actually billed, when this response is a
+	// replay of an identical earlier call (OBS-006). Empty when this call really generated. The usage
+	// block on a replay repeats the ORIGINAL call's tokens, so billing it again inflates the ledger.
+	IdempotentReplayOf string
 
 	Model        string
 	Content      string
@@ -77,6 +81,11 @@ func NormalizedChatResponseFrom(r ChatResult) map[string]any {
 	// providers that report no such id, which is why the key is omitted rather than set to "".
 	if r.ProviderRequestID != "" {
 		response["provider_request_id"] = r.ProviderRequestID
+	}
+	// OBS-006: present ONLY on a replay, so its absence means "this call really generated" rather
+	// than "unknown" — the same reason the cache counters are omitted instead of zeroed.
+	if r.IdempotentReplayOf != "" {
+		response["idempotent_replay_of"] = r.IdempotentReplayOf
 	}
 	if r.ReasoningContent == "" {
 		return response

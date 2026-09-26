@@ -99,6 +99,38 @@ func (h *ModelGatewayHandlers) decide(w http.ResponseWriter, r *http.Request) {
 func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.DecisionResult, runID, agentManifestRef string, response map[string]any) {
 	promptTokens, completionTokens := usageTokens(result.Output)
 
+	// OBS-006: an idempotent replay is a real call that consumed NOTHING new. The platform served a
+	// stored response and its usage block repeats the ORIGINAL generation's tokens, so recording them
+	// again inflates the ledger — upward, which is the direction nobody audits because it looks
+	// prudent. Measured: the same body twice under one Idempotency-Key returns usage 12/20 both times,
+	// and the replay's own request id has no usage row at all (404).
+	//
+	// The row is still written, with zeroes and a pointer to the generation that WAS billed. Writing
+	// nothing would be worse for the same reason OBS-008 gave: a call that leaves no row cannot be
+	// audited, and an audit starting from the replay's id would find nothing on either side. And the
+	// zeroes here are a MEASURED zero, not an unknown — no new money was spent, which is why cost_usd
+	// is 0 rather than NULL.
+	replayOf := stringField(result.Output, "idempotent_replay_of")
+	if replayOf != "" {
+		promptTokens, completionTokens = 0, 0
+		if h.Ledger != nil {
+			zero := 0.0
+			entry := store.CostEntry{
+				Provider: result.ProviderUsed, Model: result.Model,
+				CostModel: costModelName(h.Pricing, result.ProviderUsed, result.Model),
+				CostUSD:   &zero, RunID: runID, AgentManifestRef: agentManifestRef,
+				ProviderRequestID:  stringField(result.Output, "provider_request_id"),
+				IdempotentReplayOf: replayOf,
+			}
+			if err := h.Ledger.Record(r.Context(), entry); err != nil {
+				log.Printf("aeon-modelgw: recording FinOps replay event: %v", err)
+			}
+		}
+		response["idempotent_replay_of"] = replayOf
+		response["cost_usd"] = 0.0
+		return
+	}
+
 	// Both nil until proven otherwise: no pricing table, no rate, or a cost_model this package
 	// cannot price all leave the call recorded and its cost unknown.
 	var costModel *string
@@ -192,4 +224,17 @@ func toInt(v any) int {
 func stringField(output map[string]any, key string) string {
 	v, _ := output[key].(string)
 	return v
+}
+
+// costModelName returns the configured cost model for a pair, or nil when none is configured — the
+// same three-state rule the priced path uses (OBS-008).
+func costModelName(pricing *finops.PricingTable, provider, model string) *string {
+	if pricing == nil {
+		return nil
+	}
+	rate, ok := pricing.Rate(provider, model)
+	if !ok {
+		return nil
+	}
+	return &rate.CostModel
 }

@@ -38,13 +38,15 @@ type LedgerRow struct {
 	CompletionTokens  int
 	CostUSD           *float64
 	ProviderRequestID string
+	// IdempotentReplayOf names the generation that was billed, when this row is a replay (OBS-006).
+	IdempotentReplayOf string
 }
 
 // Divergence is one disagreement between the two accountings. The type carries the kind rather than
 // only a message, so a caller can act on a token mismatch differently from an unpriced row.
 type Divergence struct {
 	RequestID string
-	Kind      string // "tokens" | "cost" | "model" | "self_inconsistent" | "unpriced_here" | "unpriced_there" | "missing"
+	Kind      string // "tokens" | "cost" | "model" | "self_inconsistent" | "unpriced_here" | "unpriced_there" | "missing" | "replay_billed"
 	Detail    string
 }
 
@@ -81,6 +83,27 @@ func Reconcile(ctx context.Context, src UsageSource, rows []LedgerRow) (*Report,
 			// Not an agreement and not a divergence: there is no key to compare on. Counting it as
 			// either would be a figure about data that was never looked at.
 			report.Unreconciled++
+			continue
+		}
+
+		// OBS-006: a replay is EXPECTED to be absent from the platform's accounting — its own request
+		// id has no usage row (measured: 404), because the generation it replays is what was billed.
+		// Fetching it would report every replay as a `missing` divergence and bury the real ones.
+		//
+		// What IS checked is the thing that matters: a replay must have cost us nothing new. A replay
+		// row carrying a non-zero cost is the OBS-006 defect itself — the platform's repeated usage
+		// block billed a second time — so the reconciliation detects it rather than agreeing with it.
+		if row.IdempotentReplayOf != "" {
+			report.Compared++
+			if row.CostUSD == nil || *row.CostUSD != 0 {
+				report.Divergences = append(report.Divergences, Divergence{
+					RequestID: row.ProviderRequestID, Kind: "replay_billed",
+					Detail: fmt.Sprintf("this call was a replay of %s and was billed anyway (%v) — the platform charged nothing for it",
+						row.IdempotentReplayOf, row.CostUSD),
+				})
+				continue
+			}
+			report.Agreed++
 			continue
 		}
 

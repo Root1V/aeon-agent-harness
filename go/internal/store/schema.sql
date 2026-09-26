@@ -113,6 +113,13 @@ ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS provider_request_id TEX
 CREATE INDEX IF NOT EXISTS model_gateway_costs_provider_request_idx
     ON model_gateway_costs (provider_request_id) WHERE provider_request_id IS NOT NULL;
 
+-- OBS-006: when set, this row is an IDEMPOTENT REPLAY and names the request whose generation was
+-- actually billed. A replay's own request_id has no usage row on the platform at all (measured: 404),
+-- so without this column an audit starting from that id finds nothing and cannot tell why. It is also
+-- what lets OBS-007's reconciliation know not to look: a replay is expected to be absent from the
+-- platform's accounting, and reporting it as a divergence would bury the real ones.
+ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS idempotent_replay_of TEXT;
+
 -- MDL-002 (quality-aware routing): the current real eval score per (provider, model) — a real
 -- eval suite (e.g. provider_conformance) reports here; the Model Gateway consults it to skip a
 -- degraded candidate before ever attempting it. One row per (provider, model) — the latest report

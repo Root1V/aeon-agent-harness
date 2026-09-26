@@ -87,13 +87,66 @@ func (c *Client) ChatCompletion(ctx context.Context, requestBody map[string]any)
 // call unreconcilable, not failed, and refusing the inference over it would trade a bookkeeping gap
 // for an outage.
 func (c *Client) ChatCompletionWithRequestID(ctx context.Context, requestBody map[string]any) (map[string]any, string, error) {
-	var parsed map[string]any
-	header, err := c.doAuthenticatedJSONWithHeader(ctx, http.MethodPost, "/v1/chat/completions", requestBody, &parsed)
-	if err != nil {
-		return nil, "", fmt.Errorf("prometheus_inference: chat completion: %w", err)
-	}
-	return parsed, header.Get("x-request-id"), nil
+	parsed, requestID, _, err := c.ChatCompletionWithMeta(ctx, requestBody)
+	return parsed, requestID, err
 }
+
+// ChatCompletionWithMeta also reports whether this response was an idempotent replay, and of which
+// generation (OBS-006). See IdempotentReplayOf.
+func (c *Client) ChatCompletionWithMeta(ctx context.Context, requestBody map[string]any) (map[string]any, string, string, error) {
+	// An idempotency key travels as a HEADER on this platform, not as a body field — so a caller that
+	// wants one puts it in the request map under IdempotencyKeyField and this strips it back out.
+	// Leaving it in the body would send the platform a field it does not know and, per Synaptum's
+	// report, the gateway drops unknown fields in silence: the caller would believe it had asked for
+	// idempotency and get a fresh generation every time.
+	var extraHeaders map[string]string
+	if key, ok := requestBody[IdempotencyKeyField].(string); ok && key != "" {
+		body := make(map[string]any, len(requestBody))
+		for k, v := range requestBody {
+			if k != IdempotencyKeyField {
+				body[k] = v
+			}
+		}
+		requestBody = body
+		extraHeaders = map[string]string{"Idempotency-Key": key}
+	}
+
+	var parsed map[string]any
+	header, err := c.doAuthenticatedJSONWithHeader(ctx, http.MethodPost, "/v1/chat/completions", requestBody, &parsed, extraHeaders)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("prometheus_inference: chat completion: %w", err)
+	}
+	return parsed, header.Get("x-request-id"), IdempotentReplayOf(header), nil
+}
+
+// IdempotentReplayOf returns the request id whose generation was actually billed, when this response
+// is a replay of an earlier identical call (OBS-006). Empty when the call really generated.
+//
+// Measured against the live deployment on 2026-09-26. Sending the same body twice under one
+// Idempotency-Key gives:
+//
+//	call 1:  x-request-id: 609cac87…                     usage 12/20, cost 1.44e-05
+//	call 2:  idempotent-replay: true
+//	         x-idempotent-replay-of: 609cac87…           <- the generation that was billed
+//	         x-request-id: 86997f3a…                     <- its own, new id
+//	         usage 12/20                                 <- THE SAME, already paid for
+//
+// That repeated usage block is the defect: our recordCost would add a second row with the same
+// tokens and the same price, inflating the ledger upward — the direction nobody audits, because it
+// looks prudent.
+//
+// And the replay's own request id has NO usage row (404, measured), which is what Axonium warned
+// about: an audit starting from that id finds nothing and cannot tell why.
+func IdempotentReplayOf(header http.Header) string {
+	if header.Get("idempotent-replay") == "" && header.Get("x-idempotent-replay-of") == "" {
+		return ""
+	}
+	return header.Get("x-idempotent-replay-of")
+}
+
+// IdempotencyKeyField is the request-map key a caller uses to ask for an idempotent call (OBS-006).
+// It is removed from the body and sent as the Idempotency-Key header.
+const IdempotencyKeyField = "idempotency_key"
 
 // UsageRecord is the platform's own accounting for ONE request, from GET /v1/usage/{request_id}
 // (OBS-007). Transcribed from a real answer on 2026-09-26.
@@ -149,13 +202,13 @@ func (c *Client) Usage(ctx context.Context, requestID string) (*UsageRecord, err
 // attempt comes back 401. A stateless-token platform with a 5-minute minimum TTL means a 401
 // almost always just means "expired a little early relative to our clock", not bad credentials.
 func (c *Client) doAuthenticatedJSON(ctx context.Context, method, path string, body any, out any) error {
-	_, err := c.doAuthenticatedJSONWithHeader(ctx, method, path, body, out)
+	_, err := c.doAuthenticatedJSONWithHeader(ctx, method, path, body, out, nil)
 	return err
 }
 
 // doAuthenticatedJSONWithHeader is doAuthenticatedJSON plus the response headers, which OBS-007
 // needs because the platform's request id travels there and not in the body.
-func (c *Client) doAuthenticatedJSONWithHeader(ctx context.Context, method, path string, body any, out any) (http.Header, error) {
+func (c *Client) doAuthenticatedJSONWithHeader(ctx context.Context, method, path string, body any, out any, extraHeaders map[string]string) (http.Header, error) {
 	attempt := func(forceFreshToken bool) (*http.Response, error) {
 		if forceFreshToken {
 			c.Tokens.Invalidate()
@@ -169,6 +222,9 @@ func (c *Client) doAuthenticatedJSONWithHeader(ctx context.Context, method, path
 			return nil, err
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
+		for k, v := range extraHeaders {
+			req.Header.Set(k, v)
+		}
 		return c.httpClient().Do(req)
 	}
 
