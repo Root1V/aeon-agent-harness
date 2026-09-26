@@ -29,6 +29,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/toolexec"
 	"github.com/aeon-ai/aeon/go/internal/tracing"
+	"github.com/aeon-ai/aeon/go/internal/websearch/searxng"
 )
 
 func main() {
@@ -70,6 +71,17 @@ func main() {
 	log.Printf("aeon-toolgw: loaded %d Cedar polic(ies) from %s", len(doc.Policies), bundlePath)
 
 	executor := toolexec.NewExecutor()
+
+	// TOOL-007: search.web over a real search provider. Registered only when one is configured, so a
+	// deployment without search gets "unknown tool" on the first call instead of a successful-looking
+	// answer with no results — which is what this replaced.
+	if endpoint := os.Getenv("AEON_WEBSEARCH_SEARXNG_URL"); endpoint != "" {
+		searcher := searxng.New(endpoint)
+		toolexec.RegisterWebSearchTool(executor, searcher)
+		log.Printf("aeon-toolgw: search.web live via %s at %s (in-network: %t)", searcher.Name(), endpoint, searcher.InNetwork())
+	} else {
+		log.Println("aeon-toolgw: search.web not registered (set AEON_WEBSEARCH_SEARXNG_URL)")
+	}
 
 	// SEC-002: a real Secret Broker — callers get short-lived, opaque lease references (POST
 	// /secrets/issue), never the raw values; only "secrets.whoami"'s own server-side execution ever

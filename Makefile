@@ -34,15 +34,16 @@ test-go-integration: ## Run Go tests against real Postgres + Temporal + a real w
 	# la suite puede fallar por código viejo — o, peor, PASAR probándolo. Observado las dos veces:
 	# aquí con los cambios de TOOL-004, y en test-python-integration con una toolgw anterior a
 	# TOOL-005 que ignoraba la idempotency_key por completo.
-	$(COMPOSE) --profile core --profile obs up -d --build --wait postgres temporal worker otel-collector tempo
+	$(COMPOSE) --profile core --profile obs up -d --build --wait postgres temporal worker otel-collector tempo searxng
 	docker run --rm --network aeon_default -v "$(PWD):/repo" -w /repo/go \
 		-e AEON_TEST_PG_DSN="postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable" \
 		-e AEON_TEST_TEMPORAL_ADDRESS="temporal:7233" \
 		-e AEON_TEST_OTEL_ENDPOINT="otel-collector:4318" \
 		-e AEON_TEST_TEMPO_QUERY_URL="http://tempo:3200" \
+		-e AEON_TEST_SEARXNG_URL="http://searxng:8080" \
 		golang:1.25-alpine sh -c \
 		"apk add --no-cache postgresql-client >/dev/null && until pg_isready -h postgres -U aeon >/dev/null 2>&1; do sleep 1; done && go test ./... -v"
-	$(COMPOSE) --profile core --profile obs stop postgres temporal worker otel-collector tempo
+	$(COMPOSE) --profile core --profile obs stop postgres temporal worker otel-collector tempo searxng
 
 test-python-integration: ## Run Python tests against a real Tool Gateway + Postgres (starts/stops them around the run)
 	# TOOL-004: the worker's execute_tool talks to the real aeon-toolgw over HTTP, so proving it

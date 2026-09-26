@@ -25,14 +25,19 @@ type Executor struct {
 	fns map[string]ExecuteFunc
 }
 
-// NewExecutor returns an executor seeded with a couple of demonstration tools matching
-// examples/deep-research/agent.yaml's allow list (search.web) and policy_bundle.yaml's explicit
-// forbids (shell.exec) — enough to prove an allowed call runs and a denied one never does.
+// NewExecutor returns an executor seeded with the tools that need no deployment configuration.
+//
+// search.web is NOT among them, and that is TOOL-007's change. It used to be registered here as a
+// function that echoed its own arguments back, so a deployment with no search provider still
+// answered `{"status": "executed", ...}` and a deep-research run retrieved nothing while reporting
+// success. It is now registered only by RegisterWebSearchTool, only when a provider is configured —
+// the same rule TOOL-006 applied to search.rag, for the same reason: an absent tool fails loudly on
+// the first call, and a lying one never fails at all.
+//
+// Tests that need a permitted tool which executes register their own double explicitly. That keeps
+// the double visible in the test that relies on it instead of shipping it in the binary.
 func NewExecutor() *Executor {
 	e := &Executor{fns: map[string]ExecuteFunc{}}
-	e.Register("search.web", func(args map[string]any) (map[string]any, error) {
-		return map[string]any{"status": "executed", "tool": "search.web", "args": args}, nil
-	})
 	// A real sandboxed shell (TOOL-003), not a fake stand-in — but this must still never run in
 	// the reference deployment: policy_bundle.yaml forbids "shell.*" for every agent. It exists so
 	// a policy regression is caught by actually observing a real (sandboxed) execution, not just

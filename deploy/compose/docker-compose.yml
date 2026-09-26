@@ -228,6 +228,37 @@ services:
     ports:
       - "9402:9402"
 
+  # TOOL-007: search.web's provider. Self-hosted on purpose — the query is written by the model
+  # from the run's context, so it can carry fragments of whatever the run is reading, and sending
+  # that to a commercial search API puts it in a third party's logs. Running the searcher inside the
+  # compose network keeps the query in the deployment; the engines it federates see the query and
+  # never the run.
+  #
+  # Brave was the obvious alternative and is no longer free (metered billing, card required, no
+  # spending cap as of early 2026). The Searcher interface exists so a deployment that prefers a
+  # paid provider can swap this out without touching the harness.
+  searxng:
+    image: searxng/searxng:latest
+    profiles: ["core", "obs", "local-llm", "full"]
+    environment:
+      # SearXNG builds absolute URLs from this; it must match how toolgw reaches it.
+      SEARXNG_BASE_URL: http://searxng:8080/
+    volumes:
+      # The JSON API is off by default — this file turns it on. See searxng/settings.yml.
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    ports:
+      # Published for debugging a query by hand; nothing in Aeon uses the host port. Overridable
+      # because 8080 is the single most contended port on a developer machine.
+      - "${AEON_SEARXNG_PORT:-18080}:8080"
+    healthcheck:
+      # Checks the JSON API specifically, not just that the process is up: a misconfigured
+      # settings.yml serves HTML happily and answers 403 to exactly the request we depend on.
+      test: ["CMD-SHELL", "wget -qO- 'http://localhost:8080/search?q=ping&format=json' >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
   toolgw:
     build:
       context: ../../go
@@ -238,9 +269,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      searxng:
+        condition: service_healthy
     environment:
       <<: *common-env
       AEON_PG_DSN: postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable
+      # TOOL-007: with this unset, search.web is not registered at all and a call to it fails with
+      # "unknown tool" — which is the point. It replaced a stub that answered successfully and
+      # searched nothing.
+      AEON_WEBSEARCH_SEARXNG_URL: http://searxng:8080
       # Config-as-code (FND-003): the policy bundle is a file in Git, mounted read-only, not baked
       # into the image. Point this at a different bundle to authorize a different set of agents.
       AEON_POLICY_BUNDLE_PATH: /examples/deep-research/policy_bundle.yaml

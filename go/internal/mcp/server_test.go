@@ -114,7 +114,16 @@ func newRealToolGatewayServer(t *testing.T) *httptest.Server {
 		t.Fatalf("LoadEngine: %v", err)
 	}
 
-	mcpServer := NewToolGatewayServer(tools, eng, toolexec.NewExecutor())
+	// This test is about the MCP surface and its policy check, not about searching. It registers its
+	// own inert search.web: TOOL-007 removed the stub NewExecutor used to ship, so a deployment with
+	// no search provider now gets "unknown tool" rather than a successful-looking empty answer. The
+	// double belongs in the test that needs it.
+	executor := toolexec.NewExecutor()
+	executor.Register("search.web", func(args map[string]any) (map[string]any, error) {
+		return map[string]any{"status": "executed", "tool": "search.web", "args": args}, nil
+	})
+
+	mcpServer := NewToolGatewayServer(tools, eng, executor)
 	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return mcpServer }, &sdkmcp.StreamableHTTPOptions{Stateless: true})
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
