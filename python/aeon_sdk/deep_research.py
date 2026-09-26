@@ -37,6 +37,8 @@ async def start_deep_research_run(
     temporal_address: str = "localhost:7233",
     task_queue: str = DEFAULT_TASK_QUEUE,
     data_sensitivity: str = "",
+    agent_manifest_ref: str = "",
+    allowed_tools: list[str] | None = None,
 ) -> DeepResearchReport:
     """Starts a real DeepResearchWorkflow execution and blocks until it completes. `candidates` is
     already-resolved Model Gateway routing (see aeon_sdk.model_policy.resolve_candidates) — this
@@ -46,7 +48,14 @@ async def start_deep_research_run(
     run_id = f"deep-research-{uuid.uuid4().hex[:12]}"
     handle = await client.start_workflow(
         DeepResearchWorkflow.run,
-        DeepResearchWorkflowInput(query=query, model=model, candidates=candidates, data_sensitivity=data_sensitivity),
+        DeepResearchWorkflowInput(
+            query=query,
+            model=model,
+            candidates=candidates,
+            data_sensitivity=data_sensitivity,
+            agent_manifest_ref=agent_manifest_ref,
+            allowed_tools=allowed_tools or [],
+        ),
         id=run_id,
         task_queue=task_queue,
     )

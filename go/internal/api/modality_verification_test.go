@@ -20,8 +20,11 @@ type countingProvider struct {
 func (c *countingProvider) Decide(ctx context.Context, renderedContext map[string]any) (map[string]any, error) {
 	c.calls.Add(1)
 	return map[string]any{
-		"model":   renderedContext["model"],
-		"choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": ""}, "finish_reason": "stop"}},
+		"model": renderedContext["model"],
+		// Non-empty content on purpose: the gateway now treats an answer with no content and no tool
+		// calls as this candidate failing (MDL-015), so an empty string here would make every routing
+		// assertion in this file test the unusable-answer path instead of the modality rule.
+		"choices": []any{map[string]any{"index": 0, "message": map[string]any{"role": "assistant", "content": "ok"}, "finish_reason": "stop"}},
 		"usage":   map[string]any{"prompt_tokens": 900, "completion_tokens": 1},
 	}, nil
 }

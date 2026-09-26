@@ -78,6 +78,16 @@ class ResearchSubtaskInput:
     model: str
     candidates: list[DecideCandidate]
     data_sensitivity: str = ""
+    # MDL-015: the principal the Tool Gateway evaluates policy against. This field did not exist, so
+    # a Researcher could not pass one, and TOOL-004 refuses a tool call with no principal rather than
+    # running it unattributed — which meant this profile could only ever use the ledger that executes
+    # nothing. Found running the pipeline against the real platform: DX-001 never hit it, because a
+    # run whose tools do nothing still completes.
+    agent_manifest_ref: str = ""
+    # MDL-015: the manifest's own tools.allow list, so the Researcher's prompt names exactly the tools
+    # policy permits. Empty means "no tools", which the prompt states outright instead of leaving the
+    # model to guess that none exist.
+    allowed_tools: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -106,7 +116,14 @@ async def research_subtask_activity(inp: ResearchSubtaskInput) -> ResearchSubtas
         nonlocal step_seq
         step_seq += 1
         output = await execute_tool(
-            ExecuteToolInput(run_id=inp.run_id, node_id=inp.subtask.id, step_seq=step_seq, tool_name=tool_name, tool_args=args)
+            ExecuteToolInput(
+                run_id=inp.run_id,
+                node_id=inp.subtask.id,
+                step_seq=step_seq,
+                tool_name=tool_name,
+                tool_args=args,
+                agent_manifest_ref=inp.agent_manifest_ref,
+            )
         )
         return output.result
 
@@ -117,7 +134,7 @@ async def research_subtask_activity(inp: ResearchSubtaskInput) -> ResearchSubtas
         max_tool_calls=inp.subtask.max_tool_calls,
         max_model_calls=inp.subtask.max_model_calls,
     )
-    result = await Researcher(subtask, inp.model).research(decide, do_execute_tool)
+    result = await Researcher(subtask, inp.model, inp.allowed_tools).research(decide, do_execute_tool)
 
     return ResearchSubtaskOutput(
         subtask_id=result.subtask_id,
