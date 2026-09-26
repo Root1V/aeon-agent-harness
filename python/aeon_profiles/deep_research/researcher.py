@@ -50,11 +50,58 @@ class ResearchResult:
     final_message: str | None = None
 
 
-def build_researcher_instructions(subtask: Subtask) -> str:
+# MAX_TOKENS_PER_DECISION is set explicitly because relying on the provider's default is relying on a
+# number nobody in this repo wrote (MDL-015). With a reasoning model the default was not enough: the
+# allowance went entirely into reasoning_content and `content` came back empty, which parse_decision
+# then reported as invalid JSON over an empty string.
+#
+# 1200 is room for a few hundred tokens of deliberation plus a small JSON object. It is a ceiling, not
+# a target: a decision that needs more than this is a decision the model is not converging on, and
+# the budget counters in research() are what stop the loop.
+MAX_TOKENS_PER_DECISION = 1200
+
+
+def build_researcher_instructions(subtask: Subtask, allowed_tools: list[str] | None = None) -> str:
+    """The Researcher's system prompt, NAMING the tools it may call (MDL-015).
+
+    It did not name them, and with a double that was invisible: the fake gateway was programmed to
+    emit CALL_TOOL with a valid tool_name, so nothing depended on the model knowing one existed.
+    Against the real platform every Researcher answered
+
+        {"action":"FINISH","tool_name":null,"message":"An agent harness is a structured framework..."}
+
+    — a fluent, plausible answer from the model's own memory, with no tool call, therefore no
+    evidence, therefore no claims. Worse than a failure, because the report comes out written and
+    coherent with not a single source behind it, which is precisely what DR-005 exists to prevent.
+
+    allowed_tools MUST be the agent manifest's own allow list, not a list written here. The Tool
+    Gateway denies anything outside it, so naming a tool the policy forbids invites the model to ask
+    for something that will be refused — and naming fewer than it permits quietly narrows the agent.
+    One list, one source.
+
+    An empty list is a legitimate state and is stated rather than hidden: the Researcher is told it
+    has no tools, so answering from its own knowledge becomes the correct action instead of a
+    surprise, and a run with no citations is then an expected outcome rather than a mystery.
+    """
+    if allowed_tools:
+        tools_clause = (
+            "The tools you may call, and no others, are: "
+            + ", ".join(sorted(allowed_tools))
+            + ". Use `search.web` with {\"query\": string} to find sources. Prefer calling a tool over "
+            "answering from memory: a claim with no tool result behind it cannot be cited, and an "
+            "uncited claim is dropped from the report. "
+        )
+    else:
+        tools_clause = (
+            "You have NO tools available in this run. Answer from your own knowledge and FINISH; do "
+            "not emit CALL_TOOL. Nothing you say here can be cited, which the report will reflect. "
+        )
     return (
         "You are an isolated Researcher for a Deep Research agent, responsible for exactly one "
         f"subtask: {subtask.description!r} (coverage topic: {subtask.coverage_topic!r}). You do not "
-        "see any other subtask's work. Respond with ONLY a JSON object matching: "
+        "see any other subtask's work. "
+        + tools_clause
+        + "Respond with ONLY a JSON object matching: "
         '{"action": "CALL_TOOL"|"RECALL_OBSERVATION"|"EMIT_MESSAGE"|"REQUEST_REPLAN"|"FINISH", '
         '"tool_name": string|null, "args": object|null, "recall_id": string|null, '
         '"message": string|null}. No prose, no markdown fences — the JSON object alone. Call FINISH '
@@ -68,15 +115,16 @@ class Researcher:
     inside `research()` — never on `self` or any shared object — so nothing here can be shared by
     accident across concurrent Researcher instances."""
 
-    def __init__(self, subtask: Subtask, model: str) -> None:
+    def __init__(self, subtask: Subtask, model: str, allowed_tools: list[str] | None = None) -> None:
         self.subtask = subtask
         self.model = model
+        self.allowed_tools = allowed_tools or []
 
     async def research(
         self, decide: DecideFn, execute_tool: ExecuteToolFn, recall: RecallFn | None = None
     ) -> ResearchResult:
         messages: list[dict[str, str]] = [
-            {"role": "system", "content": build_researcher_instructions(self.subtask)},
+            {"role": "system", "content": build_researcher_instructions(self.subtask, self.allowed_tools)},
             {"role": "user", "content": self.subtask.description},
         ]
         tool_calls: list[ToolCallRecord] = []
@@ -89,7 +137,7 @@ class Researcher:
                     subtask_id=self.subtask.id, messages=messages, tool_calls=tool_calls, finished_reason="budget_exhausted"
                 )
 
-            raw_output = await decide({"model": self.model, "messages": messages})
+            raw_output = await decide({"model": self.model, "messages": messages, "max_tokens": MAX_TOKENS_PER_DECISION})
             model_calls += 1
             decision = parse_decision(raw_output)
             messages.append({"role": "assistant", "content": raw_output["choices"][0]["message"]["content"]})

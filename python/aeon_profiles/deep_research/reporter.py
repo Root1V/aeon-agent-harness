@@ -16,6 +16,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from aeon_evidence.ledger import EvidenceLedger
+
+# MDL-015: models fence their JSON despite being told not to. See extract_json_object's own doc.
+from aeon_worker.decision import extract_json_object
 from aeon_profiles.deep_research.sufficiency_gate import SUPPORTING_KINDS, SufficiencyDecision
 
 DecideFn = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -72,7 +75,7 @@ def parse_report(raw_model_output: dict[str, Any], allowed_claim_ids: set[str]) 
         raise ReporterError(f"model output is not NormalizedChatResponse-shaped: {raw_model_output!r}") from exc
 
     try:
-        report_doc = json.loads(content)
+        report_doc = json.loads(extract_json_object(content))
     except json.JSONDecodeError as exc:
         raise ReporterError(f"model output is not valid JSON: {content!r}") from exc
 

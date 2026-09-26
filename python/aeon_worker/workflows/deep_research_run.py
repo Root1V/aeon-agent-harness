@@ -55,6 +55,10 @@ class DeepResearchWorkflowInput:
     model: str
     candidates: list[dict[str, Any]]  # [{"provider": ..., "model": ..., "priority": ...}, ...]
     data_sensitivity: str = ""
+    # MDL-015: threaded to the Researchers so their tool calls carry a principal the Tool Gateway can
+    # apply policy to. Empty keeps the previous behaviour, which is the ledger-only path.
+    agent_manifest_ref: str = ""
+    allowed_tools: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -89,7 +93,13 @@ class DeepResearchWorkflow:
                     workflow.execute_activity(
                         research_subtask_activity,
                         ResearchSubtaskInput(
-                            run_id=run_id, subtask=subtask, model=request.model, candidates=candidates, data_sensitivity=request.data_sensitivity
+                            run_id=run_id,
+                            subtask=subtask,
+                            model=request.model,
+                            candidates=candidates,
+                            data_sensitivity=request.data_sensitivity,
+                            agent_manifest_ref=request.agent_manifest_ref,
+                            allowed_tools=request.allowed_tools,
                         ),
                         start_to_close_timeout=_ACTIVITY_TIMEOUT,
                         retry_policy=_RETRY_POLICY,

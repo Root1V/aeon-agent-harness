@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -150,6 +151,25 @@ func (g *Gateway) Decide(
 			attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model, Err: err.Error()})
 			continue
 		}
+		// A 200 is not the same as an answer (MDL-015). A response with no content and no tool calls
+		// is unusable by any caller, so it is treated as this candidate failing and the cascade moves
+		// on — which is what the cascade is for.
+		//
+		// Measured against the real deployment: gpt-oss-20b-mxfp4, a reasoning model, answers the
+		// Deep Research Researcher prompt with finish_reason "stop", a short reasoning_content and
+		// content "" — everything went to its analysis channel and the answer channel stayed empty.
+		// qwen3-0.6b answers the same prompt with valid JSON 4 times out of 4. Without this, the
+		// gateway returns the empty answer, the caller's parser fails, and the SECOND candidate --
+		// the one that works -- is never tried.
+		//
+		// finish_reason "length" is deliberately excluded: that is a real, informative outcome the
+		// caller must see. Retrying it on another model would hide a budget the caller needs to raise.
+		if unusable := emptyAnswer(output); unusable != "" {
+			span.SetStatus(codes.Error, unusable)
+			span.End()
+			attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model, Err: unusable})
+			continue
+		}
 		span.SetStatus(codes.Ok, "")
 		span.End()
 
@@ -180,4 +200,31 @@ func (g *Gateway) restrictPool(candidates []Candidate, dataSensitivity string) (
 		return nil, ErrNoRestrictedCandidate
 	}
 	return out, nil
+}
+
+// emptyAnswer reports why a normalized response is unusable, or "" when it is fine.
+//
+// "Unusable" is narrow on purpose: no content, no tool calls, and a finish_reason that is not
+// "length". A tool-call-only response has empty content and IS usable, so it must not be caught here;
+// and a truncated response is informative, so it must reach the caller.
+func emptyAnswer(output map[string]any) string {
+	choices, _ := output["choices"].([]any)
+	if len(choices) == 0 {
+		return "provider returned no choices"
+	}
+	choice, _ := choices[0].(map[string]any)
+	if fr, _ := choice["finish_reason"].(string); fr == "length" {
+		return ""
+	}
+	message, _ := choice["message"].(map[string]any)
+	if content, _ := message["content"].(string); strings.TrimSpace(content) != "" {
+		return ""
+	}
+	if calls, _ := message["tool_calls"].([]any); len(calls) > 0 {
+		return ""
+	}
+	if reasoning, _ := message["reasoning_content"].(string); strings.TrimSpace(reasoning) != "" {
+		return "provider returned only reasoning and no answer"
+	}
+	return "provider returned empty content"
 }

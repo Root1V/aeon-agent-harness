@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -57,12 +58,15 @@ func main() {
 		defer shutdown(context.Background())
 	}
 
-	gw := modelgateway.New()
-	registered := registerProvidersFromEnv(gw)
-	log.Printf("aeon-modelgw: registered providers: %v", registered)
-
+	// The bundle is loaded BEFORE the providers, and the order is the fix rather than a tidy-up
+	// (MDL-015): Prometheus issues per-model OAuth scopes, so the token has to name every model this
+	// gateway may route to, and only the bundle knows which those are.
 	bundle := loadModelPolicyBundle()
 	pricing := finops.NewPricingTable(bundle.PricingRates())
+
+	gw := modelgateway.New()
+	registered := registerProvidersFromEnv(gw, bundle)
+	log.Printf("aeon-modelgw: registered providers: %v", registered)
 
 	var ledger *store.FinOpsLedger
 	var qualityScores *store.QualityScoreStore
@@ -137,7 +141,7 @@ func loadModelPolicyBundle() modelgateway.ModelPolicyBundleDoc {
 
 // registerProvidersFromEnv wires each adapter whose required credentials/endpoints are present in
 // the environment (see .env.example) and returns the names actually registered.
-func registerProvidersFromEnv(gw *modelgateway.Gateway) []string {
+func registerProvidersFromEnv(gw *modelgateway.Gateway, bundle modelgateway.ModelPolicyBundleDoc) []string {
 	var registered []string
 
 	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
@@ -158,7 +162,7 @@ func registerProvidersFromEnv(gw *modelgateway.Gateway) []string {
 			os.Getenv("PROMETHEUS_GATEWAY_URL"),
 			clientID,
 			os.Getenv("PROMETHEUS_CLIENT_SECRET"),
-			os.Getenv("PROMETHEUS_SCOPE"),
+			prometheusScope(bundle),
 			os.Getenv("PROMETHEUS_DEFAULT_MODEL"),
 		))
 		registered = append(registered, prometheusinference.Name)
@@ -172,4 +176,47 @@ func registerProvidersFromEnv(gw *modelgateway.Gateway) []string {
 	}
 
 	return registered
+}
+
+// prometheusScope builds the OAuth scope the Prometheus adapter requests, naming EVERY
+// prometheus_inference model the bundle declares (MDL-015).
+//
+// The bug this fixes had no symptom until the pipeline ran against the real platform. PROMETHEUS_SCOPE
+// was a hand-written string naming ONE model, while the model is chosen per request by routing — so
+// the gateway could only ever serve that one, and every other candidate came back:
+//
+//	403 "This client is not authorized to use model 'qwen3-0.6b'"
+//
+// Which made the bundle's declared fallback chain unusable: two prometheus_inference candidates at
+// priorities 0 and 1, and falling back to the second would have failed in production. MDL-006 tests
+// the adapter with one model and DX-001 tests the pipeline against a double, so nothing looked at the
+// chain against a platform that enforces scopes.
+//
+// Measured before relying on it: one token really can carry several model scopes — requesting
+// "inference:read model:gpt-oss-20b-mxfp4 model:qwen3-0.6b" is granted verbatim. So this is one token
+// for all candidates, not a token per call.
+//
+// PROMETHEUS_SCOPE still wins when set, for a deployment that must pin the scope by hand; it just
+// stops being the only source, since a hand-written list silently goes stale the moment someone adds
+// a candidate to the bundle.
+func prometheusScope(bundle modelgateway.ModelPolicyBundleDoc) string {
+	if explicit := os.Getenv("PROMETHEUS_SCOPE"); explicit != "" {
+		log.Printf("aeon-modelgw: using PROMETHEUS_SCOPE from the environment, not the bundle: %q", explicit)
+		return explicit
+	}
+
+	scopes := []string{"inference:read", "inference:stream"}
+	seen := map[string]bool{}
+	for _, profile := range bundle.Profiles {
+		for _, candidate := range profile.Candidates {
+			if candidate.Provider != prometheusinference.Name || candidate.Model == "" || seen[candidate.Model] {
+				continue
+			}
+			seen[candidate.Model] = true
+			scopes = append(scopes, "model:"+candidate.Model)
+		}
+	}
+	scope := strings.Join(scopes, " ")
+	log.Printf("aeon-modelgw: Prometheus scope derived from the bundle (%d model(s)): %q", len(seen), scope)
+	return scope
 }

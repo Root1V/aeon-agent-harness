@@ -18,7 +18,18 @@ func (f *fakeProvider) Decide(ctx context.Context, renderedContext map[string]an
 	if f.fail {
 		return nil, errors.New("simulated provider failure")
 	}
-	out := map[string]any{"model": renderedContext["model"]}
+	// A USABLE normalized response by default (MDL-015). The gateway now treats a response with no
+	// content and no tool calls as this candidate failing, so a double returning a bare
+	// {"model": ...} is no longer testing "this candidate served the call" — it is testing the
+	// unusable-answer path. Every routing assertion below depends on a candidate succeeding, so the
+	// default has to be a real answer; `responded` still overrides it for a test that wants otherwise.
+	out := map[string]any{
+		"model": renderedContext["model"],
+		"choices": []any{map[string]any{
+			"index": 0, "finish_reason": "stop",
+			"message": map[string]any{"role": "assistant", "content": "ok"},
+		}},
+	}
 	for k, v := range f.responded {
 		out[k] = v
 	}
@@ -31,7 +42,10 @@ func TestModelGatewayRoutingFallback(t *testing.T) {
 	t.Run("falls back to the next candidate on failure", func(t *testing.T) {
 		gw := New()
 		gw.RegisterProvider("primary", &fakeProvider{fail: true})
-		gw.RegisterProvider("fallback", &fakeProvider{responded: map[string]any{"choices": []any{"ok"}}})
+		// No `responded` override: the fallback has to return a USABLE answer for this test to mean
+		// "the fallback served the call". It used to pass {"choices": ["ok"]} — a string, not a choice
+		// object — which the gateway accepted because it never looked inside. It does now (MDL-015).
+		gw.RegisterProvider("fallback", &fakeProvider{})
 
 		result, err := gw.Decide(context.Background(), []Candidate{
 			{Provider: "primary", Model: "m1", Priority: 0},

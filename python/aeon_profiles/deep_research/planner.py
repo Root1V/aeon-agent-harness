@@ -17,6 +17,9 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+# MDL-015: models fence their JSON despite being told not to. See extract_json_object's own doc.
+from aeon_worker.decision import extract_json_object
+
 # AEON_SCHEMAS_DIR (same convention the Go CLI's resolveProtoDir uses) first, falling back to this
 # repo's own layout — the fallback only holds in a full checkout, not inside a container image
 # that ships python/ alone. See deploy/compose's worker service, which mounts proto/ read-only and
@@ -68,6 +71,11 @@ def build_planner_request(query: str, model: str) -> dict[str, Any]:
             {"role": "system", "content": instructions},
             {"role": "user", "content": query},
         ],
+        # Explicit for the reason in researcher.MAX_TOKENS_PER_DECISION: a plan of up to MAX_SUBTASKS
+        # entries is a bigger object than one decision, and a reasoning model spends tokens before
+        # writing any of it. Measured against gpt-oss-20b-mxfp4: a real plan of 3 subtasks came back
+        # as 1263 characters of content after 1230 characters of reasoning.
+        "max_tokens": 2000,
     }
 
 
@@ -82,7 +90,7 @@ def parse_plan(raw_model_output: dict[str, Any]) -> ResearchPlan:
         raise PlannerError(f"model output is not NormalizedChatResponse-shaped: {raw_model_output!r}") from exc
 
     try:
-        plan_doc = json.loads(content)
+        plan_doc = json.loads(extract_json_object(content))
     except json.JSONDecodeError as exc:
         raise PlannerError(f"model output is not valid JSON: {content!r}") from exc
 
