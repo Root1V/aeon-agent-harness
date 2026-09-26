@@ -41,13 +41,14 @@ func runRagIndex(dir, corpus string) error {
 
 	embedder := &prometheusinference.Embedder{
 		Client: &prometheusinference.Client{
-			GatewayURL: os.Getenv("PROMETHEUS_GATEWAY_URL"),
-			Tokens: &prometheusinference.TokenSource{
-				AuthURL:      os.Getenv("PROMETHEUS_AUTH_URL"),
-				ClientID:     os.Getenv("PROMETHEUS_CLIENT_ID"),
-				ClientSecret: os.Getenv("PROMETHEUS_CLIENT_SECRET"),
-				Scope:        "inference:read model:" + model,
-			},
+			// MDL-009: one address. PROMETHEUS_AUTH_URL is no longer read — the gateway serves
+			// /oauth2/token too, and keeping a second address was the footgun Axonium removed from
+			// their own SDK: two values to change, and forgetting one minted tokens against the wrong
+			// party with nothing failing.
+			GatewayURL:   os.Getenv("PROMETHEUS_GATEWAY_URL"),
+			ClientID:     os.Getenv("PROMETHEUS_CLIENT_ID"),
+			ClientSecret: os.Getenv("PROMETHEUS_CLIENT_SECRET"),
+			Scope:        "inference:read model:" + model,
 		},
 		ModelID: model,
 	}

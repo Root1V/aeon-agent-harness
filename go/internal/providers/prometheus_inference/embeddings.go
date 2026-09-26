@@ -3,7 +3,6 @@ package prometheusinference
 import (
 	"context"
 	"fmt"
-	"net/http"
 )
 
 // Embedder implements rag.Embedder against Prometheus's /v1/embeddings (TOOL-006).
@@ -46,9 +45,8 @@ func (e *Embedder) Embed(ctx context.Context, texts []string) ([][]float32, erro
 	if len(texts) == 0 {
 		return nil, nil
 	}
-	var parsed embeddingsResponse
-	if err := e.Client.doAuthenticatedJSON(ctx, http.MethodPost, "/v1/embeddings",
-		embeddingsRequest{Model: e.ModelID, Input: texts}, &parsed); err != nil {
+	parsed, err := e.Client.Embeddings(ctx, e.ModelID, texts)
+	if err != nil {
 		return nil, fmt.Errorf("prometheus_inference: embedding %d text(s) with %s: %w", len(texts), e.ModelID, err)
 	}
 	if len(parsed.Data) != len(texts) {
@@ -63,7 +61,16 @@ func (e *Embedder) Embed(ctx context.Context, texts []string) ([][]float32, erro
 		if out[item.Index] != nil {
 			return nil, fmt.Errorf("prometheus_inference: embedding index %d returned twice", item.Index)
 		}
-		out[item.Index] = item.Embedding
+		// float64 -> float32 is a real narrowing and it is the right one here: the pgvector column is
+		// declared vector(1024), which IS float32, so the precision is dropped either way. Doing it
+		// explicitly at the boundary beats letting the database do it silently — and it has to happen
+		// before the vector literal is rendered, or the extra digits would travel over the wire only to
+		// be rounded off at the far end.
+		vec := make([]float32, len(item.Embedding))
+		for i, f := range item.Embedding {
+			vec[i] = float32(f)
+		}
+		out[item.Index] = vec
 	}
 	for i, v := range out {
 		if len(v) == 0 {

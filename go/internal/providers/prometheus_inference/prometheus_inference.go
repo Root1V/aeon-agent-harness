@@ -30,21 +30,29 @@ type Adapter struct {
 	Client *Client
 }
 
-// New builds an Adapter with its own TokenSource, wired to authURL/gatewayURL. clientID/
-// clientSecret come from POST /admin/clients (issued once, cannot be retrieved again — treat as a
-// secret, load from environment/`.env`, never hardcode). scope must include "inference:read" (and
-// "inference:stream" if streaming is used later) plus "model:<id>" for every model this adapter
-// will request.
+// New builds an Adapter over the Axonium SDK (MDL-009).
+//
+// authURL is accepted and IGNORED, on purpose, and the parameter stays so every caller does not have
+// to change in the same commit that swaps the transport. The gateway serves /oauth2/token as well as
+// /v1/ — verified on this deployment, both :8020 and :9000 answer a token request — so there is one
+// address. Axonium removed the same second address from their SDK for the failure it caused: a client
+// pointed at your own deployment but still minting tokens against the official platform, with nothing
+// failing.
+//
+// clientID/clientSecret come from POST /admin/clients (issued once, cannot be retrieved again — treat
+// as a secret, load from the environment, never hardcode). scope must include "inference:read" plus
+// "model:<id>" for every model this adapter will request: being authorised for a model does not put it
+// in the token, which is the 403 MDL-015 spent an afternoon on.
 func New(authURL, gatewayURL, clientID, clientSecret, scope, model string) *Adapter {
-	tokens := &TokenSource{
-		AuthURL:      authURL,
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
-		Scope:        scope,
-	}
+	_ = authURL // see the doc above: one address, kept in the signature to avoid a wider change here
 	return &Adapter{
-		Model:  model,
-		Client: &Client{GatewayURL: gatewayURL, Tokens: tokens},
+		Model: model,
+		Client: &Client{
+			GatewayURL:   gatewayURL,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			Scope:        scope,
+		},
 	}
 }
 
@@ -90,7 +98,7 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 		body["model"] = a.Model
 	}
 
-	raw, requestID, replayOf, err := a.Client.ChatCompletionWithMeta(ctx, body)
+	raw, meta, err := a.Client.ChatCompletionWithMeta(ctx, body)
 	if err != nil {
 		return nil, err
 	}
@@ -110,8 +118,9 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 
 	choice := parsed.Choices[0]
 	return providers.NormalizedChatResponseFrom(providers.ChatResult{
-		ProviderRequestID:  requestID,
-		IdempotentReplayOf: replayOf,
+		ProviderRequestID:  meta.RequestID,
+		IdempotentReplayOf: meta.IdempotentReplayOf,
+		ServedByInstance:   meta.InstanceID,
 		Model:              parsed.Model,
 		Content:            choice.Message.Content,
 		ReasoningContent:   choice.Message.ReasoningContent,
@@ -124,10 +133,32 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 	}), nil
 }
 
-// CachingCapability: most local-inference setups have no prompt caching (ADR-003's Budgeter falls
-// back to aggressive offload for this provider). Not something the gateway's API surfaces either
-// way today.
-func (a *Adapter) CachingCapability() string { return "none" }
+// CachingCapability: automatic_prefix — this platform DOES cache prompts, measured (MDL-009).
+//
+// automatic_prefix and not one of the other two documented values: the caching happens without being
+// asked for, so there is nothing for the Budgeter to place breakpoints around (that is Anthropic's
+// explicit_breakpoints). The value set is closed on purpose and the conformance suite enforces it —
+// which is what caught the "prefix" I first wrote here without checking the list.
+//
+// It said "none" until now, on the reasoning that "most local-inference setups have no prompt
+// caching". The deployment contradicts it plainly — a 12-token prompt came back with
+// `prompt_tokens_details: {cached_tokens: 11}`, so 11 of 12 were served from cache:
+//
+//	usage: {prompt_tokens: 12, completion_tokens: 20, prompt_tokens_details: {cached_tokens: 11}}
+//
+// The direction of the old error is what made it worth fixing. ADR-003's Budgeter reads this to decide
+// whether KEEPING context is cheaper than summarising it, and "none" pushed it toward aggressive
+// offload — so the better the cache worked, the more we paid to avoid using it. Same shape as MDL-012,
+// where the cache counters were invisible to the ledger: an error that grows as the optimisation
+// succeeds, which is the kind nobody goes looking for.
+func (a *Adapter) CachingCapability() string { return "automatic_prefix" }
 
-// CostModel: self-hosted inference is billed by GPU-seconds, not tokens (FinOps, OBS-003).
-func (a *Adapter) CostModel() string { return "compute_based" }
+// CostModel: token_based, measured (OBS-007), not GPU-seconds as this said before.
+//
+// The old value came from the project plan's assumption that self-hosted inference bills per GPU-second.
+// GET /v1/usage/{request_id} returns the rates actually applied — 0.2 / 0.6 per 1M for qwen3-0.6b,
+// 0.3067 / 1.052 for gpt-oss-20b-mxfp4 — and the cost recomputes from them exactly. OBS-007 corrected
+// the bundle and left THIS declaration stale, which is the defect worth naming: the same fact was
+// declared in two places and they disagreed for a day. The bundle is what pricing reads, so the
+// disagreement was invisible; MDL-009's test is what surfaced it.
+func (a *Adapter) CostModel() string { return "token_based" }

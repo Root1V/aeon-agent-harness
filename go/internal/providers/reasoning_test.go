@@ -71,7 +71,7 @@ func TestReasoningContentSurvivesNormalization(t *testing.T) {
 
 	for name, adapter := range adapters {
 		t.Run(name+" preserves reasoning, its token count, and does not merge it into content", func(t *testing.T) {
-			out, err := adapter.Decide(ctx, map[string]any{"model": "m", "messages": []any{}})
+			out, err := adapter.Decide(ctx, map[string]any{"model": "m", "messages": realMessages()})
 			if err != nil {
 				t.Fatalf("Decide: %v", err)
 			}
@@ -114,7 +114,7 @@ func TestReasoningContentSurvivesNormalization(t *testing.T) {
 			"usage":{"prompt_tokens":5,"completion_tokens":3}}`)
 		adapter := &openaicompatible.Adapter{BaseURL: plain.URL}
 
-		out, err := adapter.Decide(ctx, map[string]any{"model": "m", "messages": []any{}})
+		out, err := adapter.Decide(ctx, map[string]any{"model": "m", "messages": realMessages()})
 		if err != nil {
 			t.Fatalf("Decide: %v", err)
 		}
@@ -151,7 +151,7 @@ func TestReasoningContentSurvivesNormalization(t *testing.T) {
 		adapter := &openaicompatible.Adapter{BaseURL: streamSrv.URL}
 		var answer, thinking strings.Builder
 		var order []string
-		err := adapter.DecideStream(ctx, map[string]any{"model": "m", "messages": []any{}}, func(c providers.Chunk) error {
+		err := adapter.DecideStream(ctx, map[string]any{"model": "m", "messages": realMessages()}, func(c providers.Chunk) error {
 			if c.ReasoningDelta != "" {
 				thinking.WriteString(c.ReasoningDelta)
 				order = append(order, "reasoning")
@@ -184,4 +184,15 @@ func mustJSON(v any) string {
 		panic(err)
 	}
 	return string(raw)
+}
+
+// realMessages is one actual message rather than an empty slice.
+//
+// These call sites passed `[]any{}` because nothing validated it: the old hand-written transport
+// forwarded the body as-is and the fake upstream ignored it. MDL-009 maps the request onto the SDK's
+// typed ChatRequest and rejects a call with no messages, which is right — the platform would reject it
+// too — so the placeholder had to become a real message. The tests are about reasoning, not about
+// request validation, and now they say so.
+func realMessages() []any {
+	return []any{map[string]any{"role": "user", "content": "hola"}}
 }

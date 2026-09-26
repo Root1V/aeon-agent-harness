@@ -150,17 +150,19 @@ func newConformantOpenAICompatible(t *testing.T) providers.Provider {
 
 func newConformantPrometheusInference(t *testing.T) providers.Provider {
 	t.Helper()
-	authSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"access_token": "fake-conformance-token", "token_type": "bearer", "expires_in": 300,
-			"scope": r.Form.Get("scope"),
-		})
-	}))
-	t.Cleanup(authSrv.Close)
-
+	// ONE server, serving both /oauth2/token and /v1/ — which is the shape of the real deployment and,
+	// since MDL-009, the only shape the adapter supports. It used to be two, because the old transport
+	// took two addresses; that second address was the footgun Axonium removed from their own SDK.
 	gatewaySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/oauth2/token") {
+			_ = r.ParseForm()
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token": "fake-conformance-token", "token_type": "bearer", "expires_in": 300,
+				"scope": r.Form.Get("scope"),
+			})
+			return
+		}
 		if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -176,5 +178,7 @@ func newConformantPrometheusInference(t *testing.T) providers.Provider {
 	}))
 	t.Cleanup(gatewaySrv.Close)
 
-	return prometheusinference.New(authSrv.URL, gatewaySrv.URL, "test-client", "test-secret", "inference:read", "conformance-test-model")
+	// The first argument is the old auth URL, accepted and ignored since MDL-009; passing the gateway's
+	// own address makes that explicit instead of leaving a dead value that looks meaningful.
+	return prometheusinference.New(gatewaySrv.URL, gatewaySrv.URL, "test-client", "test-secret", "inference:read", "conformance-test-model")
 }

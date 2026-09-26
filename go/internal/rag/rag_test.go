@@ -64,13 +64,7 @@ func realEmbedder(t *testing.T) *prometheusinference.Embedder {
 		t.Skip("Prometheus embedding credentials not set — skipping the real-platform half of TOOL-006")
 	}
 	return &prometheusinference.Embedder{
-		Client: &prometheusinference.Client{
-			GatewayURL: gateway,
-			Tokens: &prometheusinference.TokenSource{
-				AuthURL: authURL, ClientID: clientID, ClientSecret: secret,
-				Scope: "inference:read model:" + model,
-			},
-		},
+		Client:  &prometheusinference.Client{GatewayURL: gateway, ClientID: clientID, ClientSecret: secret, Scope: "inference:read model:" + model},
 		ModelID: model,
 	}
 }
