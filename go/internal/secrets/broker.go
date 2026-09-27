@@ -9,7 +9,7 @@
 // (go/cmd/aeon-modelgw/main.go's provider API keys, still read directly from the environment) with
 // a real lease/expiry model for *new* secret-consuming tools — it does not retrofit the existing
 // provider adapters, which have their own credential lifetimes already (see
-// go/internal/providers/prometheus_inference/auth.go's own OAuth2 client_credentials TokenSource,
+// the Axonium SDK's own OAuth2 client_credentials token source (MDL-009 deleted ours),
 // a separate, pre-existing example of short-lived credentials this package doesn't replace).
 // Workload identity (SPIFFE/SVID, named in the architecture doc alongside this feature) is not
 // implemented — that needs a SPIRE server and workload attestation infrastructure, a real
