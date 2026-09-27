@@ -101,16 +101,33 @@ func (e *Engine) IsAllowedForPrincipal(principalType, principalID, toolName stri
 	return e.isAllowedFor(principalType, principalID, toolName)
 }
 
+// IsAllowedToDelegate evaluates whether agentManifestRef may delegate to a declared remote agent
+// (A2A-002). The resource is a `RemoteAgent`, NOT a `Tool`, and that separation is the point.
+//
+// Reusing `Tool` would have made a bundle that permits a list of tool names accidentally cover
+// delegation the moment someone named a remote agent like a tool — and, worse, a permit with no `when`
+// clause would grant delegation to anyone it granted tools to. A distinct entity type makes "may call
+// these tools" and "may hand work to this third party" two statements a bundle has to make separately,
+// which is what they are: the second sends an effect outside our perimeter, where the child's tools
+// cross ITS gateway and not ours.
+func (e *Engine) IsAllowedToDelegate(agentManifestRef, remoteAgentID string) Decision {
+	return e.authorize("Agent", agentManifestRef, "RemoteAgent", remoteAgentID)
+}
+
 func (e *Engine) isAllowedFor(principalType, principalID, toolName string) Decision {
+	return e.authorize(principalType, principalID, "Tool", toolName)
+}
+
+func (e *Engine) authorize(principalType, principalID, resourceType, resourceName string) Decision {
 	principal := types.NewEntityUID(types.EntityType(principalType), types.String(principalID))
-	action := types.NewEntityUID(types.EntityType("Action"), types.String(toolName))
-	resourceUID := types.NewEntityUID(types.EntityType("Tool"), types.String(toolName))
+	action := types.NewEntityUID(types.EntityType("Action"), types.String(resourceName))
+	resourceUID := types.NewEntityUID(types.EntityType(resourceType), types.String(resourceName))
 
 	entities := types.EntityMap{
 		resourceUID: types.Entity{
 			UID: resourceUID,
 			Attributes: types.NewRecord(types.RecordMap{
-				types.String("name"): types.String(toolName),
+				types.String("name"): types.String(resourceName),
 			}),
 		},
 	}

@@ -1,10 +1,49 @@
 package policy
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
 
-// testBundle mirrors examples/deep-research/policy_bundle.yaml: the deep-research agent may call
-// its allowed tools; shell.* is explicitly forbidden for every agent, demonstrating forbid wins
-// over any permit that might otherwise match.
+	"gopkg.in/yaml.v3"
+)
+
+// loadRepoBundle loads the CHECKED-IN policy bundle, so a test can assert on the file a deployment
+// actually runs rather than on a copy of it.
+//
+// Both kinds of fixture are here on purpose and they answer different questions. testBundle below is a
+// minimal one for Cedar semantics — it can be read in one screen, which is what a test of permit/forbid
+// precedence needs. This one is for claims about OUR bundle, which only the real file can settle.
+func loadRepoBundle(t *testing.T) *Engine {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	path := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "examples", "deep-research", "policy_bundle.yaml")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	var doc PolicyBundleDoc
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parsing the bundle: %v", err)
+	}
+	e, err := LoadEngine(doc)
+	if err != nil {
+		t.Fatalf("LoadEngine: %v", err)
+	}
+	return e
+}
+
+// testBundle is a MINIMAL fixture for Cedar semantics: an agent may call its allowed tools, and shell.*
+// is forbidden for everyone, which shows forbid winning over a permit that would otherwise match.
+//
+// It is NOT a mirror of examples/deep-research/policy_bundle.yaml, and the comment here used to say it
+// was — which was already false by the time A2A-002 added `resource is Tool` to the real file. A fixture
+// that claims to mirror a file is a duplicate that drifts silently; claims about the real bundle belong
+// in a test that reads it (see TestDelegationIsNotGrantedByAToolPermit).
 const testBundle = `
 permit(
   principal == Agent::"deep-research-general@0.1.0",
@@ -177,5 +216,38 @@ func TestPolicyWithoutIDIsRefused(t *testing.T) {
 	}})
 	if err == nil {
 		t.Fatal("a bundle entry with no id loaded")
+	}
+}
+
+// TestDelegationIsNotGrantedByAToolPermit is a regression test for a hole I MEASURED in the real bundle
+// before fixing it (A2A-002).
+//
+// `allow-deep-research-tools` listed tool NAMES and never said what kind of thing it was naming, so a
+// remote agent declared as "search.web" inherited the permit and delegation to it was authorized. The
+// separate `RemoteAgent` entity type was necessary and not sufficient: without `resource is Tool` in the
+// permit, the type was never consulted.
+//
+// This runs against the CHECKED-IN bundle, not an inline copy, because the thing that can regress is the
+// bundle — someone tidying a `when` clause removes the guard and the leak comes back with every test
+// still green.
+func TestDelegationIsNotGrantedByAToolPermit(t *testing.T) {
+	engine := loadRepoBundle(t)
+	const agent = "deep-research-general@0.1.0"
+
+	// The permits still do their job.
+	if d := engine.IsAllowed(agent, "search.web"); !d.Allowed {
+		t.Fatalf("search.web is no longer permitted (%+v) — the type guard broke tool authorization", d)
+	}
+	if d := engine.IsAllowedToDelegate(agent, "research-partner"); !d.Allowed {
+		t.Fatalf("delegation to research-partner is not permitted (%+v)", d)
+	}
+
+	// The leak itself.
+	if d := engine.IsAllowedToDelegate(agent, "search.web"); d.Allowed {
+		t.Errorf("delegation to a REMOTE AGENT named %q was permitted by %q — a permit that lists names without saying what kind of thing they are lets a delegation destination borrow a tool's authorization", "search.web", d.PolicyID)
+	}
+	// And the mirror image, which would be just as wrong: a tool must not inherit a delegation permit.
+	if d := engine.IsAllowed(agent, "research-partner"); d.Allowed {
+		t.Errorf("a TOOL named %q was permitted by %q — the delegation permit is leaking the other way", "research-partner", d.PolicyID)
 	}
 }

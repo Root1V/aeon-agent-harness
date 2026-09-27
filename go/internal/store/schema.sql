@@ -252,3 +252,62 @@ CREATE INDEX IF NOT EXISTS rag_chunks_embedding_idx ON rag_chunks USING hnsw (em
 -- por la misma razón que los de caché: un proveedor que no los desglosa no es un proveedor que
 -- razonó gratis.
 ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS reasoning_tokens INTEGER;
+
+-- A2A-002: remote agents a governed agent may be allowed to delegate to. A remote agent MUST be
+-- declared here before anything can delegate to it, and the declaration carries an explicit risk —
+-- the same rule as tools.risk above, and for the same reason: a default would be silent.
+--
+-- We diverge from Synaptum here on purpose. They apply DESTRUCTIVE by default; we require the
+-- declaration. Both are fail-safe, but a default is silent — nobody learns it was never declared —
+-- while a registry forces a person to look once. That is worth more for a remote agent than for a
+-- tool: on the other side there is a model deciding, and it can change without telling us.
+CREATE TABLE IF NOT EXISTS remote_agents (
+    agent_id            TEXT PRIMARY KEY,
+    url                 TEXT NOT NULL,
+    risk                TEXT NOT NULL,
+    description         TEXT,
+    -- credential_secret_name names a secret the SECRET BROKER holds; the value never lives here.
+    -- Null means the destination needs no credential, which is different from "we have none for it":
+    -- the first is a fact about the destination, the second would be a missing declaration.
+    credential_secret_name TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT remote_agents_risk_valid CHECK (risk IN ('LOW', 'MEDIUM', 'HIGH', 'CRITICAL'))
+);
+
+-- A2A-002: one row per delegation the proxy let through, which is three things at once and that is
+-- deliberate — separate tables for attribution, cost and the fan-out count would be three chances
+-- to disagree about whether a delegation happened.
+--
+-- `completed_at IS NULL` is what in-flight MEANS here, and it is how width is enforced across
+-- gateway replicas: an in-process counter would be bypassed by the next replica, which is exactly
+-- the comfortable kind of wrong. The cost of that choice is stated where it is read
+-- (InFlightCount): a gateway that dies leaves rows open, so the count only considers rows younger
+-- than a staleness bound, and a delegation that outlives it stops being counted while still running.
+CREATE TABLE IF NOT EXISTS a2a_delegations (
+    id                  BIGSERIAL PRIMARY KEY,
+    run_id              TEXT,
+    step_id             TEXT,
+    agent_manifest_ref  TEXT NOT NULL,
+    remote_agent_id     TEXT NOT NULL,
+    -- rpc_method is the A2A method proxied (message/send, tasks/get, ...). Recorded because a
+    -- delegation and a poll for its result are both traffic to the same destination and only one of
+    -- them can start work.
+    rpc_method          TEXT NOT NULL,
+    remote_task_id      TEXT,
+    -- task_state is what the remote last reported, VERBATIM. Not normalized into our own vocabulary:
+    -- an unknown state has to stay recognisable as the string the remote actually sent, or the record
+    -- would say we understood something we did not.
+    task_state          TEXT,
+    -- terminal is our classification of that state. Separate from task_state because the two answer
+    -- different questions, and because a state we do not know is non-terminal WITHOUT being an error.
+    terminal            BOOLEAN,
+    -- hop_depth is how many delegations deep this call is, read from the inbound hop header. NULL
+    -- means the caller declared none: unknown depth, not depth zero.
+    hop_depth           INTEGER,
+    denied_reason       TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at        TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS a2a_delegations_inflight_idx ON a2a_delegations (run_id, completed_at);
+CREATE INDEX IF NOT EXISTS a2a_delegations_remote_idx ON a2a_delegations (remote_agent_id);
