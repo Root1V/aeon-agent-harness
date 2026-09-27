@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/aeon-ai/aeon/go/internal/checkpoint"
 	"github.com/aeon-ai/aeon/go/internal/runcontroller"
 	"github.com/aeon-ai/aeon/go/internal/store"
 )
@@ -31,6 +33,14 @@ var runControllerTracer = otel.Tracer("aeon-runcontroller")
 type RunControllerHandlers struct {
 	Controller *runcontroller.Controller
 	Registry   *store.AgentRegistry
+	// Checkpointer journals a person's approval decision as a known outcome (INT-011).
+	//
+	// THE HARNESS WRITES THIS, not the loop, and that is the accepted contract consequence rather than a
+	// shortcut: a person decides when the loop is not running, so the loop cannot record what it did not
+	// witness. Registering a fact is not deciding anything, which is what keeps the seam's promise intact.
+	//
+	// Optional. Without it a decision still takes effect — the response says it was not journalled.
+	Checkpointer checkpoint.Checkpointer
 }
 
 // Register mounts the run controller routes on mux.
@@ -160,11 +170,12 @@ func (h *RunControllerHandlers) approve(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, fmt.Errorf("tool_call_hash is required"))
 		return
 	}
-	if err := h.Controller.Approve(r.Context(), workflowID(r.PathValue("run_id")), body.ToolCallHash); err != nil {
+	decision, err := h.Controller.Approve(r.Context(), workflowID(r.PathValue("run_id")), body.ToolCallHash)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	h.respondToApproval(w, r, decision)
 }
 
 func (h *RunControllerHandlers) reject(w http.ResponseWriter, r *http.Request) {
@@ -177,11 +188,84 @@ func (h *RunControllerHandlers) reject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("tool_call_hash is required"))
 		return
 	}
-	if err := h.Controller.Reject(r.Context(), workflowID(r.PathValue("run_id")), body.ToolCallHash); err != nil {
+	decision, err := h.Controller.Reject(r.Context(), workflowID(r.PathValue("run_id")), body.ToolCallHash)
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	w.WriteHeader(http.StatusAccepted)
+	h.respondToApproval(w, r, decision)
+}
+
+// respondToApproval journals the decision and answers 202 with what was recorded.
+//
+// Ordering is the opposite of the Tool Gateway's denial path, and deliberately so. The gateway journals
+// BEFORE responding because the refusal is already final when Cedar returns; here the decision only
+// becomes true when Temporal accepts the signal, so journalling first would assert something that had
+// not happened yet. The rule both follow: write the record as soon as the fact is true, and never sooner.
+func (h *RunControllerHandlers) respondToApproval(
+	w http.ResponseWriter, r *http.Request, decision runcontroller.ApprovalDecision,
+) {
+	journal := h.journalApproval(r.Context(), r.PathValue("run_id"), decision)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"approval_id":    decision.ApprovalID,
+		"tool_call_hash": decision.ToolCallHash,
+		"outcome":        checkpoint.OutcomeForApproval(decision.Approved),
+		"journalled":     journal.Journalled,
+		"journal":        journal,
+	})
+}
+
+func (h *RunControllerHandlers) journalApproval(
+	ctx context.Context, runID string, decision runcontroller.ApprovalDecision,
+) approvalJournalResult {
+	if h.Checkpointer == nil {
+		return approvalJournalResult{Reason: "this control plane has no checkpointer configured"}
+	}
+	if decision.ApprovalID == "" {
+		// The run answered the query without an approval_id, so there is no stable identity to key the
+		// record on. Recording it under a made-up id would be worse than not recording it: the entry would
+		// never collapse with a retry of the same decision.
+		return approvalJournalResult{Reason: "the pending approval carried no approval_id to key the record on"}
+	}
+
+	// node_id and tool_call_hash travel in the payload rather than the key: they are what a resuming loop
+	// matches against to know WHICH call the person allowed, and the hash is what makes a mutated argument
+	// fail closed (see go/internal/stepidentity).
+	detail, err := json.Marshal(map[string]any{
+		"node_id":        decision.NodeID,
+		"tool_call_hash": decision.ToolCallHash,
+		"approved":       decision.Approved,
+	})
+	if err != nil {
+		return approvalJournalResult{Reason: err.Error()}
+	}
+	payload, err := checkpoint.OutcomePayload(
+		checkpoint.OutcomeForApproval(decision.Approved), "decided by a person via the run controller", detail,
+	)
+	if err != nil {
+		return approvalJournalResult{Reason: err.Error()}
+	}
+
+	stepID := checkpoint.ApprovalStep(decision.ApprovalID)
+	res, err := h.Checkpointer.Append(ctx, checkpoint.Entry{
+		RunID: runID, StepID: stepID, Phase: checkpoint.PhaseCompleted, Payload: payload,
+	})
+	if err != nil {
+		log.Printf("aeon-controlplane: journalling approval %s for run %s: %v", decision.ApprovalID, runID, err)
+		return approvalJournalResult{Reason: err.Error()}
+	}
+	return approvalJournalResult{
+		Journalled: true, StepID: stepID, Seq: res.Seq, Duplicate: res.Duplicate,
+	}
+}
+
+// approvalJournalResult reports whether the decision was recorded, and why not when it was not.
+type approvalJournalResult struct {
+	Journalled bool   `json:"journalled"`
+	StepID     string `json:"step_id,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Seq        int64  `json:"seq,omitempty"`
+	Duplicate  bool   `json:"duplicate,omitempty"`
 }
 
 // stream is a Server-Sent Events endpoint: polls Status and emits an event each time it changes,

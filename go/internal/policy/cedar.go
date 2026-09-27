@@ -6,7 +6,6 @@
 package policy
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/cedar-policy/cedar-go"
@@ -33,16 +32,47 @@ type Engine struct {
 	policySet *cedar.PolicySet
 }
 
-// LoadEngine parses every policy's cedarSource into a single Cedar PolicySet.
+// LoadEngine parses every policy's cedarSource into a single Cedar PolicySet, KEYED BY THE ID THE
+// BUNDLE DECLARES.
+//
+// Policy by policy rather than one concatenated document, and the difference is not stylistic. Cedar
+// names the policies in a concatenated document by POSITION — policy0, policy1, policy2 — so the id
+// reported in a decision used to be an index into the file. It looked like an identifier: an audit
+// record said "denied by policy policy2" while the bundle right next to it said
+// `id: forbid-shell-for-everyone`, two namespaces that resemble each other closely enough to be
+// mistaken. And it moved: inserting a policy at the top of the bundle silently renamed every id below
+// it, so yesterday's audit trail described today's policies wrongly.
+//
+// Found by INT-011, which journals a denial as a durable fact — the moment the id had to survive being
+// read back later, a positional index stopped being good enough.
 func LoadEngine(doc PolicyBundleDoc) (*Engine, error) {
-	var buf bytes.Buffer
-	for _, p := range doc.Policies {
-		buf.WriteString(p.CedarSource)
-		buf.WriteString("\n")
-	}
-	ps, err := cedar.NewPolicySetFromBytes("policy_bundle", buf.Bytes())
-	if err != nil {
-		return nil, fmt.Errorf("policy: parse cedar bundle: %w", err)
+	ps := cedar.NewPolicySet()
+	for i, p := range doc.Policies {
+		if p.ID == "" {
+			return nil, fmt.Errorf("policy: bundle entry %d declares no id: a decision it determines could only be reported by position, which changes whenever the bundle is reordered", i)
+		}
+		list, err := cedar.NewPolicyListFromBytes(p.ID, []byte(p.CedarSource))
+		if err != nil {
+			return nil, fmt.Errorf("policy: parse cedar policy %q: %w", p.ID, err)
+		}
+		if len(list) == 0 {
+			return nil, fmt.Errorf("policy: bundle entry %q has no policy in its cedarSource: an entry that authorizes nothing but reads as though it does is worse than a missing one", p.ID)
+		}
+		for n, parsed := range list {
+			// One id per entry in the ordinary case. An entry holding several policies gets a suffix rather
+			// than an error: the bundle schema does not forbid it, and losing one to a name collision would
+			// be a policy silently not enforced.
+			id := cedar.PolicyID(p.ID)
+			if len(list) > 1 {
+				id = cedar.PolicyID(fmt.Sprintf("%s#%d", p.ID, n))
+			}
+			// Add OVERWRITES a policy with the same id and only reports it in its return value, so a bundle
+			// with a duplicated id would quietly enforce one of the two. Refused here: the one that vanishes
+			// could be a forbid, and a forbid that is not loaded is a hole nothing else in the system checks.
+			if !ps.Add(id, parsed) {
+				return nil, fmt.Errorf("policy: bundle declares id %q more than once: one of them would silently replace the other", id)
+			}
+		}
 	}
 	return &Engine{policySet: ps}, nil
 }

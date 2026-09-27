@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/aeon-ai/aeon/go/internal/checkpoint"
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/toolexec"
@@ -34,6 +36,18 @@ type ToolGatewayHandlers struct {
 	// than executed, because silently running an effect the caller asked to have deduplicated is
 	// the failure this table exists to prevent.
 	Executions *store.ToolExecutions
+	// Checkpointer journals a policy denial as a KNOWN OUTCOME of the step (INT-011).
+	//
+	// The gateway writes it rather than the caller, and that placement is the feature. A caller that
+	// journalled its own 403 would lose the fact whenever it died between receiving the refusal and
+	// recording it — which is exactly the crash window the journal exists to survive. The gateway is
+	// the only party that knows the denial happened at the moment it happens.
+	//
+	// Optional: a call that carries no run_id/step_id (a Mode C MCP client with no Aeon run behind it)
+	// has nothing to journal AGAINST, and a deployment may have no journal at all. Neither is allowed to
+	// turn a denial into an error — but neither is allowed to look like a recorded denial either, which
+	// is why the response says which of the three happened.
+	Checkpointer checkpoint.Checkpointer
 }
 
 // Register mounts the tool gateway routes on mux.
@@ -51,6 +65,11 @@ type toolCallRequest struct {
 	// read-only tool and wrong for anything with effects; the caller owns that choice because only
 	// the caller knows which step it is on.
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	// RunID and StepID identify the journal entry a denial is recorded against (INT-011). Optional,
+	// because the gateway serves callers with no Aeon run behind them; absent means the denial cannot be
+	// journalled, which the response reports rather than hides.
+	RunID  string `json:"run_id,omitempty"`
+	StepID string `json:"step_id,omitempty"`
 }
 
 func (h *ToolGatewayHandlers) checkPolicy(w http.ResponseWriter, r *http.Request) {
@@ -79,9 +98,21 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 	decision := h.Policy.IsAllowed(body.AgentManifestRef, body.ToolName)
 	if !decision.Allowed {
 		span.SetStatus(codes.Error, "denied by policy")
+		// Journalled BEFORE the response, on purpose: after it, a crash in this process between writing
+		// the 403 and writing the record would leave the step looking unfinished, which is the exact
+		// state INT-011 exists to eliminate. The order costs one durable write on a path that is not
+		// executing anything anyway.
+		journal := h.journalDenial(r.Context(), body, checkpoint.OutcomeDeniedByPolicy, denialReason(decision))
+		span.SetAttributes(attribute.String("aeon.step.outcome", string(checkpoint.OutcomeDeniedByPolicy)))
+		span.SetAttributes(attribute.Bool("aeon.step.outcome_journalled", journal.Journalled))
 		writeJSON(w, http.StatusForbidden, map[string]any{
 			"allowed": false,
 			"reason":  "denied by policy",
+			// The outcome is named in the response too, so a caller that DOES keep its own journal records
+			// the same fact under the same name instead of inventing one.
+			"outcome":    checkpoint.OutcomeDeniedByPolicy,
+			"journalled": journal.Journalled,
+			"journal":    journal,
 		})
 		return
 	}
@@ -194,4 +225,63 @@ func (h *ToolGatewayHandlers) executeDeduplicated(
 		"deduplicated":    false,
 		"failed_attempts": claim.FailedAttempts,
 	})
+}
+
+// denialResult reports what happened to the journal write for a denial.
+//
+// Three states rather than a bool, the same rule this codebase applies to every counter: "recorded",
+// "there was nothing to record it against", and "we tried and failed" are different facts, and only
+// the last one is a problem. Collapsing them would make an unjournalled denial in a Mode C call look
+// identical to a Postgres outage.
+type denialResult struct {
+	Journalled bool `json:"journalled"`
+	// Reason is empty when Journalled is true — a fact needs no excuse.
+	Reason string `json:"reason,omitempty"`
+	Seq    int64  `json:"seq,omitempty"`
+	// Duplicate is true when this denial was already journalled: a retried call that policy denies again
+	// is the same outcome, not a second one.
+	Duplicate bool `json:"duplicate,omitempty"`
+}
+
+// journalDenial records a refused step as a completed one with an explicit denied outcome.
+//
+// It NEVER fails the request. A denial whose record could not be written is still a denial, and
+// turning it into a 500 would mean a journal outage could get an effect executed on retry — the
+// opposite of what a policy denial is for. The caller learns the record is missing instead.
+func (h *ToolGatewayHandlers) journalDenial(
+	ctx context.Context, body toolCallRequest, outcome checkpoint.Outcome, reason string,
+) denialResult {
+	if body.RunID == "" || body.StepID == "" {
+		return denialResult{Reason: "no run_id/step_id on the request: there is no journal to record this against"}
+	}
+	if h.Checkpointer == nil {
+		return denialResult{Reason: "this gateway has no checkpointer configured"}
+	}
+
+	payload, err := checkpoint.OutcomePayload(outcome, reason, nil)
+	if err != nil {
+		return denialResult{Reason: err.Error()}
+	}
+	res, err := h.Checkpointer.Append(ctx, checkpoint.Entry{
+		RunID: body.RunID, StepID: body.StepID, Phase: checkpoint.PhaseCompleted, Payload: payload,
+	})
+	if err != nil {
+		// Logged as well as returned: the caller sees it, and so does whoever is reading the gateway's
+		// logs when a run turns out to have a hole in its journal.
+		log.Printf("aeon-toolgw: journalling a policy denial for run %s step %s: %v", body.RunID, body.StepID, err)
+		return denialResult{Reason: err.Error()}
+	}
+	return denialResult{Journalled: true, Seq: res.Seq, Duplicate: res.Duplicate}
+}
+
+// denialReason is the human-readable half of the journalled record.
+//
+// It names the policy that refused when Cedar identified one, because "denied by policy" alone sends
+// whoever is debugging back to reading the whole bundle. Cedar is default-deny, so no policy id is
+// itself informative: it means nothing permitted the call rather than something forbade it.
+func denialReason(decision policy.Decision) string {
+	if decision.PolicyID != "" {
+		return "denied by policy " + decision.PolicyID
+	}
+	return "denied by policy: no policy in the bundle permits this tool for this agent (Cedar is default-deny)"
 }

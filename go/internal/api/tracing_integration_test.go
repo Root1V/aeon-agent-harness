@@ -16,10 +16,24 @@ import (
 // tracingFakeProvider is a minimal providers.Provider test double, mirroring
 // modelgateway.fakeProvider — duplicated here rather than imported since that one is unexported
 // test-only code in a different package.
+//
+// The duplication has already cost something, and the note is here so the next person pays it once.
+// MDL-015 made the gateway treat a response with no content and no tool calls as the candidate FAILING;
+// modelgateway.fakeProvider was updated for it and this copy was not, so Decide below returned a bare
+// {"model": ...} and this test broke. It went unnoticed because this file only runs under the obs
+// compose profile, so the suite looked green while a double in it had stopped resembling a provider.
 type tracingFakeProvider struct{}
 
 func (tracingFakeProvider) Decide(ctx context.Context, renderedContext map[string]any) (map[string]any, error) {
-	return map[string]any{"model": renderedContext["model"]}, nil
+	// A USABLE normalized response: this test needs the candidate to SUCCEED so a "chat" span with
+	// gen_ai.request.model reaches Tempo. The shape mirrors what a real provider adapter normalizes to.
+	return map[string]any{
+		"model": renderedContext["model"],
+		"choices": []any{map[string]any{
+			"index": 0, "finish_reason": "stop",
+			"message": map[string]any{"role": "assistant", "content": "ok"},
+		}},
+	}, nil
 }
 func (tracingFakeProvider) CachingCapability() string { return "none" }
 func (tracingFakeProvider) CostModel() string         { return "token_based" }
