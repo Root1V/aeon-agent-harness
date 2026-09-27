@@ -68,8 +68,9 @@ type geminiResponse struct {
 		FinishReason string        `json:"finishReason"`
 	} `json:"candidates"`
 	UsageMetadata struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		// Pointers (MDL-014): nil means the key was absent, which is not a call that consumed nothing.
+		PromptTokenCount     *int `json:"promptTokenCount"`
+		CandidatesTokenCount *int `json:"candidatesTokenCount"`
 	} `json:"usageMetadata"`
 }
 

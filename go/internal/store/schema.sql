@@ -83,8 +83,11 @@ CREATE TABLE IF NOT EXISTS model_gateway_costs (
     -- Also nullable (OBS-008): when no rate is configured at all we do not know whether this model
     -- is billed per token or per GPU-second, and guessing one would be a fact we invented.
     cost_model          TEXT,
-    prompt_tokens       INTEGER NOT NULL DEFAULT 0,
-    completion_tokens   INTEGER NOT NULL DEFAULT 0,
+    -- MDL-014: nullable. A provider that reported no usage at all is not a call that consumed nothing,
+    -- and a NOT NULL DEFAULT 0 here recorded a 0-token, $0 call for it -- the same fabricated fact
+    -- OBS-008 removed from cost_usd, on the two counters everything reads.
+    prompt_tokens       INTEGER,
+    completion_tokens   INTEGER,
     -- OBS-008: nullable on purpose. NULL means "nobody computed this" — a compute_based provider
     -- billed by GPU-second, or a model with no configured rate. 0 means "computed, and it was
     -- zero". A NOT NULL DEFAULT 0 here made those the same fact, and TotalsByModel summed them
@@ -133,6 +136,14 @@ ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS idempotent_replay_of TE
 -- because "it served what we asked" and "it never said" are different facts.
 ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS served_model TEXT;
 ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS served_by_instance TEXT;
+
+-- MDL-014: additive migration for deploys created before the columns above were nullable. Dropping
+-- NOT NULL is safe on existing rows; what it cannot do is tell which of the existing zeros were
+-- measured and which were fabricated, so the history stays ambiguous and only new rows are honest.
+ALTER TABLE model_gateway_costs ALTER COLUMN prompt_tokens DROP DEFAULT;
+ALTER TABLE model_gateway_costs ALTER COLUMN prompt_tokens DROP NOT NULL;
+ALTER TABLE model_gateway_costs ALTER COLUMN completion_tokens DROP DEFAULT;
+ALTER TABLE model_gateway_costs ALTER COLUMN completion_tokens DROP NOT NULL;
 
 -- MDL-002 (quality-aware routing): the current real eval score per (provider, model) — a real
 -- eval suite (e.g. provider_conformance) reports here; the Model Gateway consults it to skip a

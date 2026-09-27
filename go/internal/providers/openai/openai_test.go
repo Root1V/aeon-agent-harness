@@ -30,8 +30,8 @@ func newFakeOpenAIServer(t *testing.T, wantAPIKey string) (*httptest.Server, *ma
 		resp.Choices = []openAIChoice{{Index: 0, FinishReason: "stop"}}
 		resp.Choices[0].Message.Role = "assistant"
 		resp.Choices[0].Message.Content = "pong"
-		resp.Usage.PromptTokens = 5
-		resp.Usage.CompletionTokens = 2
+		resp.Usage.PromptTokens = tok(5)
+		resp.Usage.CompletionTokens = tok(2)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
@@ -91,3 +91,8 @@ func TestOpenAIAdapterCachingAndCostModel(t *testing.T) {
 		t.Fatalf("CostModel() = %q", a.CostModel())
 	}
 }
+
+// tok returns a pointer to n. Since MDL-014 the wire counters are pointers, so a test that sets one is
+// saying "the provider reported this" — and one that leaves it nil is saying "it reported nothing",
+// which is now a case worth writing on purpose.
+func tok(n int) *int { return &n }

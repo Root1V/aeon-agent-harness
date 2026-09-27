@@ -13,9 +13,11 @@ type CostEntry struct {
 	Model    string
 	// CostModel is "token_based" | "compute_based", and nil when no rate is configured for this
 	// (provider, model) at all — we then do not know how it bills, and naming one would invent it.
-	CostModel        *string
-	PromptTokens     int
-	CompletionTokens int
+	CostModel *string
+	// PromptTokens/CompletionTokens are nil when the provider reported no usage (MDL-014). Stored as
+	// NULL rather than 0, because a call whose consumption nobody measured is not a free call.
+	PromptTokens     *int
+	CompletionTokens *int
 	// CostUSD is nil when nobody computed a cost: a compute_based provider billed by GPU-second, or
 	// a model with no configured rate. A 0 here must mean "computed, and it was zero" (OBS-008).
 	CostUSD          *float64
@@ -144,10 +146,13 @@ func (l *FinOpsLedger) TotalsByModel(ctx context.Context) ([]ModelTotal, error) 
 
 // LedgerRow is one recorded cost event, read back for reconciliation (OBS-007).
 type LedgerRow struct {
-	Provider           string
-	Model              string
-	PromptTokens       int
-	CompletionTokens   int
+	Provider string
+	Model    string
+	// Nullable on the way OUT too (MDL-014), not just on the way in. Scanning a NULL into an int would
+	// turn it back into 0 on every read and undo the whole feature at the last step — the fabricated
+	// zero would simply move from the write path to the read path.
+	PromptTokens       *int
+	CompletionTokens   *int
 	CostUSD            *float64
 	ProviderRequestID  string
 	IdempotentReplayOf string

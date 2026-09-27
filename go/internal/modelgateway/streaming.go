@@ -133,22 +133,28 @@ func decideAsSingleChunk(
 	}
 	if usage, ok := output["usage"].(map[string]any); ok {
 		chunk.Usage = &providers.Usage{
-			PromptTokens:     intFrom(usage["prompt_tokens"]),
-			CompletionTokens: intFrom(usage["completion_tokens"]),
+			PromptTokens:     optionalIntFrom(usage["prompt_tokens"]),
+			CompletionTokens: optionalIntFrom(usage["completion_tokens"]),
 		}
 	}
 	return yield(chunk)
 }
 
-// intFrom reads a token count out of a decoded JSON map, where numbers arrive as float64 unless the
-// adapter built the map with real ints (both happen — see providers.NormalizedChatResponse).
-func intFrom(v any) int {
+// optionalIntFrom reads a token count out of a decoded JSON map, where numbers arrive as float64 unless
+// the adapter built the map with real ints (both happen — see providers.NormalizedChatResponse).
+//
+// It returns nil for an absent key, and that replaced a `default: return 0` which was MDL-014's defect
+// in miniature: a counter the provider never reported came out of here as a measured zero, and the
+// caller had no way to tell. NormalizedChatResponse now OMITS a counter it was not given, so absence is
+// the normal case here rather than an oddity.
+func optionalIntFrom(v any) *int {
 	switch n := v.(type) {
 	case int:
-		return n
+		return &n
 	case float64:
-		return int(n)
+		i := int(n)
+		return &i
 	default:
-		return 0
+		return nil
 	}
 }

@@ -151,10 +151,10 @@ func TestCostLedgerDistinguishesUnpricedFromFree(t *testing.T) {
 
 		priced := 0.30
 		tokenBased := "token_based"
-		if err := ledger.Record(ctx, store.CostEntry{Provider: provider, Model: model, CostModel: &tokenBased, PromptTokens: 10, CompletionTokens: 5, CostUSD: &priced}); err != nil {
+		if err := ledger.Record(ctx, store.CostEntry{Provider: provider, Model: model, CostModel: &tokenBased, PromptTokens: tokens(10), CompletionTokens: tokens(5), CostUSD: &priced}); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
-		if err := ledger.Record(ctx, store.CostEntry{Provider: provider, Model: model, CostModel: &tokenBased, PromptTokens: 10, CompletionTokens: 5}); err != nil {
+		if err := ledger.Record(ctx, store.CostEntry{Provider: provider, Model: model, CostModel: &tokenBased, PromptTokens: tokens(10), CompletionTokens: tokens(5)}); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
 
@@ -175,7 +175,7 @@ func TestCostLedgerDistinguishesUnpricedFromFree(t *testing.T) {
 		computeBased := "compute_based"
 		if err := ledger.Record(ctx, store.CostEntry{
 			Provider: "prometheus_inference", Model: "dash-" + randSuffix(t),
-			CostModel: &computeBased, PromptTokens: 100, CompletionTokens: 20,
+			CostModel: &computeBased, PromptTokens: tokens(100), CompletionTokens: tokens(20),
 		}); err != nil {
 			t.Fatalf("Record: %v", err)
 		}
@@ -233,3 +233,8 @@ func findCostRow(t *testing.T, ledger *store.FinOpsLedger, provider, model strin
 	t.Fatalf("no ledger row for (%s, %s) — the call was not recorded at all", provider, model)
 	return store.ModelTotal{}
 }
+
+// tokens returns a pointer to n. The counters are nullable since MDL-014: a test that sets one says the
+// provider reported it, and nil says it reported nothing — which is now a distinct case, not an
+// inconvenience.
+func tokens(n int) *int { return &n }

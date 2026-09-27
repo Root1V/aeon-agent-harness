@@ -136,13 +136,21 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 
 	replayOf := stringField(result.Output, "idempotent_replay_of")
 	if replayOf != "" {
-		promptTokens, completionTokens = 0, 0
+		// Explicit pointers to zero, not nil: a replay really did consume nothing new, and that is a
+		// MEASURED zero. nil here would say "nobody knows", which would be false — we know exactly.
+		zeroTokens := 0
+		promptTokens, completionTokens = &zeroTokens, &zeroTokens
 		if h.Ledger != nil {
 			zero := 0.0
 			entry := store.CostEntry{
 				Provider: result.ProviderUsed, Model: result.Model,
 				CostModel: costModelName(h.Pricing, result.ProviderUsed, result.Model),
-				CostUSD:   &zero, RunID: runID, AgentManifestRef: agentManifestRef,
+				// Explicit zeros, not left nil (MDL-014 + OBS-006): a replay consumed nothing new and we
+				// know that exactly. nil here would say "nobody measured", which is false — and it would
+				// also make the reconciliation report every replay as tokens_unmeasured.
+				PromptTokens:     promptTokens,
+				CompletionTokens: completionTokens,
+				CostUSD:          &zero, RunID: runID, AgentManifestRef: agentManifestRef,
 				ProviderRequestID:  stringField(result.Output, "provider_request_id"),
 				IdempotentReplayOf: replayOf,
 				ServedModel:        servedModel,
@@ -165,7 +173,9 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 		if rate, ok := h.Pricing.Rate(result.ProviderUsed, result.Model); ok {
 			costModel = &rate.CostModel
 			response["cost_model"] = rate.CostModel
-			if usd, priced := h.Pricing.CostUSD(result.ProviderUsed, result.Model, promptTokens, completionTokens); priced {
+			// Unpriced when either counter is missing: a price computed from one known half would be a
+			// smaller number presented as the whole bill.
+			if usd, priced := h.Pricing.CostUSD(result.ProviderUsed, result.Model, tokensOrZero(promptTokens), tokensOrZero(completionTokens)); priced && promptTokens != nil && completionTokens != nil {
 				costUSD = &usd
 				response["cost_usd"] = usd
 			}
@@ -204,9 +214,21 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 // tolerating either real Go ints (the in-process case, providers.NormalizedChatResponse's own
 // return type) or float64 (were this ever JSON-decoded first) — defensive, not a sign either shape
 // is expected in practice.
-func usageTokens(output map[string]any) (prompt, completion int) {
+func usageTokens(output map[string]any) (prompt, completion *int) {
 	usage, _ := output["usage"].(map[string]any)
-	return toInt(usage["prompt_tokens"]), toInt(usage["completion_tokens"])
+	return optionalInt(usage["prompt_tokens"]), optionalInt(usage["completion_tokens"])
+}
+
+// tokensOrZero reads a counter for ARITHMETIC, where an absent one has to become something.
+//
+// Only for computing a price: cost = tokens x rate, and with no token count there is no price to
+// compute — CostUSD then comes back unpriced (OBS-008), which is the honest outcome. This must never be
+// used for what gets RECORDED; that is the whole of MDL-014.
+func tokensOrZero(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 // usageCacheTokens reads MDL-012's cache counters, preserving the difference between a provider

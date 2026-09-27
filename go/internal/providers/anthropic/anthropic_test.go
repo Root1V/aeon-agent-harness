@@ -39,8 +39,8 @@ func newFakeAnthropicServer(t *testing.T, wantAPIKey string) (*httptest.Server, 
 			Content:    []anthropicContentBlock{{Type: "text", Text: "pong"}},
 			StopReason: "end_turn",
 		}
-		resp.Usage.InputTokens = 10
-		resp.Usage.OutputTokens = 3
+		resp.Usage.InputTokens = tok(10)
+		resp.Usage.OutputTokens = tok(3)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
@@ -132,3 +132,8 @@ func TestAnthropicAdapterCachingAndCostModel(t *testing.T) {
 		t.Fatalf("CostModel() = %q", a.CostModel())
 	}
 }
+
+// tok returns a pointer to n. Since MDL-014 the wire counters are pointers, so a test that sets one is
+// saying "the provider reported this" — and one that leaves it nil is saying "it reported nothing",
+// which is now a case worth writing on purpose.
+func tok(n int) *int { return &n }

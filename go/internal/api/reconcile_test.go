@@ -182,7 +182,7 @@ func TestLedgerTotalsReconcileWithPlatformUsage(t *testing.T) {
 
 		report, err := finops.Reconcile(ctx, source, []finops.LedgerRow{{
 			Provider: prometheusinference.Name, Model: usage.Model,
-			PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens,
+			PromptTokens: tokens(usage.PromptTokens), CompletionTokens: tokens(usage.CompletionTokens),
 			CostUSD: usage.CostUSD, ProviderRequestID: usage.RequestID,
 		}})
 		if err != nil {
@@ -202,7 +202,7 @@ func TestLedgerTotalsReconcileWithPlatformUsage(t *testing.T) {
 		requestID := freshRequestID(t, client, model)
 		report, err := finops.Reconcile(ctx, source, []finops.LedgerRow{{
 			Provider: prometheusinference.Name, Model: model,
-			PromptTokens: 0, CompletionTokens: 0,
+			PromptTokens: tokens(0), CompletionTokens: tokens(0), // measured zero: what a compute_based row looked like
 			CostUSD:           nil, // what a compute_based row looks like in our ledger
 			ProviderRequestID: requestID,
 		}})

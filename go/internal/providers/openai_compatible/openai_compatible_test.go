@@ -27,8 +27,8 @@ func newFakeServer(t *testing.T, requireAuth bool) *httptest.Server {
 		resp.Choices = []openAICompatibleChoice{{Index: 0, FinishReason: "stop"}}
 		resp.Choices[0].Message.Role = "assistant"
 		resp.Choices[0].Message.Content = "pong"
-		resp.Usage.PromptTokens = 4
-		resp.Usage.CompletionTokens = 1
+		resp.Usage.PromptTokens = tokPtr(4)
+		resp.Usage.CompletionTokens = tokPtr(1)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
@@ -86,3 +86,8 @@ func TestOpenAICompatibleAdapterCachingAndCostModel(t *testing.T) {
 		t.Fatalf("CostModel() = %q", a.CostModel())
 	}
 }
+
+// tokPtr returns a pointer to n. The wire counters are pointers since MDL-014, so setting one says "the
+// upstream reported this" and leaving it nil says "it reported nothing" — a case the corpus now covers
+// on purpose rather than by accident.
+func tokPtr(n int) *int { return &n }

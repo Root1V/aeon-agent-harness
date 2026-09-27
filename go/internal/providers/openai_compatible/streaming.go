@@ -33,8 +33,12 @@ type streamChunk struct {
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage *struct {
-		PromptTokens            int `json:"prompt_tokens"`
-		CompletionTokens        int `json:"completion_tokens"`
+		// Pointers inside an already-pointer Usage (MDL-014). Two levels, two different facts: the outer
+		// nil means this chunk carried no usage at all, the inner nil means the usage object carried the
+		// counter's key but not its value — which a streaming upstream really does, since it emits usage
+		// only on the final chunk and only when asked.
+		PromptTokens            *int `json:"prompt_tokens"`
+		CompletionTokens        *int `json:"completion_tokens"`
 		CompletionTokensDetails struct {
 			ReasoningTokens *int `json:"reasoning_tokens"`
 		} `json:"completion_tokens_details"`

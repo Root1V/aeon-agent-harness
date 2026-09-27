@@ -32,10 +32,14 @@ type UsageSource interface {
 
 // LedgerRow is one call as WE account for it.
 type LedgerRow struct {
-	Provider          string
-	Model             string
-	PromptTokens      int
-	CompletionTokens  int
+	Provider string
+	Model    string
+	// Nullable since MDL-014: nil means WE recorded no token count, which against a platform row that
+	// exists precisely because it was billed is itself a divergence worth naming — we could not measure
+	// what they charged for. Comparing nil as 0 would report it as "0 vs N", a wrong number instead of a
+	// missing one.
+	PromptTokens      *int
+	CompletionTokens  *int
 	CostUSD           *float64
 	ProviderRequestID string
 	// IdempotentReplayOf names the generation that was billed, when this row is a replay (OBS-006).
@@ -46,7 +50,7 @@ type LedgerRow struct {
 // only a message, so a caller can act on a token mismatch differently from an unpriced row.
 type Divergence struct {
 	RequestID string
-	Kind      string // "tokens" | "cost" | "model" | "self_inconsistent" | "unpriced_here" | "unpriced_there" | "missing" | "replay_billed"
+	Kind      string // "tokens" | "cost" | "model" | "self_inconsistent" | "unpriced_here" | "unpriced_there" | "missing" | "replay_billed" | "tokens_unmeasured"
 	Detail    string
 }
 
@@ -127,11 +131,21 @@ func Reconcile(ctx context.Context, src UsageSource, rows []LedgerRow) (*Report,
 			})
 		}
 
-		if row.PromptTokens != platform.PromptTokens || row.CompletionTokens != platform.CompletionTokens {
+		switch {
+		case row.PromptTokens == nil || row.CompletionTokens == nil:
+			// Distinguished from a mismatch on purpose: "we never measured this" and "we measured
+			// something different" need different conversations, and folding them together would report
+			// an absence as a wrong number.
+			report.Divergences = append(report.Divergences, Divergence{
+				RequestID: row.ProviderRequestID, Kind: "tokens_unmeasured",
+				Detail: fmt.Sprintf("we recorded no token count (prompt=%v completion=%v); the platform billed %d / %d",
+					row.PromptTokens, row.CompletionTokens, platform.PromptTokens, platform.CompletionTokens),
+			})
+		case *row.PromptTokens != platform.PromptTokens || *row.CompletionTokens != platform.CompletionTokens:
 			report.Divergences = append(report.Divergences, Divergence{
 				RequestID: row.ProviderRequestID, Kind: "tokens",
 				Detail: fmt.Sprintf("we recorded %d prompt / %d completion, the platform %d / %d",
-					row.PromptTokens, row.CompletionTokens, platform.PromptTokens, platform.CompletionTokens),
+					*row.PromptTokens, *row.CompletionTokens, platform.PromptTokens, platform.CompletionTokens),
 			})
 		}
 

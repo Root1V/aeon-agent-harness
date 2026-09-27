@@ -78,8 +78,9 @@ type anthropicResponse struct {
 	Content    []anthropicContentBlock `json:"content"`
 	StopReason string                  `json:"stop_reason"`
 	Usage      struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		// Pointers (MDL-014): nil means the key was absent, which is not a call that consumed nothing.
+		InputTokens  *int `json:"input_tokens"`
+		OutputTokens *int `json:"output_tokens"`
 		// Pointers, not ints: an absent field means this response carried no cache accounting at
 		// all, which is a different fact from "nothing was cached" and must stay that way as far as
 		// the FinOps ledger (MDL-012).
@@ -204,8 +205,15 @@ func anthropicUsage(parsed anthropicResponse) providers.Usage {
 		CacheReadTokens:  parsed.Usage.CacheReadInputTokens,
 		CacheWriteTokens: parsed.Usage.CacheCreationInputTokens,
 	}
-	if parsed.Usage.CacheReadInputTokens != nil {
-		u.PromptTokens += *parsed.Usage.CacheReadInputTokens
+	// The inclusive convention agreed with both other teams: PromptTokens is the TOTAL, cache reads
+	// included. With MDL-014's pointers that addition needs a guard on BOTH sides, and the missing-base
+	// case is the interesting one: if the provider reported cache reads but no input count, there is no
+	// inclusive total to compute. Adding one to nothing would invent a number smaller than the truth and
+	// hand it over as the whole figure — so the base stays nil and the cache read stays visible on its
+	// own, which is the honest pair.
+	if parsed.Usage.InputTokens != nil && parsed.Usage.CacheReadInputTokens != nil {
+		inclusive := *parsed.Usage.InputTokens + *parsed.Usage.CacheReadInputTokens
+		u.PromptTokens = &inclusive
 	}
 	return u
 }

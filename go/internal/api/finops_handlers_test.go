@@ -20,7 +20,7 @@ type finOpsFakeProvider struct {
 
 func (f *finOpsFakeProvider) Decide(ctx context.Context, renderedContext map[string]any) (map[string]any, error) {
 	model, _ := renderedContext["model"].(string)
-	return providers.NormalizedChatResponse(model, "hi", "stop", 1000, 500), nil
+	return providers.NormalizedChatResponse(model, "hi", "stop", tokens(1000), tokens(500)), nil
 }
 func (f *finOpsFakeProvider) CachingCapability() string { return "none" }
 func (f *finOpsFakeProvider) CostModel() string         { return f.costModel }

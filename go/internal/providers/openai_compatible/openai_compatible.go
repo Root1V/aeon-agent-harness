@@ -61,8 +61,11 @@ type openAICompatibleResponse struct {
 	Model   string                   `json:"model"`
 	Choices []openAICompatibleChoice `json:"choices"`
 	Usage   struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
+		// Pointers (MDL-014): nil means the key was absent — including when the whole `usage` object is,
+		// since then nothing sets them. That also covers the partial case, a usage object missing one
+		// counter, which a pointer on the object alone would not.
+		PromptTokens     *int `json:"prompt_tokens"`
+		CompletionTokens *int `json:"completion_tokens"`
 		// OpenAI's shape for the reasoning breakdown, which some servers mirror. A pointer so that
 		// "not reported" stays distinct from "reasoned for zero tokens" all the way to the ledger.
 		CompletionTokensDetails struct {

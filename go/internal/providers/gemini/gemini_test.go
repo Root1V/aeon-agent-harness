@@ -38,8 +38,8 @@ func newFakeGeminiServer(t *testing.T, wantAPIKey string) (*httptest.Server, *ge
 		}{
 			{Content: geminiContent{Role: "model", Parts: []geminiPart{{Text: "pong"}}}, FinishReason: "STOP"},
 		}
-		resp.UsageMetadata.PromptTokenCount = 8
-		resp.UsageMetadata.CandidatesTokenCount = 1
+		resp.UsageMetadata.PromptTokenCount = tok(8)
+		resp.UsageMetadata.CandidatesTokenCount = tok(1)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
@@ -147,3 +147,8 @@ func TestGeminiAdapterCachingAndCostModel(t *testing.T) {
 		t.Fatalf("CostModel() = %q", a.CostModel())
 	}
 }
+
+// tok returns a pointer to n. Since MDL-014 the wire counters are pointers, so a test that sets one is
+// saying "the provider reported this" — and one that leaves it nil is saying "it reported nothing",
+// which is now a case worth writing on purpose.
+func tok(n int) *int { return &n }
