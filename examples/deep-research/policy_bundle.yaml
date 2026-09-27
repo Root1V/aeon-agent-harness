@@ -24,8 +24,13 @@ policies:
         resource is Tool &&
         ["search.web", "search.rag", "repository.read", "artifact.read"].contains(resource.name)
       };
+  # INT-010: `terminate_run` and not `deny_step`, and this is the policy the distinction was made for.
+  # An agent asking for a shell is not making a recoverable mistake it can be told about — returning the
+  # refusal as evidence would invite it to try shell.sh, then bash, then sh, which is Synaptum's "infinite
+  # retry against a closed door". Ending the run is the honest response to an agent trying to get a shell.
   - id: forbid-shell-for-everyone
     effect: forbid
+    disposition: terminate_run
     cedarSource: |
       forbid(
         principal,
@@ -34,8 +39,13 @@ policies:
       ) when {
         resource.name like "shell.*"
       };
+  # `deny_step` here, declared rather than left to be derived, because the two policies above and below
+  # deserve to differ VISIBLY: a write outside the perimeter is something an agent may reasonably attempt
+  # by mistake, and the refusal going back as evidence is what lets the model pick the governed tool
+  # instead. Same effect as omitting it, and a reader can see somebody decided.
   - id: forbid-external-write-for-everyone
     effect: forbid
+    disposition: deny_step
     cedarSource: |
       forbid(
         principal,
@@ -63,4 +73,24 @@ policies:
       ) when {
         resource is RemoteAgent &&
         ["research-partner"].contains(resource.name)
+      };
+
+  # INT-010: the disposition that is NOT a refusal. artifact.write is permitted, but only once a person has
+  # said yes — and the point of it living here is that GOVERNANCE decides when a person is needed, not the
+  # loop. Synaptum's ApprovalStep is what their loop emits as a consequence of receiving this.
+  #
+  # Note the seam's own rule at work: this policy PERMITS, and the gateway still answers allowed=false,
+  # because `allowed` means "may execute now". Every call site that only reads that field refuses, which is
+  # the direction a seam should fail in.
+  - id: approve-artifact-write
+    effect: permit
+    disposition: require_approval
+    cedarSource: |
+      permit(
+        principal == Agent::"deep-research-general@0.1.0",
+        action,
+        resource
+      ) when {
+        resource is Tool &&
+        resource.name == "artifact.write"
       };

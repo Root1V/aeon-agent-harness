@@ -18,7 +18,12 @@
         "properties": {
           "id": { "type": "string" },
           "effect": { "type": "string", "enum": ["permit", "forbid"] },
-          "cedarSource": { "type": "string", "description": "Raw Cedar policy text." }
+          "cedarSource": { "type": "string", "description": "Raw Cedar policy text." },
+          "disposition": {
+            "type": "string",
+            "enum": ["allow", "deny_step", "terminate_run", "require_approval"],
+            "description": "INT-010: what the loop should DO when this policy determines the decision, using Synaptum's vocabulary (they own it — it is their loop that acts on it). Declared here because Cedar is binary and these are governance statements: 'refuse this step' vs 'end the run', and 'allowed' vs 'allowed once a person says yes'. Optional; omitted is DERIVED from effect (permit->allow, forbid->deny_step), which is faithful rather than assumed — deny_step is exactly what a forbid says, while terminate_run asserts more and must be opted into. A forbid cannot declare allow/require_approval and a permit cannot declare deny_step/terminate_run; either contradiction is refused when the bundle loads."
+          }
         }
       }
     }

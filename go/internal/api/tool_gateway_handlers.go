@@ -98,21 +98,44 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 	decision := h.Policy.IsAllowed(body.AgentManifestRef, body.ToolName)
 	if !decision.Allowed {
 		span.SetStatus(codes.Error, "denied by policy")
+		span.SetAttributes(
+			attribute.String("aeon.policy.disposition", string(decision.Disposition)),
+			attribute.Bool("aeon.policy.disposition_declared", decision.DispositionDeclared),
+		)
+
 		// Journalled BEFORE the response, on purpose: after it, a crash in this process between writing
 		// the 403 and writing the record would leave the step looking unfinished, which is the exact
 		// state INT-011 exists to eliminate. The order costs one durable write on a path that is not
 		// executing anything anyway.
-		journal := h.journalDenial(r.Context(), body, checkpoint.OutcomeDeniedByPolicy, denialReason(decision))
-		span.SetAttributes(attribute.String("aeon.step.outcome", string(checkpoint.OutcomeDeniedByPolicy)))
+		//
+		// INT-010 changes WHICH outcome, not the ordering: a require_approval step is not denied, it is
+		// waiting, so nothing is journalled here and the approval's own outcome is written later by the
+		// harness when a person decides. Recording a denial now would log a refusal nobody made, and the
+		// run would read as closed while it is suspended.
+		outcome, isDenial := dispositionOutcome(decision.Disposition)
+		journal := denialResult{Reason: "not a denial: the step is waiting for a person, and its outcome is journalled when the approval is decided"}
+		if isDenial {
+			journal = h.journalDenial(r.Context(), body, outcome, denialReason(decision))
+			span.SetAttributes(attribute.String("aeon.step.outcome", string(outcome)))
+		}
 		span.SetAttributes(attribute.Bool("aeon.step.outcome_journalled", journal.Journalled))
+
 		writeJSON(w, http.StatusForbidden, map[string]any{
 			"allowed": false,
 			"reason":  "denied by policy",
 			// The outcome is named in the response too, so a caller that DOES keep its own journal records
-			// the same fact under the same name instead of inventing one.
-			"outcome":    checkpoint.OutcomeDeniedByPolicy,
+			// the same fact under the same name instead of inventing one. Absent for require_approval,
+			// because there is no outcome yet — a person has not decided.
+			"outcome":    outcomeOrEmpty(outcome),
 			"journalled": journal.Journalled,
 			"journal":    journal,
+
+			// INT-010: WHAT TO DO, not merely that it was refused. A boolean tells the loop the call failed
+			// and leaves it to choose between trying something else, ending the run, and asking a person —
+			// three different behaviours that `allowed: false` cannot distinguish.
+			"disposition":          decision.Disposition,
+			"disposition_declared": decision.DispositionDeclared,
+			"policy_id":            decision.PolicyID,
 		})
 		return
 	}
@@ -284,4 +307,26 @@ func denialReason(decision policy.Decision) string {
 		return "denied by policy " + decision.PolicyID
 	}
 	return "denied by policy: no policy in the bundle permits this tool for this agent (Cedar is default-deny)"
+}
+
+// dispositionOutcome maps a policy disposition to the journal outcome it produces (INT-010 x INT-011).
+//
+// require_approval maps to NOTHING, and that is the case worth stating: the step is not denied, it is
+// waiting. Its outcome is written later by the harness, when a person actually decides — see
+// RunControllerHandlers.journalApproval.
+func dispositionOutcome(d policy.Disposition) (checkpoint.Outcome, bool) {
+	switch d {
+	case policy.DispositionDenyStep, policy.DispositionTerminateRun:
+		return checkpoint.OutcomeDeniedByPolicy, true
+	default:
+		return "", false
+	}
+}
+
+// outcomeOrEmpty keeps an absent outcome out of the JSON as "" rather than as a made-up value.
+func outcomeOrEmpty(o checkpoint.Outcome) any {
+	if o == "" {
+		return nil
+	}
+	return o
 }

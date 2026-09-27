@@ -76,7 +76,12 @@ func toolCallHandler(toolName string, eng *policy.Engine, executor *toolexec.Exe
 			return &sdkmcp.CallToolResult{
 				IsError: true,
 				Content: []sdkmcp.Content{&sdkmcp.TextContent{
-					Text: fmt.Sprintf("denied by policy: %s is not permitted for external MCP callers", toolName),
+					// The disposition (INT-010) is in the text because that is the only channel an MCP client
+					// has: the protocol carries a boolean IsError and nowhere to put "refused, but a person
+					// could still approve this". A caller that can only read prose should still be able to
+					// tell "try something else" from "stop".
+					Text: fmt.Sprintf("denied by policy (%s): %s is not permitted for external MCP callers",
+						decision.Disposition, toolName),
 				}},
 			}, nil
 		}

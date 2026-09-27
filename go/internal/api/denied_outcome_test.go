@@ -178,8 +178,13 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 		srv := newDeniedOutcomeGateway(t)
 		runID := newRunID("denied-default")
 
+		// A tool NO policy in the bundle names. It used to be artifact.write, and INT-010 gave that one an
+		// explicit permit with disposition require_approval — at which point it stopped being default-denied
+		// and stopped being journalled at all, because a step waiting for a person has no outcome yet. The
+		// test caught it, which is the behaviour wanted; the fixture just has to name something the bundle
+		// genuinely does not mention.
 		status, _ := postExecuteForRun(t, srv, toolCallRequest{
-			AgentManifestRef: deniedOutcomeAgent, ToolName: "artifact.write",
+			AgentManifestRef: deniedOutcomeAgent, ToolName: "nothing.in.the.bundle.names.this",
 			Args: map[string]any{}, RunID: runID, StepID: "n0",
 		})
 		if status != http.StatusForbidden {
