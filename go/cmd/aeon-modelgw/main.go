@@ -25,6 +25,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -67,6 +68,8 @@ func main() {
 	gw := modelgateway.New()
 	registered := registerProvidersFromEnv(gw, bundle)
 	log.Printf("aeon-modelgw: registered providers: %v", registered)
+
+	verifyDeclaredModalities(bundle)
 
 	var ledger *store.FinOpsLedger
 	var qualityScores *store.QualityScoreStore
@@ -219,4 +222,67 @@ func prometheusScope(bundle modelgateway.ModelPolicyBundleDoc) string {
 	scope := strings.Join(scopes, " ")
 	log.Printf("aeon-modelgw: Prometheus scope derived from the bundle (%d model(s)): %q", len(seen), scope)
 	return scope
+}
+
+// verifyDeclaredModalities is MDL-013: checks the bundle's declarations against the provider's own
+// catalog, once at startup.
+//
+// Once and not per call, because the catalog is nearly free — measured on the real deployment: 2030
+// bytes, about a millisecond, and NO authentication. And at startup rather than lazily, because a
+// contradiction is a configuration error and the moment to learn about a configuration error is when
+// the configuration is loaded.
+//
+// THE PART THAT MATTERS IS WHAT HAPPENS WHEN THE CATALOG CANNOT BE READ, and it is three states, not
+// two:
+//
+//   - verified and consistent   -> nothing to say
+//   - verified and CONTRADICTED -> say so loudly, per contradiction
+//   - NOT VERIFIED              -> say THAT, and start anyway
+//
+// The third is why this does not abort. Refusing to start when the platform is briefly unreachable
+// would let a transient blip take down a gateway that can still route to every other provider — worse
+// than the problem MDL-013 solves. And silently skipping would be the other failure, the guard that
+// passes for the wrong reason, which this session has already been caught by three times. So the
+// absence of verification is itself reported.
+//
+// It does not remove candidates today, deliberately: a contradiction is reported, not enforced. Making
+// it fatal is a separate decision about an operator's deployment, and taking it inside a logging
+// function would be deciding it by accident.
+func verifyDeclaredModalities(bundle modelgateway.ModelPolicyBundleDoc) {
+	clientID := os.Getenv("PROMETHEUS_CLIENT_ID")
+	if clientID == "" {
+		return // no Prometheus candidates can be in play; nothing to verify against
+	}
+	client := &prometheusinference.Client{
+		GatewayURL:   os.Getenv("PROMETHEUS_GATEWAY_URL"),
+		ClientID:     clientID,
+		ClientSecret: os.Getenv("PROMETHEUS_CLIENT_SECRET"),
+		Scope:        prometheusScope(bundle),
+	}
+	defer client.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	models, err := client.ListModels(ctx)
+	if err != nil {
+		log.Printf("aeon-modelgw: MDL-013 modality verification DID NOT RUN (%v) — every prometheus_inference "+
+			"declaration in the bundle is unverified, which is not the same as verified-correct", err)
+		return
+	}
+
+	catalog := make([]modelgateway.CatalogEntry, 0, len(models))
+	for _, m := range models {
+		catalog = append(catalog, modelgateway.CatalogEntry{Model: m.ID, Modality: m.Modality})
+	}
+
+	contradictions := modelgateway.VerifyModalitiesAgainstCatalog(bundle, prometheusinference.Name, catalog)
+	if len(contradictions) == 0 {
+		log.Printf("aeon-modelgw: MDL-013 modality verification passed against a catalog of %d model(s)", len(catalog))
+		return
+	}
+	for _, c := range contradictions {
+		log.Printf("aeon-modelgw: MDL-013 CONTRADICTION: %s", c.Error())
+	}
+	log.Printf("aeon-modelgw: %d bundle declaration(s) contradict the provider's catalog — routing to them will fail at the first call, with an error from the provider about a model this bundle asserted was fine", len(contradictions))
 }

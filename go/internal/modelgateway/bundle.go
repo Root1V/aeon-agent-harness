@@ -237,3 +237,74 @@ func describeException(exception *LocalInferenceException) string {
 	}
 	return fmt.Sprintf(" (the exception declared for environment %q allows %v)", exception.Environment, exception.AllowedProviders)
 }
+
+// CatalogEntry is one model as the PROVIDER describes it — its own answer to what a model is, as
+// opposed to the bundle's declaration of it.
+type CatalogEntry struct {
+	Model    string
+	Modality string
+}
+
+// ModalityContradiction is a declaration the provider's catalog disagrees with (MDL-013).
+//
+// Actual == "" means the model is not in the catalog at all, which is a contradiction of a different
+// kind and worth distinguishing: a wrong modality is a mistake in the bundle, an absent model is a
+// bundle that names something that does not exist — or a model that was retired underneath us.
+type ModalityContradiction struct {
+	Profile  string
+	Provider string
+	Model    string
+	Declared string
+	Actual   string
+}
+
+// Error renders a contradiction for a log line or a test failure.
+func (c ModalityContradiction) Error() string {
+	if c.Actual == "" {
+		return fmt.Sprintf("profile %q declares %s/%s, which the provider's catalog does not list at all",
+			c.Profile, c.Provider, c.Model)
+	}
+	return fmt.Sprintf("profile %q declares %s/%s as modality %q, but the provider's catalog says %q",
+		c.Profile, c.Provider, c.Model, c.Declared, c.Actual)
+}
+
+// VerifyModalitiesAgainstCatalog is MDL-013: checks the bundle's declarations against what the provider
+// says its models actually are, for one provider.
+//
+// This is a DIFFERENT check from MDL-011, and the difference is the whole point. MDL-011 verifies that
+// a declared modality is usable on the endpoint a profile will call — that what the operator WROTE is
+// coherent. This verifies that what the operator wrote is TRUE. A bundle can declare an embeddings
+// model as `text`, pass MDL-011 because text is chat-servable, and then fail on the first real call
+// with an error from the provider about a model that cannot chat.
+//
+// A pure function over a catalog snapshot on purpose: the fetching, and the decision about what to do
+// when the catalog cannot be reached, belong to the caller. Mixing them here would make the rule
+// untestable without a network and would bury the unreachable case, which is the one with teeth.
+func VerifyModalitiesAgainstCatalog(doc ModelPolicyBundleDoc, provider string, catalog []CatalogEntry) []ModalityContradiction {
+	actual := make(map[string]string, len(catalog))
+	for _, entry := range catalog {
+		actual[entry.Model] = entry.Modality
+	}
+
+	var out []ModalityContradiction
+	for _, profile := range doc.Profiles {
+		for _, c := range profile.Candidates {
+			if c.Provider != provider {
+				continue
+			}
+			got, listed := actual[c.Model]
+			switch {
+			case !listed:
+				out = append(out, ModalityContradiction{
+					Profile: profile.Profile, Provider: c.Provider, Model: c.Model, Declared: c.Modality,
+				})
+			case got != c.Modality:
+				out = append(out, ModalityContradiction{
+					Profile: profile.Profile, Provider: c.Provider, Model: c.Model,
+					Declared: c.Modality, Actual: got,
+				})
+			}
+		}
+	}
+	return out
+}
