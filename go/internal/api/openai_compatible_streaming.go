@@ -54,6 +54,13 @@ func (h *OpenAICompatibleHandlers) streamChatCompletions(
 			headersSent = true
 		}
 
+		// A pure lifecycle marker (FND-004's stream_start/text_end/...) carries nothing an
+		// OpenAI-compatible client expects, so it is not put on the wire. The events are Aeon's internal
+		// vocabulary and this endpoint's whole purpose is being unsurprising to clients that know only
+		// OpenAI's shape — emitting empty `data:` frames at them would be extending someone else's format.
+		if !chunk.CarriesWireContent() {
+			return nil
+		}
 		if err := writeSSEData(w, streamChunkEnvelope(id, created, chunk)); err != nil {
 			return err
 		}

@@ -30,6 +30,17 @@ type streamChunk struct {
 			// token. A reader that only watches `content` sees nothing at all while a reasoning
 			// model works, which looks identical to a stalled stream.
 			ReasoningContent string `json:"reasoning_content"`
+			// FND-004: tool calls stream as fragments correlated ONLY by index. The name arrives in the
+			// first fragment and the arguments are split across the rest, so matching on anything but the
+			// index would lose every fragment after the first.
+			ToolCalls []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage *struct {
@@ -42,7 +53,99 @@ type streamChunk struct {
 		CompletionTokensDetails struct {
 			ReasoningTokens *int `json:"reasoning_tokens"`
 		} `json:"completion_tokens_details"`
+		PromptTokensDetails struct {
+			CachedTokens *int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
+	// Timings is llama.cpp's accounting, which streams on the final chunk of a Prometheus response and is
+	// the ONLY source of counters there — it emits no usage chunk at all, not even when asked.
+	Timings *struct {
+		CacheN     *int `json:"cache_n"`
+		PromptN    *int `json:"prompt_n"`
+		PredictedN *int `json:"predicted_n"`
+	} `json:"timings"`
+}
+
+// streamPhases tracks which lifecycle phase is open so the adapter can emit the contract's
+// start/delta/end cycle from a wire format that has no such thing.
+//
+// The wire sends deltas and nothing else, so every start and end here is INFERRED from a transition. The
+// one that matters is closing reasoning when a tool call opens rather than when the stream ends: the
+// contract names it, and a consumer watching only deltas cannot see it.
+type streamPhases struct {
+	openText      bool
+	openReasoning bool
+	openToolCall  int // index of the tool call currently open, -1 when none
+	// toolArgs accumulates argument fragments per index. The contract is explicit that these are NOT
+	// valid JSON until the end, so nothing parses them here.
+	toolArgs  map[int]*strings.Builder
+	toolNames map[int]string
+	toolIDs   map[int]string
+	order     []int
+}
+
+func newStreamPhases() *streamPhases {
+	return &streamPhases{
+		openToolCall: -1,
+		toolArgs:     map[int]*strings.Builder{},
+		toolNames:    map[int]string{},
+		toolIDs:      map[int]string{},
+	}
+}
+
+// closeText and closeReasoning emit the end of a phase if one is open.
+func (ph *streamPhases) closeText(yield func(providers.Chunk) error) error {
+	if !ph.openText {
+		return nil
+	}
+	ph.openText = false
+	return yield(providers.Chunk{Event: providers.EventTextEnd})
+}
+
+func (ph *streamPhases) closeReasoning(yield func(providers.Chunk) error) error {
+	if !ph.openReasoning {
+		return nil
+	}
+	ph.openReasoning = false
+	return yield(providers.Chunk{Event: providers.EventReasoningEnd})
+}
+
+// closeToolCall parses the accumulated arguments ONCE and emits the end event carrying the finished call.
+//
+// Once, here, is the whole point: the fragments are not valid JSON until now, so an adapter parsing each
+// delta would produce errors on the happy path. A fragment sequence that never becomes valid JSON is an
+// error rather than an empty object, the same rule the non-streaming path follows.
+func (ph *streamPhases) closeToolCall(yield func(providers.Chunk) error) error {
+	if ph.openToolCall < 0 {
+		return nil
+	}
+	idx := ph.openToolCall
+	ph.openToolCall = -1
+
+	raw := ""
+	if b, ok := ph.toolArgs[idx]; ok {
+		raw = b.String()
+	}
+	args, err := providers.DecodeToolArguments(raw)
+	if err != nil {
+		return fmt.Errorf("openai_compatible: tool call %q (stream index %d): %w", ph.toolNames[idx], idx, err)
+	}
+	return yield(providers.Chunk{
+		Event:         providers.EventToolCallEnd,
+		ToolCallIndex: idx,
+		ToolCall:      &providers.ToolCall{ID: ph.toolIDs[idx], Name: ph.toolNames[idx], Arguments: args},
+	})
+}
+
+// closeAll ends every open phase, in the order the contract's finish event expects.
+func (ph *streamPhases) closeAll(yield func(providers.Chunk) error) error {
+	if err := ph.closeReasoning(yield); err != nil {
+		return err
+	}
+	if err := ph.closeText(yield); err != nil {
+		return err
+	}
+	return ph.closeToolCall(yield)
 }
 
 // DecideStream implements providers.StreamingProvider (INT-008). Cancellation is real and reaches
@@ -88,6 +191,14 @@ func (a *Adapter) DecideStream(ctx context.Context, renderedContext map[string]a
 	// deltas but not for a provider that batches, so raise the ceiling rather than fail mid-stream.
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
+	// stream_start before anything is read, so a consumer has an opening event even for a stream that
+	// turns out to be empty — which the contract says is valid, not an error.
+	if err := yield(providers.Chunk{Event: providers.EventStreamStart}); err != nil {
+		return err
+	}
+	phases := newStreamPhases()
+	var finishReason string
+	var finalUsage *providers.Usage
 	sawFinishReason := false
 	for scanner.Scan() {
 		// Check cancellation between events too, not only inside yield: a provider that stops
@@ -105,6 +216,10 @@ func (a *Adapter) DecideStream(ctx context.Context, renderedContext map[string]a
 			// [DONE] ends the stream, but it is not itself a finish reason. Falling through to the
 			// terminal-chunk logic below is what makes an empty stream — valid per the shared
 			// contract — report a normal stop instead of nothing at all.
+			//
+			// And it stops at the FIRST one: anything after it is not read. The contract requires exactly
+			// one sentinel per response, so a second would be the upstream misbehaving, and continuing to
+			// parse past it is how a reader ends up accepting whatever follows.
 			break
 		}
 
@@ -113,25 +228,96 @@ func (a *Adapter) DecideStream(ctx context.Context, renderedContext map[string]a
 			return fmt.Errorf("openai_compatible: decoding stream chunk: %w", err)
 		}
 
-		chunk := providers.Chunk{Model: parsed.Model}
 		if len(parsed.Choices) > 0 {
-			chunk.Delta = parsed.Choices[0].Delta.Content
-			chunk.ReasoningDelta = parsed.Choices[0].Delta.ReasoningContent
+			delta := parsed.Choices[0].Delta
+
+			// Reasoning first, because it arrives first. Opening its phase closes nothing: nothing can be
+			// open before it.
+			if delta.ReasoningContent != "" {
+				if !phases.openReasoning {
+					phases.openReasoning = true
+					if err := yield(providers.Chunk{Event: providers.EventReasoningStart, Model: parsed.Model}); err != nil {
+						return err
+					}
+				}
+				if err := yield(providers.Chunk{
+					Event: providers.EventReasoningDelta, ReasoningDelta: delta.ReasoningContent, Model: parsed.Model,
+				}); err != nil {
+					return err
+				}
+			}
+
+			// Any answer token CLOSES the reasoning phase. The transition is what the end event means, and
+			// inferring it here is the only place it can be inferred — the wire never says it.
+			if delta.Content != "" {
+				if err := phases.closeReasoning(yield); err != nil {
+					return err
+				}
+				if !phases.openText {
+					phases.openText = true
+					if err := yield(providers.Chunk{Event: providers.EventTextStart, Model: parsed.Model}); err != nil {
+						return err
+					}
+				}
+				if err := yield(providers.Chunk{
+					Event: providers.EventTextDelta, Delta: delta.Content, Model: parsed.Model,
+				}); err != nil {
+					return err
+				}
+			}
+
+			for _, tc := range delta.ToolCalls {
+				// A tool call opening closes the reasoning phase too — the case the contract names
+				// explicitly, because a consumer watching deltas alone cannot see it and would leave the
+				// deliberation on screen for the rest of the turn.
+				if err := phases.closeReasoning(yield); err != nil {
+					return err
+				}
+				if phases.openToolCall != tc.Index {
+					// A different index means the previous call is complete. Closing it here rather than at
+					// the end of the stream is what lets several calls stream interleaved.
+					if err := phases.closeToolCall(yield); err != nil {
+						return err
+					}
+					phases.openToolCall = tc.Index
+					if _, seen := phases.toolArgs[tc.Index]; !seen {
+						phases.toolArgs[tc.Index] = &strings.Builder{}
+						phases.order = append(phases.order, tc.Index)
+					}
+					if err := yield(providers.Chunk{
+						Event: providers.EventToolCallStart, ToolCallIndex: tc.Index, Model: parsed.Model,
+					}); err != nil {
+						return err
+					}
+				}
+				// Name and id arrive in the first fragment only, so they are recorded rather than expected
+				// again; overwriting with a later empty string would erase them.
+				if tc.Function.Name != "" {
+					phases.toolNames[tc.Index] = tc.Function.Name
+				}
+				if tc.ID != "" {
+					phases.toolIDs[tc.Index] = tc.ID
+				}
+				if tc.Function.Arguments != "" {
+					phases.toolArgs[tc.Index].WriteString(tc.Function.Arguments)
+					if err := yield(providers.Chunk{
+						Event: providers.EventToolCallDelta, ToolCallIndex: tc.Index,
+						ToolCallDelta: tc.Function.Arguments, Model: parsed.Model,
+					}); err != nil {
+						return err
+					}
+				}
+			}
+
 			if raw := parsed.Choices[0].FinishReason; raw != "" {
-				chunk.FinishReason = NormalizeFinishReason(raw)
+				finishReason = NormalizeFinishReason(raw)
 				sawFinishReason = true
 			}
 		}
-		if parsed.Usage != nil {
-			chunk.Usage = &providers.Usage{
-				PromptTokens:     parsed.Usage.PromptTokens,
-				CompletionTokens: parsed.Usage.CompletionTokens,
-				ReasoningTokens:  parsed.Usage.CompletionTokensDetails.ReasoningTokens,
-			}
-		}
-
-		if err := yield(chunk); err != nil {
-			return err
+		// Usage is held for the finish event rather than forwarded as it arrives. The contract requires
+		// usage ON `finish`, so a consumer that read the deltas never has to look for it elsewhere.
+		if u := streamUsage(parsed); u != nil {
+			finalUsage = u
 		}
 	}
 
@@ -139,16 +325,59 @@ func (a *Adapter) DecideStream(ctx context.Context, renderedContext map[string]a
 		return fmt.Errorf("openai_compatible: reading stream: %w", err)
 	}
 
-	// A stream that ends without ever stating a reason still ended, and the shared contract says an
-	// absent reason is a normal stop. Emitting it as a terminal chunk keeps the rule in one place:
-	// otherwise every consumer has to decide separately what an empty reason means, and an empty
-	// stream (valid, per the contract) would look indistinguishable from a truncated one.
-	if !sawFinishReason {
-		if err := yield(providers.Chunk{FinishReason: NormalizeFinishReason("")}); err != nil {
-			return err
-		}
+	// Every open phase closes before finish, so `finish` is genuinely last.
+	if err := phases.closeAll(yield); err != nil {
+		return err
 	}
-	return nil
+
+	// A stream that ends without ever stating a reason still ended, and the shared contract says an
+	// absent reason is a normal stop. Emitting it keeps the rule in one place: otherwise every consumer
+	// decides separately what an empty reason means, and an empty stream (valid, per the contract) would
+	// look indistinguishable from a truncated one.
+	if !sawFinishReason {
+		finishReason = NormalizeFinishReason("")
+	}
+	if finalUsage == nil {
+		// No usage and no timings anywhere in the stream. Every counter stays unmeasured and `estimated` is
+		// FALSE rather than nil or true: nothing was derived, so claiming a derivation would be as wrong as
+		// claiming a measurement.
+		finalUsage = &providers.Usage{}
+		f := false
+		finalUsage.Estimated = &f
+	}
+	return yield(providers.Chunk{Event: providers.EventFinish, FinishReason: finishReason, Usage: finalUsage})
+}
+
+// streamUsage applies the contract's precedence to a streamed chunk: a reported usage object wins, and
+// `timings` is only consulted when there is none.
+func streamUsage(parsed streamChunk) *providers.Usage {
+	if parsed.Usage != nil {
+		u := providers.ReportedUsage(providers.Usage{
+			PromptTokens:     parsed.Usage.PromptTokens,
+			CompletionTokens: parsed.Usage.CompletionTokens,
+			ReasoningTokens:  parsed.Usage.CompletionTokensDetails.ReasoningTokens,
+			CacheReadTokens:  parsed.Usage.PromptTokensDetails.CachedTokens,
+		})
+		return &u
+	}
+	if parsed.Timings == nil {
+		return nil
+	}
+	u := providers.Usage{}
+	if parsed.Timings.PromptN != nil || parsed.Timings.CacheN != nil {
+		total := 0
+		if parsed.Timings.PromptN != nil {
+			total += *parsed.Timings.PromptN
+		}
+		if parsed.Timings.CacheN != nil {
+			total += *parsed.Timings.CacheN
+		}
+		u.PromptTokens = &total
+	}
+	u.CacheReadTokens = parsed.Timings.CacheN
+	u.CompletionTokens = parsed.Timings.PredictedN
+	derived := providers.DerivedUsage(u)
+	return &derived
 }
 
 // streamingRequestBody copies renderedContext and turns it into a streaming request, without

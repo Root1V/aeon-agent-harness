@@ -1,7 +1,16 @@
 # Normalización entre proveedores
 
-**Versión:** `0.1-draft` · **Estado:** especificación escrita, **sin implementación que la corra
-todavía** por el lado de Synaptum (`SYN-18`). El gateway de Aeon sí puede correrla hoy.
+**Versión:** `0.1` · **Estado:** **implementada y ejecutada por los dos lados.**
+
+| | |
+|---|---|
+| Synaptum (Python) | `SYN-18` cerrado el 2026-09-11 · adaptador `openai-compatible`, 14 casos del corpus, todos menos uno grabaciones reales (`A-25`) |
+| Aeon (Go) | corrida contra el gateway el 2026-09-11 · 1 pasa, 8 chocan con un hueco de alcance, 3 divergencias — dos arregladas, la tercera es `MDL-014` (`A-41`) |
+
+> **Esta cabecera dijo durante dieciocho días «sin implementación que la corra todavía por el lado de
+> Synaptum», y dejó de ser cierto dos días después de escribirla.** Se quedó atrás y mantuvo una fila
+> de otro equipo en `BLOCKED` esperando un documento que ya existía. Si vuelves a editar este fichero
+> sin tocar esta tabla, la siguiente persona pagará lo mismo.
 
 Bajo `H1 = D` la normalización se **especifica una vez y se implementa por lenguaje**. Este
 documento es esa especificación. Lo que impide que las implementaciones diverjan no es la confianza:

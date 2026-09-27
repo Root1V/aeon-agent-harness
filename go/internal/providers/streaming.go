@@ -20,6 +20,57 @@ type Chunk struct {
 	FinishReason   string
 	Model          string
 	Usage          *Usage
+
+	// Event is the lifecycle marker of the shared normalization contract (FND-004): a uniform
+	// start/delta/end cycle for text, reasoning and tool calls, with `finish` always last.
+	//
+	// Why a lifecycle at all, when the deltas alone carry the content: an END is information the deltas
+	// cannot express. The contract's own example is that the reasoning phase closes when the tool call
+	// OPENS, not when the stream ends — a consumer watching only deltas cannot tell those apart, and one
+	// rendering live output would leave the deliberation on screen for the rest of the turn.
+	//
+	// Empty on a chunk that is not a lifecycle marker, so an adapter that does not emit the cycle keeps
+	// working exactly as before.
+	Event StreamEvent
+	// ToolCallIndex correlates the fragments of one tool call. The wire interleaves several calls and
+	// identifies them ONLY by this index; matching on name would fail because the name arrives in the
+	// first fragment and not the rest.
+	ToolCallIndex int
+	// ToolCallDelta is a raw fragment of the arguments JSON. NOT parseable on its own — the contract is
+	// explicit that an adapter trying to parse each fragment produces errors on the happy path.
+	ToolCallDelta string
+	// ToolCall is set ONLY on EventToolCallEnd, with arguments parsed once, from the accumulated
+	// fragments. One parse per call, at the one moment the text is complete.
+	ToolCall *ToolCall
+}
+
+// StreamEvent names a point in the streaming lifecycle.
+type StreamEvent string
+
+const (
+	EventStreamStart    StreamEvent = "stream_start"
+	EventTextStart      StreamEvent = "text_start"
+	EventTextDelta      StreamEvent = "text_delta"
+	EventTextEnd        StreamEvent = "text_end"
+	EventReasoningStart StreamEvent = "reasoning_start"
+	EventReasoningDelta StreamEvent = "reasoning_delta"
+	EventReasoningEnd   StreamEvent = "reasoning_end"
+	EventToolCallStart  StreamEvent = "tool_call_start"
+	EventToolCallDelta  StreamEvent = "tool_call_delta"
+	EventToolCallEnd    StreamEvent = "tool_call_end"
+	// EventFinish is ALWAYS the last event, carrying the finish reason and the usage. The contract
+	// requires it so a consumer that read the deltas does not have to reassemble the response itself.
+	EventFinish StreamEvent = "finish"
+)
+
+// CarriesWireContent reports whether this chunk has anything an OpenAI-compatible client expects to see.
+//
+// Used by the SSE surface (INT-002) to skip pure lifecycle markers. Without it, adding the lifecycle
+// would have started emitting empty `data:` frames to every existing client of that endpoint — a real
+// change to a surface whose entire purpose is being unsurprising. The events are Aeon's internal
+// vocabulary; the wire format is not ours to extend.
+func (c Chunk) CarriesWireContent() bool {
+	return c.Delta != "" || c.ReasoningDelta != "" || c.FinishReason != "" || c.Usage != nil
 }
 
 // Usage is the token accounting a provider reports.
@@ -56,6 +107,11 @@ type Usage struct {
 	// Pointer for the same three-state reason as the cache counters: a provider that does not break
 	// it out is not a provider that reasoned for free.
 	ReasoningTokens *int
+	// Estimated is the contract's third state about PROVENANCE, not about a value: nil says nothing,
+	// false means the provider reported these counters, and true means they were derived (from
+	// llama.cpp's `timings`, today). A bool would make every unreported usage look reported, which is the
+	// same collapse the counters themselves already avoid.
+	Estimated *bool
 }
 
 // StreamingProvider is an OPTIONAL capability on top of Provider. An adapter that implements it can
