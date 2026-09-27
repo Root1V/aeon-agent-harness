@@ -120,6 +120,20 @@ CREATE INDEX IF NOT EXISTS model_gateway_costs_provider_request_idx
 -- platform's accounting, and reporting it as a divergence would bury the real ones.
 ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS idempotent_replay_of TEXT;
 
+-- OBS-005: what actually served the call, alongside what was asked for.
+--
+-- `model` above stays the ModelPolicyBundle's model and the imputation does NOT change: you pay for
+-- the profile, not the deployment. But the normalized response carries the provider's own answer to
+-- "which model was this", and it can differ -- Axonium reproduced asking for an instance-specific name
+-- and being served another. Two different answers to one question lived in the same call and nothing
+-- recorded either the second one or WHICH DEPLOYMENT answered, which is the question an incident
+-- starts from.
+--
+-- Both nullable: a provider that reports neither leaves them NULL rather than echoing `model` back,
+-- because "it served what we asked" and "it never said" are different facts.
+ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS served_model TEXT;
+ALTER TABLE model_gateway_costs ADD COLUMN IF NOT EXISTS served_by_instance TEXT;
+
 -- MDL-002 (quality-aware routing): the current real eval score per (provider, model) — a real
 -- eval suite (e.g. provider_conformance) reports here; the Model Gateway consults it to skip a
 -- degraded candidate before ever attempting it. One row per (provider, model) — the latest report

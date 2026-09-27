@@ -110,6 +110,30 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 	// audited, and an audit starting from the replay's id would find nothing on either side. And the
 	// zeroes here are a MEASURED zero, not an unknown — no new money was spent, which is why cost_usd
 	// is 0 rather than NULL.
+	// OBS-005: what actually served this call. The imputation below does NOT change — cost is
+	// attributed to the bundle's model, because you pay for the profile and not for the deployment —
+	// but both facts are now recorded and the discrepancy is REPORTED rather than left for a caller to
+	// notice by comparing two fields.
+	//
+	// Measured on this deployment: 6 of 6 calls to qwen3-0.6b were served by the same instance
+	// (qwen3-0-6b-iq4-nl-local-1) and response.model equalled what was asked, so today there is no
+	// discrepancy here. The case that motivates this is Axonium's, against an instance-specific name we
+	// have no scope for — so it is THEIR measurement, not one I reproduced, and the divergence path is
+	// tested against a controlled provider rather than claimed from the platform.
+	//
+	// Worth recording what the stability means: because the instance does NOT vary between calls of one
+	// profile, this stays a RECORDING problem. If it ever varies, the problem becomes routing and
+	// MDL-013 ages with it.
+	servedModel := stringField(result.Output, "model")
+	servedByInstance := stringField(result.Output, "served_by_instance")
+	if servedModel != "" && servedModel != result.Model {
+		response["served_model"] = servedModel
+		response["served_model_differs"] = true
+	}
+	if servedByInstance != "" {
+		response["served_by_instance"] = servedByInstance
+	}
+
 	replayOf := stringField(result.Output, "idempotent_replay_of")
 	if replayOf != "" {
 		promptTokens, completionTokens = 0, 0
@@ -121,6 +145,8 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 				CostUSD:   &zero, RunID: runID, AgentManifestRef: agentManifestRef,
 				ProviderRequestID:  stringField(result.Output, "provider_request_id"),
 				IdempotentReplayOf: replayOf,
+				ServedModel:        servedModel,
+				ServedByInstance:   servedByInstance,
 			}
 			if err := h.Ledger.Record(r.Context(), entry); err != nil {
 				log.Printf("aeon-modelgw: recording FinOps replay event: %v", err)
@@ -165,6 +191,8 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 		// OBS-007: the provider's id travels in the normalized response because it arrives in a
 		// response header and would otherwise be gone by now.
 		ProviderRequestID: stringField(result.Output, "provider_request_id"),
+		ServedModel:       servedModel,
+		ServedByInstance:  servedByInstance,
 		ReasoningTokens:   reasoning,
 	}
 	if err := h.Ledger.Record(r.Context(), entry); err != nil {
