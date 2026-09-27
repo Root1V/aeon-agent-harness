@@ -156,3 +156,61 @@ func (s *RunState) NextSeq() int64 { return s.nextSeq }
 
 // Records returns the journal in sequence order.
 func (s *RunState) Records() []Record { return s.records }
+
+// DurabilityLevel says how a run was journalled, which is the question an incident starts from and the
+// one that used to require reading documentation (OBS-004).
+type DurabilityLevel string
+
+const (
+	// DurabilityPerStep: every step recorded intent before its effect, so for ANY step that crashed we
+	// can tell whether the effect may have landed.
+	DurabilityPerStep DurabilityLevel = "per_step"
+	// DurabilityPerActivity: no step recorded intent, so a crashed step has no record at all and gets
+	// re-run. Safe exactly when every effect is idempotent, and silent when one is not.
+	DurabilityPerActivity DurabilityLevel = "per_activity"
+	// DurabilityMixed: some steps recorded intent and some did not.
+	//
+	// This is the EXPECTED state, not a warning, and saying so matters — A-07 settled on writing two
+	// phases only for steps declared non-idempotent, so a healthy run is normally mixed. Reporting it as
+	// an anomaly would teach whoever reads it to ignore the field.
+	DurabilityMixed DurabilityLevel = "mixed"
+	// DurabilityUnknown: nothing was journalled, so there is no evidence either way. Not "per_activity":
+	// a run that recorded nothing and a run that deliberately recorded one phase per step are different
+	// facts, and only one of them is a decision.
+	DurabilityUnknown DurabilityLevel = "unknown"
+)
+
+// Durability is the journal's own answer to how durably a run was recorded.
+//
+// DERIVED FROM THE JOURNAL, never declared. That is the whole design: during an incident the useful
+// fact is what actually got written, not what a config said should be. A declared level can be stale,
+// wrong, or describe a deployment that was redeployed since; the records cannot.
+type Durability struct {
+	Level DurabilityLevel `json:"level"`
+	// Steps is how many distinct steps the journal knows about.
+	Steps int `json:"steps"`
+	// StepsWithIntent is how many of them recorded intent before their effect. The ratio is the
+	// actionable part: it says for how much of this run a crash is diagnosable.
+	StepsWithIntent int `json:"steps_with_intent"`
+}
+
+// Durability computes the level from the records themselves.
+func (s *RunState) Durability() Durability {
+	d := Durability{Level: DurabilityUnknown, Steps: len(s.byStep)}
+	for _, phases := range s.byStep {
+		if _, ok := phases[PhaseAttempted]; ok {
+			d.StepsWithIntent++
+		}
+	}
+	switch {
+	case d.Steps == 0:
+		d.Level = DurabilityUnknown
+	case d.StepsWithIntent == d.Steps:
+		d.Level = DurabilityPerStep
+	case d.StepsWithIntent == 0:
+		d.Level = DurabilityPerActivity
+	default:
+		d.Level = DurabilityMixed
+	}
+	return d
+}

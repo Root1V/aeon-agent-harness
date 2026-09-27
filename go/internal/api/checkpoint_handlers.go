@@ -1,6 +1,9 @@
 package api
 
 import (
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"encoding/json"
 	"net/http"
 
@@ -66,9 +69,13 @@ func (h *CheckpointHandlers) append(w http.ResponseWriter, r *http.Request) {
 }
 
 type runStateResponse struct {
-	RunID   string              `json:"run_id"`
-	NextSeq int64               `json:"next_seq"`
-	Records []checkpoint.Record `json:"records"`
+	RunID   string `json:"run_id"`
+	NextSeq int64  `json:"next_seq"`
+	// Durability is OBS-004: how durably this run was journalled, derived from the records rather than
+	// declared anywhere. It is here, on the run's own state, because that is where an incident looks —
+	// the alternative was a document, and a document cannot be queried at 3am about a specific run.
+	Durability checkpoint.Durability `json:"durability"`
+	Records    []checkpoint.Record   `json:"records"`
 }
 
 func (h *CheckpointHandlers) load(w http.ResponseWriter, r *http.Request) {
@@ -81,5 +88,19 @@ func (h *CheckpointHandlers) load(w http.ResponseWriter, r *http.Request) {
 	if records == nil {
 		records = []checkpoint.Record{}
 	}
-	writeJSON(w, http.StatusOK, runStateResponse{RunID: state.RunID(), NextSeq: state.NextSeq(), Records: records})
+	durability := state.Durability()
+
+	// Also a span attribute (OBS-004), so the level is visible in a trace next to the call it describes
+	// and not only to whoever thinks to fetch the run state. gen_ai.* names are OTel's; this one is
+	// ours, so it carries the aeon. prefix rather than pretending to be a convention.
+	span := trace.SpanFromContext(r.Context())
+	span.SetAttributes(
+		attribute.String("aeon.run.durability_level", string(durability.Level)),
+		attribute.Int("aeon.run.steps", durability.Steps),
+		attribute.Int("aeon.run.steps_with_intent", durability.StepsWithIntent),
+	)
+
+	writeJSON(w, http.StatusOK, runStateResponse{
+		RunID: state.RunID(), NextSeq: state.NextSeq(), Durability: durability, Records: records,
+	})
 }
