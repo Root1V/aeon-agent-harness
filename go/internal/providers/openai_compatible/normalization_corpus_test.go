@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"testing"
 
@@ -54,6 +53,59 @@ type normExpect struct {
 	FinishReason *string                    `json:"finish_reason"`
 	Model        *string                    `json:"model"`
 	Usage        map[string]json.RawMessage `json:"usage"`
+	UsageState   map[string]string          `json:"usage_state"`
+	// UsageRelations are triples like ["input", ">=", "cache_read"]: assertions about the RELATIONSHIP
+	// between counters rather than their values. They are how the contract states "input is inclusive of
+	// cache" without pinning numbers that change every time the bodies are re-recorded.
+	UsageRelations [][]string `json:"usage_relations"`
+	ToolCalls      []struct {
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
+	} `json:"tool_calls"`
+	ToolCallIDsAreNonEmpty *bool     `json:"tool_call_ids_are_nonempty"`
+	EventKinds             *[]string `json:"event_kinds"`
+	// EventKindsCollapsed is EventKinds with runs of the same kind squashed to one, so a case can assert
+	// the LIFECYCLE without depending on how many delta events a particular recording happens to contain.
+	EventKindsCollapsed  *[]string `json:"event_kinds_collapsed"`
+	StopsAtFirstSentinel *bool     `json:"stops_at_first_sentinel"`
+	PartialText          *string   `json:"partial_text"`
+}
+
+// implementedExpectKeys is every expectation key this runner actually READS.
+//
+// THE GUARD THAT MATTERS, and it exists because of what it found. This runner's expectation struct
+// covered five keys while the contract used thirteen, so the other eight were silently ignored — and
+// three cases had NO key the runner read, meaning they passed without a single assertion being checked.
+// Two of those three were in the 5/14 figure published to the other two teams in A-41 and A-42. A
+// number computed by not looking is worse than no number: it was reported as evidence.
+//
+// So an expectation key this runner does not implement is now a FAILURE, not silence. The same shape as
+// roadmap_check refusing a row it cannot parse instead of skipping it: a checker that quietly ignores
+// what it does not understand grows blind spots exactly where the contract grows.
+var implementedExpectKeys = map[string]bool{
+	"text": true, "content_kinds": true, "finish_reason": true, "model": true,
+	"usage": true, "usage_state": true, "usage_relations": true,
+	"tool_calls": true, "tool_call_ids_are_nonempty": true,
+	"event_kinds": true, "event_kinds_collapsed": true,
+	"stops_at_first_sentinel": true, "partial_text": true,
+}
+
+// assertEveryExpectKeyIsImplemented fails on any key the runner would otherwise ignore.
+func assertEveryExpectKeyIsImplemented(t *testing.T, caseName string, rawExpect json.RawMessage) {
+	t.Helper()
+	if len(rawExpect) == 0 {
+		return
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(rawExpect, &keys); err != nil {
+		t.Fatalf("case %q: expectation is not an object: %v", caseName, err)
+	}
+	for k := range keys {
+		if !implementedExpectKeys[k] {
+			t.Errorf("case %q asserts %q and this runner does not read it — the case would PASS without that "+
+				"assertion ever being checked, which is how 5/14 got published as a result", caseName, k)
+		}
+	}
 }
 
 // assertedCounter reads one counter from an expectation. It returns three outcomes, and keeping
@@ -98,6 +150,33 @@ type projection struct {
 	reasoning    *int
 	cacheWrite   *int
 	estimated    *bool
+	toolCalls    []providers.ToolCall
+	// eventKinds is the streaming lifecycle observed, in order. Recorded so a case can assert that the
+	// reasoning phase CLOSES before the tool call opens, which no amount of inspecting the final message
+	// can show.
+	eventKinds  []string
+	partialText string
+	// sentinelStops records that the adapter stopped at the first [DONE] rather than continuing to read.
+	sentinelStops bool
+}
+
+// counter reads a projected counter by the contract's field name, so the comparison code names fields
+// once instead of repeating a switch per assertion kind.
+func (p projection) counter(field string) (*int, bool) {
+	switch field {
+	case "input":
+		return p.input, true
+	case "output":
+		return p.output, true
+	case "cache_read":
+		return p.cacheRead, true
+	case "reasoning":
+		return p.reasoning, true
+	case "cache_write":
+		return p.cacheWrite, true
+	default:
+		return nil, false
+	}
 }
 
 func contractsDir(t *testing.T) string {
@@ -131,7 +210,7 @@ func projectNonStreaming(t *testing.T, body []byte) (projection, error) {
 	if err != nil {
 		return projection{}, err
 	}
-	p := projection{}
+	p := projection{contentKinds: []string{}}
 	p.model, _ = out["model"].(string)
 	choices, _ := out["choices"].([]any)
 	if len(choices) > 0 {
@@ -139,18 +218,32 @@ func projectNonStreaming(t *testing.T, body []byte) (projection, error) {
 		p.finishReason, _ = choice["finish_reason"].(string)
 		msg, _ := choice["message"].(map[string]any)
 		p.text, _ = msg["content"].(string)
-	}
-	if p.text != "" {
-		p.contentKinds = []string{"text"}
-	} else {
-		p.contentKinds = []string{}
+
+		// The typed parts, read from the response rather than inferred from whether text is empty. The old
+		// projection derived content_kinds from `p.text != ""`, which is why every thinking and tool_call
+		// expectation could only ever be reported as a gap: the runner had no way to see them even once the
+		// adapter produced them.
+		if parts, ok := msg["content_parts"].([]providers.ContentPart); ok {
+			for _, part := range parts {
+				p.contentKinds = append(p.contentKinds, part.Kind)
+				if part.Kind == providers.PartToolCall && part.ToolCall != nil {
+					p.toolCalls = append(p.toolCalls, *part.ToolCall)
+				}
+			}
+		}
 	}
 	if usage, ok := out["usage"].(map[string]any); ok {
-		if v, ok := usage["prompt_tokens"].(int); ok {
-			p.input = &v
+		readCounter := func(key string) *int {
+			if v, ok := usage[key].(int); ok {
+				return &v
+			}
+			return nil
 		}
-		if v, ok := usage["completion_tokens"].(int); ok {
-			p.output = &v
+		p.input, p.output = readCounter("prompt_tokens"), readCounter("completion_tokens")
+		p.cacheRead, p.cacheWrite = readCounter("cache_read_tokens"), readCounter("cache_write_tokens")
+		p.reasoning = readCounter("reasoning_tokens")
+		if v, ok := usage["estimated"].(bool); ok {
+			p.estimated = &v
 		}
 	}
 	return p, nil
@@ -158,10 +251,28 @@ func projectNonStreaming(t *testing.T, body []byte) (projection, error) {
 
 func projectStreaming(t *testing.T, body []byte) (projection, error) {
 	adapter := &Adapter{BaseURL: serveBody(t, body, true)}
-	var text strings.Builder
-	p := projection{}
+	var text, reasoning strings.Builder
+	p := projection{contentKinds: []string{}}
+	// sawToolCallEnd/etc. are tracked so content_kinds can be derived from the LIFECYCLE rather than from
+	// whether the accumulated text happens to be empty — the old projection did the latter, which is why
+	// no thinking or tool_call expectation could ever be observed even once the adapter produced them.
+	sawThinking, sawText := false, false
+
 	err := adapter.DecideStream(context.Background(), map[string]any{"model": "m", "messages": []any{}}, func(c providers.Chunk) error {
+		if c.Event != "" {
+			p.eventKinds = append(p.eventKinds, string(c.Event))
+		}
 		text.WriteString(c.Delta)
+		reasoning.WriteString(c.ReasoningDelta)
+		if c.ReasoningDelta != "" {
+			sawThinking = true
+		}
+		if c.Delta != "" {
+			sawText = true
+		}
+		if c.ToolCall != nil {
+			p.toolCalls = append(p.toolCalls, *c.ToolCall)
+		}
 		if c.FinishReason != "" {
 			p.finishReason = c.FinishReason
 		}
@@ -174,18 +285,39 @@ func projectStreaming(t *testing.T, body []byte) (projection, error) {
 			// projection — which is exactly the divergence this corpus reported for ten cases.
 			p.input, p.output = c.Usage.PromptTokens, c.Usage.CompletionTokens
 			p.cacheRead, p.cacheWrite = c.Usage.CacheReadTokens, c.Usage.CacheWriteTokens
+			p.reasoning = c.Usage.ReasoningTokens
+			p.estimated = c.Usage.Estimated
 		}
 		return nil
 	})
+	// partialText is recorded WHETHER OR NOT the stream failed, because the contract's assertion is about
+	// an interrupted stream: the deltas already emitted are not retracted, since they were generated and
+	// paid for. Reading it only on success would leave that property unverifiable.
+	p.partialText = text.String()
 	if err != nil {
-		return projection{}, err
+		return projection{partialText: text.String(), eventKinds: p.eventKinds}, err
 	}
 	p.text = text.String()
-	if p.text != "" {
-		p.contentKinds = []string{"text"}
-	} else {
-		p.contentKinds = []string{}
+	if sawThinking {
+		p.contentKinds = append(p.contentKinds, providers.PartThinking)
 	}
+	if sawText {
+		p.contentKinds = append(p.contentKinds, providers.PartText)
+	}
+	for range p.toolCalls {
+		p.contentKinds = append(p.contentKinds, providers.PartToolCall)
+	}
+	// stops_at_first_sentinel, computed from THIS body rather than assumed.
+	//
+	// The recording for that case carries exactly one [DONE] with nothing after it, so the property is only
+	// weakly observable here: there is nothing the adapter could have wrongly read. Rather than hard-code
+	// `true` — which would report an assertion as checked when nothing was checked, the exact failure the
+	// unknown-key guard above exists to prevent — this looks at whatever follows the first sentinel in the
+	// body and verifies none of it surfaced. It answers truthfully for this recording and gets stronger for
+	// free if the body ever gains a trailing chunk.
+	//
+	// The property is proved properly in TestStreamStopsAtFirstSentinel, with a body built to trap it.
+	p.sentinelStops = !leakedPastFirstSentinel(body, p.text)
 	return p, nil
 }
 
@@ -219,13 +351,11 @@ func compare(p projection, e normExpect) []finding {
 		add("text", diffDivergence, p.text, *e.Text)
 	}
 	if e.ContentKinds != nil && !equalStrings(p.contentKinds, *e.ContentKinds) {
-		// A "thinking" part is a concept this adapter does not have at all: it never reads
-		// reasoning_content. Anything else here is a real disagreement about text.
-		kind := diffDivergence
-		if containsStr(*e.ContentKinds, "thinking") || containsStr(*e.ContentKinds, "tool_call") {
-			kind = diffGap
-		}
-		add("content_kinds", kind, p.contentKinds, *e.ContentKinds)
+		// FND-004 CLOSED THIS GAP, so a mismatch here is now a DIVERGENCE. The adapter reads
+		// reasoning_content and tool_calls and emits typed parts, so "we have no concept for this" has
+		// stopped being true — and leaving the gap classification in place would have let a real
+		// disagreement keep reporting itself as work not done.
+		add("content_kinds", diffDivergence, p.contentKinds, *e.ContentKinds)
 	}
 	if e.FinishReason != nil && p.finishReason != *e.FinishReason {
 		add("finish_reason", diffDivergence, p.finishReason, *e.FinishReason)
@@ -234,9 +364,6 @@ func compare(p projection, e normExpect) []finding {
 		add("model", diffDivergence, p.model, *e.Model)
 	}
 	if e.Usage != nil {
-		// A case whose expectation says estimated:true wants counters DERIVED from `timings`, which
-		// this adapter has no concept of. Missing them there is a gap, not a disagreement.
-		_, derived := assertedBool(e.Usage, "estimated")
 		cmpCounter := func(field, key string, got *int, haveConcept bool) {
 			asserted, want := assertedCounter(e.Usage, key)
 			if !asserted {
@@ -247,11 +374,7 @@ func compare(p projection, e normExpect) []finding {
 			case want == nil && got != nil:
 				add(field, diffDivergence, *got, "null (not measured)")
 			case got == nil:
-				k := diffGap
-				if haveConcept && !derived {
-					k = diffDivergence
-				}
-				add(field, k, "absent", *want)
+				add(field, diffDivergence, "absent", *want)
 			case *got != *want:
 				add(field, diffDivergence, *got, *want)
 			}
@@ -261,22 +384,161 @@ func compare(p projection, e normExpect) []finding {
 		cmpCounter("usage.cache_read", "cache_read", p.cacheRead, false)
 		cmpCounter("usage.reasoning", "reasoning", p.reasoning, false)
 		cmpCounter("usage.cache_write", "cache_write", p.cacheWrite, false)
-		if asserted, want := assertedBool(e.Usage, "estimated"); asserted && p.estimated == nil {
-			add("usage.estimated", diffGap, "absent", want)
+		if asserted, want := assertedBool(e.Usage, "estimated"); asserted {
+			switch {
+			case p.estimated == nil:
+				add("usage.estimated", diffDivergence, "absent", want)
+			case *p.estimated != want:
+				add("usage.estimated", diffDivergence, *p.estimated, want)
+			}
+		}
+	}
+
+	// usage_state asserts the THREE-STATE of each counter without pinning a number, which is what lets the
+	// bodies be re-recorded without rewriting the corpus. "measured" says a value arrived; "unmeasured"
+	// says the key is absent. A state name this runner does not know is a failure rather than a skip — the
+	// same rule as an unknown expectation key.
+	for field, want := range e.UsageState {
+		got, known := p.counter(field)
+		if !known {
+			add("usage_state."+field, diffDivergence, "unknown counter", want)
+			continue
+		}
+		switch want {
+		case "measured":
+			if got == nil {
+				add("usage_state."+field, diffDivergence, "unmeasured", "measured")
+			}
+		case "unmeasured":
+			if got != nil {
+				add("usage_state."+field, diffDivergence, fmt.Sprintf("measured (%d)", *got), "unmeasured")
+			}
+		default:
+			add("usage_state."+field, diffDivergence, "this runner does not implement state "+want, want)
+		}
+	}
+
+	// usage_relations is how the contract states "input is INCLUSIVE of cache" without depending on the
+	// numbers in any particular recording. It is the only assertion here that would survive a re-record
+	// unchanged, which is exactly why it is the one worth having.
+	for _, rel := range e.UsageRelations {
+		if len(rel) != 3 {
+			add("usage_relations", diffDivergence, fmt.Sprintf("malformed relation %v", rel), "a triple")
+			continue
+		}
+		left, op, right := rel[0], rel[1], rel[2]
+		l, lk := p.counter(left)
+		r, rk := p.counter(right)
+		if !lk || !rk {
+			add("usage_relations", diffDivergence, fmt.Sprintf("unknown counter in %v", rel), "known counters")
+			continue
+		}
+		if l == nil || r == nil {
+			add("usage_relations", diffDivergence,
+				fmt.Sprintf("%s or %s is unmeasured, so %v cannot be checked", left, right, rel), fmt.Sprint(rel))
+			continue
+		}
+		ok := false
+		switch op {
+		case ">=":
+			ok = *l >= *r
+		case ">":
+			ok = *l > *r
+		case "==":
+			ok = *l == *r
+		default:
+			add("usage_relations", diffDivergence, "this runner does not implement operator "+op, op)
+			continue
+		}
+		if !ok {
+			add("usage_relations", diffDivergence, fmt.Sprintf("%s=%d %s %s=%d is false", left, *l, op, right, *r), fmt.Sprint(rel))
+		}
+	}
+
+	// tool_calls: name and DECODED arguments. Comparing the decoded map is the assertion that matters —
+	// a runner comparing the raw string would pass an adapter that never parsed it, which is the very
+	// thing the contract requires.
+	if e.ToolCalls != nil {
+		if len(p.toolCalls) != len(e.ToolCalls) {
+			add("tool_calls", diffDivergence, fmt.Sprintf("%d call(s)", len(p.toolCalls)), fmt.Sprintf("%d call(s)", len(e.ToolCalls)))
+		} else {
+			for i, want := range e.ToolCalls {
+				got := p.toolCalls[i]
+				if got.Name != want.Name {
+					add(fmt.Sprintf("tool_calls[%d].name", i), diffDivergence, got.Name, want.Name)
+				}
+				if !sameArgs(got.Arguments, want.Arguments) {
+					add(fmt.Sprintf("tool_calls[%d].arguments", i), diffDivergence, got.Arguments, want.Arguments)
+				}
+			}
+		}
+	}
+	if e.ToolCallIDsAreNonEmpty != nil && *e.ToolCallIDsAreNonEmpty {
+		if len(p.toolCalls) == 0 {
+			add("tool_call_ids_are_nonempty", diffDivergence, "no tool calls at all", "ids on every call")
+		}
+		for i, tc := range p.toolCalls {
+			if tc.ID == "" {
+				add(fmt.Sprintf("tool_calls[%d].id", i), diffDivergence, "empty", "non-empty")
+			}
+		}
+	}
+
+	if e.EventKinds != nil && !equalStrings(p.eventKinds, *e.EventKinds) {
+		add("event_kinds", diffDivergence, p.eventKinds, *e.EventKinds)
+	}
+	if e.EventKindsCollapsed != nil {
+		if got := collapseRuns(p.eventKinds); !equalStrings(got, *e.EventKindsCollapsed) {
+			add("event_kinds_collapsed", diffDivergence, got, *e.EventKindsCollapsed)
+		}
+	}
+	if e.StopsAtFirstSentinel != nil && *e.StopsAtFirstSentinel && !p.sentinelStops {
+		add("stops_at_first_sentinel", diffDivergence, false, true)
+	}
+	if e.PartialText != nil && p.partialText != *e.PartialText {
+		add("partial_text", diffDivergence, p.partialText, *e.PartialText)
+	}
+	return out
+}
+
+// sameArgs compares decoded argument maps through their canonical JSON.
+//
+// Through JSON rather than reflect.DeepEqual because the two sides decode from different places: the
+// expectation's numbers arrive as float64 from the corpus and the adapter's from the body, and DeepEqual
+// would report a difference between two values that are the same number.
+func sameArgs(got, want map[string]any) bool {
+	a, err1 := json.Marshal(got)
+	b, err2 := json.Marshal(want)
+	return err1 == nil && err2 == nil && string(a) == string(b)
+}
+
+// collapseRuns squashes consecutive identical kinds to one, so a case can assert the LIFECYCLE without
+// depending on how many delta events a particular recording happens to carry.
+func collapseRuns(in []string) []string {
+	out := make([]string, 0, len(in))
+	for i, k := range in {
+		if i == 0 || in[i-1] != k {
+			out = append(out, k)
 		}
 	}
 	return out
 }
 
+// equalStrings compares two sequences IN ORDER.
+//
+// It used to sort both sides first, and that was wrong in a way only a mutation found. The contract's
+// lists are ordered: content_kinds is ["thinking", "text"] because reasoning precedes the answer, and
+// event_kinds is a LIFECYCLE where the order is the entire property. The case named "the reasoning phase
+// closes when the tool call starts, not when the stream ends" passed with the closing removed, because
+// both orderings contain the same multiset of events.
+//
+// So a sorted comparison could not fail the one assertion it existed to make. Order-sensitive now.
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	x, y := append([]string(nil), a...), append([]string(nil), b...)
-	sort.Strings(x)
-	sort.Strings(y)
-	for i := range x {
-		if x[i] != y[i] {
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}
@@ -353,6 +615,9 @@ func TestNormalizationCorpusAgainstThisAdapter(t *testing.T) {
 
 	for _, tc := range corpus.Cases {
 		t.Run(tc.Name, func(t *testing.T) {
+			// Before anything else: refuse to evaluate a case whose assertions this runner cannot read.
+			assertEveryExpectKeyIsImplemented(t, tc.Name, tc.Expect)
+
 			root := bodyRoot
 			if tc.Authored {
 				root = authoredRoot
@@ -373,7 +638,23 @@ func TestNormalizationCorpusAgainstThisAdapter(t *testing.T) {
 				// The corpus has a case whose body is a mid-stream error; an error here may be the
 				// contract's expected outcome rather than a failure.
 				if len(tc.Error) > 0 {
-					t.Logf("PASS (error case): %v", runErr)
+					// The error was expected, but the case may ALSO assert what survived it — and it does:
+					// partial_text. Returning here used to count the case as passing on the error alone,
+					// without ever checking that the already-emitted deltas were preserved, which is the
+					// actual property. So the expectation is still compared.
+					var ee normExpect
+					if len(tc.Expect) > 0 {
+						if err := json.Unmarshal(tc.Expect, &ee); err != nil {
+							t.Fatalf("parsing expectation: %v", err)
+						}
+					}
+					if findings := compare(p, ee); len(findings) > 0 {
+						for _, f := range findings {
+							t.Errorf("error case %s: got=%q want=%q", f.field, f.got, f.want)
+						}
+						return
+					}
+					t.Logf("PASS (error case, and what it preserved was checked): %v", runErr)
 					passed++
 					return
 				}
@@ -458,4 +739,108 @@ func assertBodiesMatchCorpus(t *testing.T, bodyRoot string, want int) {
 		t.Fatalf("the vendored bodies are manifest v%d but this corpus was written against v%d — re-vendor from the shared folder before reading anything into the result",
 			manifest.Version, want)
 	}
+}
+
+// leakedPastFirstSentinel reports whether any text appearing AFTER the first [DONE] ended up in the output.
+func leakedPastFirstSentinel(body []byte, gotText string) bool {
+	idx := strings.Index(string(body), sseDataPrefix+sseDone)
+	if idx < 0 {
+		return false
+	}
+	tail := string(body)[idx+len(sseDataPrefix+sseDone):]
+	for _, line := range strings.Split(tail, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, sseDataPrefix) {
+			continue
+		}
+		var parsed streamChunk
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, sseDataPrefix)), &parsed); err != nil {
+			continue
+		}
+		for _, ch := range parsed.Choices {
+			if ch.Delta.Content != "" && strings.Contains(gotText, ch.Delta.Content) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestStreamStopsAtFirstSentinel proves the property the corpus body cannot.
+//
+// The shared contract requires exactly one [DONE] per response, so a second one is the upstream
+// misbehaving — and the honest question is what WE do when it happens, not whether it happens. The body
+// here carries a second sentinel followed by a chunk of text, so an adapter that kept parsing past the
+// first would surface it. This lives outside the corpus because it needs a body the corpus does not (and
+// should not) contain: a recording of correct behaviour cannot demonstrate resilience to incorrect input.
+func TestStreamStopsAtFirstSentinel(t *testing.T) {
+	body := []byte("data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"}}]}\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: [DONE]\n\n" +
+		"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"LEAKED-PAST-THE-SENTINEL\"}}]}\n\n" +
+		"data: [DONE]\n\n")
+
+	p, err := projectStreaming(t, body)
+	if err != nil {
+		t.Fatalf("streaming: %v", err)
+	}
+	if strings.Contains(p.text, "LEAKED") {
+		t.Errorf("text = %q — the adapter kept reading past the first [DONE]", p.text)
+	}
+	if p.text != "Hi" {
+		t.Errorf("text = %q, want %q", p.text, "Hi")
+	}
+	if !p.sentinelStops {
+		t.Error("sentinelStops is false on a body built to trap exactly this — the projection is not observing what it claims")
+	}
+}
+
+// TestToolArgumentsThatDoNotParseAreAnError covers a contract rule the CORPUS DOES NOT COVER.
+//
+// The spec is explicit: «Una cadena que no parsea no se convierte en objeto vacío. Es un error del
+// proveedor y se levanta como tal — un `{}` silencioso ejecutaría la herramienta sin argumentos.» Every
+// recorded body has well-formed arguments, so nothing in the shared corpus exercises it — and a mutation
+// that deleted the error check left all 14 cases green.
+//
+// That is the honest limit of a corpus built from recordings: it proves agreement on what the platform
+// actually sends, and says nothing about what happens when the platform misbehaves. This test is the other
+// half, and it belongs here rather than in the shared fixtures, which should keep describing reality.
+func TestToolArgumentsThatDoNotParseAreAnError(t *testing.T) {
+	t.Run("non-streaming", func(t *testing.T) {
+		body := []byte(`{"model":"m","choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant",` +
+			`"content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"get_weather","arguments":"{not json"}}]}}]}`)
+		adapter := &Adapter{BaseURL: serveBody(t, body, false)}
+		out, err := adapter.Decide(context.Background(), map[string]any{"model": "m", "messages": []any{}})
+		if err == nil {
+			t.Fatalf("unparseable arguments produced a response instead of an error: %v — the tool would run with no arguments and the call would look successful", out)
+		}
+		if !strings.Contains(err.Error(), "get_weather") {
+			t.Errorf("error = %v, want it to name the tool whose arguments could not be read", err)
+		}
+	})
+
+	t.Run("streaming", func(t *testing.T) {
+		// The streaming path parses ONCE, at the end, from the accumulated fragments — so this also pins
+		// that the single parse is checked. A version that parsed per fragment would fail on the happy path
+		// instead, which is the failure the contract warns about.
+		body := []byte(`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"get_weather","arguments":"{not"}}]}}]}` + "\n\n" +
+			`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":" json"}}]}}]}` + "\n\n" +
+			`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
+			"data: [DONE]\n\n")
+		if _, err := projectStreaming(t, body); err == nil {
+			t.Fatal("unparseable streamed arguments produced no error")
+		}
+	})
+
+	t.Run("a tool with no arguments at all IS an empty object", func(t *testing.T) {
+		// The one case where `{}` is right, and it has to stay working: a tool with no parameters genuinely
+		// sends nothing, and treating that as malformed would refuse a legitimate call.
+		args, err := providers.DecodeToolArguments("")
+		if err != nil {
+			t.Fatalf("empty arguments: %v", err)
+		}
+		if len(args) != 0 {
+			t.Errorf("args = %v, want an empty object", args)
+		}
+	})
 }

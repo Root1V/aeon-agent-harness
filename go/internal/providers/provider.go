@@ -6,7 +6,10 @@
 // anyway so there is exactly one definition to keep in sync, not five.
 package providers
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Provider is implemented by every model adapter.
 type Provider interface {
@@ -98,7 +101,14 @@ type ChatResult struct {
 	// the caller sees an unexplained blank answer that was nonetheless billed. Verified against the
 	// live deployment on 2026-09-13 — max_tokens 20 produced exactly that.
 	ReasoningContent string
-	Usage            Usage
+	// ReasoningSignature is the opaque blob some providers require returned intact on the next turn.
+	// Transported, never interpreted.
+	ReasoningSignature string
+	// ToolCalls are the calls the model asked for, with ARGUMENTS ALREADY DECODED (FND-004). Decoded at
+	// the adapter because that is where the provider's wire format is known; a string reaching the loop
+	// would make every consumer parse it, and one of them would tolerate a failure.
+	ToolCalls []ToolCall
+	Usage     Usage
 }
 
 // NormalizedChatResponseFrom builds the normalized response from a complete ChatResult.
@@ -122,17 +132,61 @@ func NormalizedChatResponseFrom(r ChatResult) map[string]any {
 	if r.ServedByInstance != "" {
 		response["served_by_instance"] = r.ServedByInstance
 	}
-	if r.ReasoningContent == "" {
-		return response
-	}
 	choices, _ := response["choices"].([]any)
 	if len(choices) == 0 {
 		return response
 	}
 	choice, _ := choices[0].(map[string]any)
 	message, _ := choice["message"].(map[string]any)
-	message["reasoning_content"] = r.ReasoningContent
+	if r.ReasoningContent != "" {
+		message["reasoning_content"] = r.ReasoningContent
+	}
+
+	// FND-004: the typed parts of the contract, ALONGSIDE `content` rather than replacing it.
+	//
+	// Both are needed and they answer different questions. `content` is the OpenAI-compatible string that
+	// INT-002's endpoint must keep emitting, because every client of that surface expects it. `content_parts`
+	// is the contract's unified view — thinking separated from text, tool calls carried as parts with decoded
+	// arguments. Replacing `content` would break the compatibility the endpoint exists for; omitting the
+	// parts is the gap this closes.
+	if parts := ContentParts(r.ReasoningContent, r.Content, r.ToolCalls, r.ReasoningSignature); len(parts) > 0 {
+		message["content_parts"] = parts
+	}
+	// tool_calls in OpenAI's own shape too, so an OpenAI-compatible client of INT-002 sees them where it
+	// looks. The arguments go back out as a STRING there, because that is what that wire format says — the
+	// decoded form lives in content_parts.
+	if len(r.ToolCalls) > 0 {
+		message["tool_calls"] = openAIShapedToolCalls(r.ToolCalls)
+		if _, ok := message["content"]; ok && r.Content == "" {
+			// A tool-call-only response has null content on the wire, not "". The distinction is the
+			// contract's: an empty text and the absence of text are not the same message.
+			message["content"] = nil
+		}
+	}
 	return response
+}
+
+// openAIShapedToolCalls re-encodes decoded arguments for the OpenAI-compatible surface.
+//
+// Re-encoding rather than keeping the original string: the original may never have existed (a provider
+// with a different wire shape), so carrying it would make this field available only for some providers.
+// The decoded map is the single source, and this is a projection of it.
+func openAIShapedToolCalls(calls []ToolCall) []any {
+	out := make([]any, 0, len(calls))
+	for i, tc := range calls {
+		raw, err := json.Marshal(tc.Arguments)
+		if err != nil {
+			// Cannot happen for a map decoded from JSON, and if it somehow does, an empty object here would
+			// be the silent `{}` this package refuses elsewhere. Skipped instead, so the call is absent
+			// rather than wrong.
+			continue
+		}
+		out = append(out, map[string]any{
+			"index": i, "id": tc.ID, "type": "function",
+			"function": map[string]any{"name": tc.Name, "arguments": string(raw)},
+		})
+	}
+	return out
 }
 
 // NormalizedChatResponseWithUsage is NormalizedChatResponse for an adapter whose provider reports
@@ -150,6 +204,11 @@ func NormalizedChatResponseWithUsage(model, content, finishReason string, u Usag
 	}
 	if u.ReasoningTokens != nil {
 		usage["reasoning_tokens"] = *u.ReasoningTokens
+	}
+	// FND-004's third state, about PROVENANCE rather than a value: present says we know whether these
+	// counters were reported or derived, and absent says we are not claiming either.
+	if u.Estimated != nil {
+		usage["estimated"] = *u.Estimated
 	}
 	return response
 }
