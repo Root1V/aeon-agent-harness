@@ -19,8 +19,8 @@ func TestFinOpsLedgerRecordsAndAggregatesRealCosts(t *testing.T) {
 	model := "test-model-" + randSuffix(t)
 
 	entries := []CostEntry{
-		{Provider: "anthropic", Model: model, CostModel: tokenBased(), PromptTokens: 1000, CompletionTokens: 500, CostUSD: usd(0.05), RunID: "run-1"},
-		{Provider: "anthropic", Model: model, CostModel: tokenBased(), PromptTokens: 2000, CompletionTokens: 1000, CostUSD: usd(0.10)},
+		{Provider: "anthropic", Model: model, CostModel: tokenBased(), PromptTokens: tokens(1000), CompletionTokens: tokens(500), CostUSD: usd(0.05), RunID: "run-1"},
+		{Provider: "anthropic", Model: model, CostModel: tokenBased(), PromptTokens: tokens(2000), CompletionTokens: tokens(1000), CostUSD: usd(0.10)},
 	}
 	for _, e := range entries {
 		if err := ledger.Record(ctx, e); err != nil {
@@ -72,7 +72,7 @@ func TestFinOpsLedgerRecordWithoutRunIDStoresNull(t *testing.T) {
 	ctx := context.Background()
 	model := "test-model-no-run-" + randSuffix(t)
 
-	if err := ledger.Record(ctx, CostEntry{Provider: "openai", Model: model, CostModel: tokenBased(), PromptTokens: 10, CompletionTokens: 5, CostUSD: usd(0.001)}); err != nil {
+	if err := ledger.Record(ctx, CostEntry{Provider: "openai", Model: model, CostModel: tokenBased(), PromptTokens: tokens(10), CompletionTokens: tokens(5), CostUSD: usd(0.001)}); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
@@ -96,3 +96,8 @@ func TestFinOpsLedgerRecordWithoutRunIDStoresNull(t *testing.T) {
 func usd(v float64) *float64 { return &v }
 
 func tokenBased() *string { s := "token_based"; return &s }
+
+// tokens returns a pointer to n. The counters are nullable since MDL-014: a test that sets one says the
+// provider reported it, and nil says it reported nothing — which is now a distinct case, not an
+// inconvenience.
+func tokens(n int) *int { return &n }

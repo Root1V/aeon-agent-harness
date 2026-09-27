@@ -27,7 +27,7 @@ type Provider interface {
 // mechanical: a caller (or a future provider_conformance suite) reads choices[0].message.content
 // and usage.* the same way no matter which adapter served the call. Each adapter's own tests
 // verify it translates its provider's real response into exactly this shape.
-func NormalizedChatResponse(model, content, finishReason string, promptTokens, completionTokens int) map[string]any {
+func NormalizedChatResponse(model, content, finishReason string, promptTokens, completionTokens *int) map[string]any {
 	return map[string]any{
 		"model": model,
 		"choices": []any{
@@ -37,13 +37,37 @@ func NormalizedChatResponse(model, content, finishReason string, promptTokens, c
 				"finish_reason": finishReason,
 			},
 		},
-		"usage": map[string]any{
-			"prompt_tokens":     promptTokens,
-			"completion_tokens": completionTokens,
-			"total_tokens":      promptTokens + completionTokens,
-		},
+		"usage": usageBlock(promptTokens, completionTokens),
 	}
 }
+
+// usageBlock renders the two base counters, OMITTING each one the provider did not report (MDL-014).
+//
+// Omission and not zero, for the reason the cache counters already worked this way: a key that is
+// absent says "not measured", and a zero says "measured, and it was none". The ledger and the FinOps
+// dashboard need those apart, and `total_tokens` is omitted too when either part is missing — a total
+// computed from one known half and one absent one would be a smaller number wearing the shape of a
+// complete one.
+func usageBlock(promptTokens, completionTokens *int) map[string]any {
+	usage := map[string]any{}
+	if promptTokens != nil {
+		usage["prompt_tokens"] = *promptTokens
+	}
+	if completionTokens != nil {
+		usage["completion_tokens"] = *completionTokens
+	}
+	if promptTokens != nil && completionTokens != nil {
+		usage["total_tokens"] = *promptTokens + *completionTokens
+	}
+	return usage
+}
+
+// Tokens returns a pointer to n, for adapters whose provider DID report a counter.
+//
+// A named helper rather than a local variable at every call site: `providers.Tokens(0)` reads as "the
+// provider said zero" and a bare nil reads as "it said nothing", which is exactly the distinction
+// MDL-014 exists to keep.
+func Tokens(n int) *int { return &n }
 
 // ChatResult is everything an adapter extracted from one complete response. It exists because the
 // alternative was a sixth positional argument, and because reasoning is not a variant of content:

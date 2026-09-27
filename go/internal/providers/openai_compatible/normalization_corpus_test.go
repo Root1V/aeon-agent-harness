@@ -169,8 +169,10 @@ func projectStreaming(t *testing.T, body []byte) (projection, error) {
 			p.model = c.Model
 		}
 		if c.Usage != nil {
-			in, out := c.Usage.PromptTokens, c.Usage.CompletionTokens
-			p.input, p.output = &in, &out
+			// Straight through since MDL-014: these are pointers at the wire now, so a counter the
+			// upstream omitted stays nil instead of being reborn as a zero on the way into the
+			// projection — which is exactly the divergence this corpus reported for ten cases.
+			p.input, p.output = c.Usage.PromptTokens, c.Usage.CompletionTokens
 			p.cacheRead, p.cacheWrite = c.Usage.CacheReadTokens, c.Usage.CacheWriteTokens
 		}
 		return nil
@@ -297,10 +299,12 @@ func containsStr(haystack []string, needle string) bool {
 // Keeping this list explicit rather than loosening the comparison is deliberate: a silenced
 // divergence is indistinguishable from one nobody noticed, which is the failure mode this whole
 // corpus exists to prevent.
-var knownDivergences = map[string]string{
-	"usage.input":  "MDL-014: a provider that reports no usage at all is normalized to 0 rather than 'not measured'",
-	"usage.output": "MDL-014: same fabricated zero on the completion counter",
-}
+// Empty since MDL-014 fixed the last two entries, and empty is the point: this map is a list of
+// disagreements we have DECIDED to live with, so a fixed one must leave it or it becomes a graveyard of
+// stale excuses that quietly forgive a real regression.
+//
+// verifyKnownDivergencesStillDiverge below is what keeps that true without anyone remembering.
+var knownDivergences = map[string]string{}
 
 // TestNormalizationCorpusAgainstThisAdapter runs the shared normalization corpus against the real
 // openai_compatible adapter, at the Synaptum team's explicit request: under H1 = D the equivalence
@@ -336,6 +340,16 @@ func TestNormalizationCorpusAgainstThisAdapter(t *testing.T) {
 
 	var passed, gapped int
 	var divergences []string
+
+	// pendingKnown starts as a copy of knownDivergences and loses an entry each time that divergence is
+	// actually observed. Whatever is left at the end is an excuse for a disagreement that no longer
+	// happens — checked below, because a list of accepted divergences that nobody prunes stops being a
+	// record of decisions and becomes a blanket that forgives the next real regression.
+	pendingKnown := make(map[string]string, len(knownDivergences))
+	for field, reason := range knownDivergences {
+		pendingKnown[field] = reason
+	}
+	seenDivergences := map[string]bool{}
 
 	for _, tc := range corpus.Cases {
 		t.Run(tc.Name, func(t *testing.T) {
@@ -389,11 +403,15 @@ func TestNormalizationCorpusAgainstThisAdapter(t *testing.T) {
 					divergences = append(divergences, fmt.Sprintf("%s → %s: got %q, want %q", tc.Name, f.field, f.got, f.want))
 					if reason, known := knownDivergences[f.field]; known {
 						label = "DIVERGENCE (conocida — " + reason + ")"
+						seenDivergences[f.field] = true
 					} else {
 						unexpected = true
 					}
 				}
 				t.Logf("%s %-20s got=%q want=%q", label, f.field, f.got, f.want)
+			}
+			for field := range seenDivergences {
+				delete(pendingKnown, field)
 			}
 			if unexpected {
 				t.Errorf("this adapter disagrees with the contract on a concept it does implement, and the disagreement is not a recorded one — see the DIVERGENCE lines above")
@@ -407,6 +425,13 @@ func TestNormalizationCorpusAgainstThisAdapter(t *testing.T) {
 		passed, len(corpus.Cases), gapped, len(divergences))
 	for _, d := range divergences {
 		t.Logf("DIVERGENCIA: %s", d)
+	}
+
+	// Whatever is left in pendingKnown is an accepted divergence that no longer happens. Removing it is
+	// not tidiness: a stale exception is indistinguishable from a live one, so it would forgive the next
+	// real regression on that field in silence. Enforcing it here means nobody has to remember.
+	for field, reason := range pendingKnown {
+		t.Errorf("knownDivergences still lists %q (%q) but this adapter no longer diverges there — remove the entry", field, reason)
 	}
 }
 

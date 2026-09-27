@@ -62,8 +62,11 @@ type openAIResponse struct {
 	Model   string         `json:"model"`
 	Choices []openAIChoice `json:"choices"`
 	Usage   struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
+		// Pointers (MDL-014): nil means the key was absent — including when the whole `usage` object is,
+		// since then nothing sets them. That also covers the partial case, a usage object missing one
+		// counter, which a pointer on the object alone would not.
+		PromptTokens     *int `json:"prompt_tokens"`
+		CompletionTokens *int `json:"completion_tokens"`
 	} `json:"usage"`
 }
 

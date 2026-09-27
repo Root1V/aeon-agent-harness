@@ -115,11 +115,25 @@ func streamChunkEnvelope(id string, created int64, chunk providers.Chunk) map[st
 		"choices": []any{choice},
 	}
 	if chunk.Usage != nil {
-		envelope["usage"] = map[string]any{
-			"prompt_tokens":     chunk.Usage.PromptTokens,
-			"completion_tokens": chunk.Usage.CompletionTokens,
-			"total_tokens":      chunk.Usage.PromptTokens + chunk.Usage.CompletionTokens,
+		// A counter the provider did not report is OMITTED here too, not emitted as zero (MDL-014).
+		//
+		// This is an external surface, so the trade is real and worth stating: a client that assumes the
+		// keys are present now reads undefined instead of a number, and in Python that is falsy and may
+		// well be treated as 0 — the same fabricated zero, reconstructed on the far side. Omitting is
+		// still the right half of that trade, because emitting 0 is a POSITIVE CLAIM we cannot support,
+		// while an absent key is at worst ambiguous. OpenAI's own schema allows a null usage on a chunk,
+		// so a client that handles the spec handles this.
+		usage := map[string]any{}
+		if chunk.Usage.PromptTokens != nil {
+			usage["prompt_tokens"] = *chunk.Usage.PromptTokens
 		}
+		if chunk.Usage.CompletionTokens != nil {
+			usage["completion_tokens"] = *chunk.Usage.CompletionTokens
+		}
+		if chunk.Usage.PromptTokens != nil && chunk.Usage.CompletionTokens != nil {
+			usage["total_tokens"] = *chunk.Usage.PromptTokens + *chunk.Usage.CompletionTokens
+		}
+		envelope["usage"] = usage
 	}
 	return envelope
 }

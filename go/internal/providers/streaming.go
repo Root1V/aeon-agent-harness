@@ -40,8 +40,16 @@ type Chunk struct {
 // field of decision H3, still belong with the shared vocabulary (FND-004) — the cache pair is here
 // now because its absence is a live undercount, not a missing feature.
 type Usage struct {
-	PromptTokens     int
-	CompletionTokens int
+	// PromptTokens/CompletionTokens are POINTERS since MDL-014, completing what MDL-012 and MDL-016
+	// started: nil means the provider reported no usage at all, which is not a call that consumed
+	// nothing. A response with no `usage` object normalized to 0 before this, and the ledger recorded a
+	// 0-token, $0 call — the same fabricated fact the cache counters had, on the two counters everything
+	// reads.
+	//
+	// Found by RUNNING Synaptum's normalization corpus, not by reading code: it was the last real
+	// divergence of the ten cases.
+	PromptTokens     *int
+	CompletionTokens *int
 	CacheReadTokens  *int
 	CacheWriteTokens *int
 	// ReasoningTokens is the part of the output spent thinking rather than answering (MDL-016).

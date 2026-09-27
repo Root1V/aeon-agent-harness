@@ -136,8 +136,11 @@ func TestIdempotentReplayIsNotBilledTwice(t *testing.T) {
 		if replay.CostUSD == nil || *replay.CostUSD != 0 {
 			t.Errorf("replay row cost = %v, want a measured 0: no new money was spent, and NULL would read as unpriced", replay.CostUSD)
 		}
-		if replay.PromptTokens != 0 || replay.CompletionTokens != 0 {
-			t.Errorf("replay row recorded %d/%d tokens — they belong to the generation, and counting them here inflates the totals the same way the cost would",
+		// A MEASURED zero, not nil: a replay consumed nothing new and we know it exactly (MDL-014's
+		// distinction, applied here). nil would claim nobody measured, which would be false.
+		if replay.PromptTokens == nil || *replay.PromptTokens != 0 ||
+			replay.CompletionTokens == nil || *replay.CompletionTokens != 0 {
+			t.Errorf("replay row tokens = %v/%v, want a measured 0/0 — they belong to the generation, and counting them here inflates the totals the same way the cost would",
 				replay.PromptTokens, replay.CompletionTokens)
 		}
 		if replay.IdempotentReplayOf == "" {
