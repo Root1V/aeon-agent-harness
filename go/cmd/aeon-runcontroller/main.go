@@ -18,6 +18,7 @@ import (
 	"go.temporal.io/sdk/client"
 
 	"github.com/aeon-ai/aeon/go/internal/api"
+	"github.com/aeon-ai/aeon/go/internal/checkpoint"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	"github.com/aeon-ai/aeon/go/internal/runcontroller"
 	"github.com/aeon-ai/aeon/go/internal/store"
@@ -58,6 +59,7 @@ func main() {
 	defer temporalClient.Close()
 
 	var registry *store.AgentRegistry
+	var checkpointer checkpoint.Checkpointer
 	if dsn := os.Getenv("AEON_PG_DSN"); dsn != "" {
 		s, err := store.Connect(context.Background(), dsn)
 		if err != nil {
@@ -66,15 +68,21 @@ func main() {
 		defer s.Close()
 		registry = s.AgentRegistry()
 		log.Println("aeon-runcontroller: circuit breaker enforcement live (a quarantined agent_manifest_ref will be refused)")
+
+		// INT-011: a person's approval decision is journalled as a known outcome, because the person decides
+		// while the loop is not running and only this process witnesses it.
+		checkpointer = s.Checkpointer()
+		log.Println("aeon-runcontroller: approval decisions journalled as known outcomes (INT-011)")
 	} else {
-		log.Println("aeon-runcontroller: AEON_PG_DSN not set — circuit breaker enforcement skipped (see A5 in roadmap.md)")
+		log.Println("aeon-runcontroller: AEON_PG_DSN not set — circuit breaker enforcement skipped (see A5 in roadmap.md), approval decisions not journalled (INT-011)")
 	}
 
 	controller := runcontroller.New(temporalClient, taskQueue)
 	mux := http.NewServeMux()
 	handlers := &api.RunControllerHandlers{
-		Controller: controller,
-		Registry:   registry,
+		Controller:   controller,
+		Registry:     registry,
+		Checkpointer: checkpointer,
 	}
 	handlers.Register(mux)
 

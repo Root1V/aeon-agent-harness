@@ -214,3 +214,106 @@ func (s *RunState) Durability() Durability {
 	}
 	return d
 }
+
+// Outcome is WHY a step reached PhaseCompleted (INT-011).
+//
+// A denial is a completed step, not an absent one, and that is the whole point. Before this, a step
+// denied BEFORE executing looked exactly like a step that was attempted and whose result nobody knows:
+// both had no `completed` record. So a run suspended waiting for a person could not be resumed, because
+// resuming means knowing which steps are still open, and "denied" was indistinguishable from "unknown".
+//
+// Found by Synaptum when they persisted their journal for real. It only appears once durability is,
+// which is why it survived every in-memory test.
+type Outcome string
+
+const (
+	// OutcomeResult is the ordinary case: the effect ran and the payload carries what it produced. It is
+	// the DEFAULT for a completed record with no outcome field, so every record written before INT-011
+	// keeps meaning exactly what it meant.
+	OutcomeResult Outcome = "result"
+	// OutcomeDeniedByPolicy: the Tool Gateway refused before the effect. Cedar is default-deny, so this
+	// is also what an unknown tool or an unlisted principal produces.
+	OutcomeDeniedByPolicy Outcome = "denied_by_policy"
+	// OutcomeApprovalGranted: a person allowed the step. Written by the HARNESS, not the loop — a person
+	// decides when the loop is not running, and only the harness knows it happened.
+	OutcomeApprovalGranted Outcome = "approval_granted"
+	// OutcomeApprovalDenied: a person refused it.
+	OutcomeApprovalDenied Outcome = "approval_denied"
+	// OutcomeApprovalExpired: nobody decided in time. Distinct from a denial on purpose — a denial is a
+	// decision and an expiry is its absence, and they call for different things: the first ends the step,
+	// the second can legitimately be asked again.
+	OutcomeApprovalExpired Outcome = "approval_expired"
+)
+
+// Denied reports whether this outcome means the effect did NOT happen.
+//
+// A helper rather than a comparison at each call site, because the set will grow and a caller that
+// enumerated it would keep passing while quietly treating a new denial kind as a success.
+func (o Outcome) Denied() bool {
+	switch o {
+	case OutcomeDeniedByPolicy, OutcomeApprovalDenied, OutcomeApprovalExpired:
+		return true
+	default:
+		return false
+	}
+}
+
+// outcomeEnvelope is the shape an outcome travels in inside a record's payload.
+type outcomeEnvelope struct {
+	Outcome Outcome `json:"outcome"`
+	Reason  string  `json:"reason,omitempty"`
+	// Result is the ordinary payload, kept nested so an outcome can never be mistaken for it. A loop
+	// reading `result` on a denied step finds nothing rather than finding something that looks usable.
+	Result json.RawMessage `json:"result,omitempty"`
+}
+
+// OutcomePayload builds the payload for a completed record with an explicit outcome.
+func OutcomePayload(outcome Outcome, reason string, result json.RawMessage) (json.RawMessage, error) {
+	raw, err := json.Marshal(outcomeEnvelope{Outcome: outcome, Reason: reason, Result: result})
+	if err != nil {
+		return nil, fmt.Errorf("checkpoint: encoding outcome: %w", err)
+	}
+	return raw, nil
+}
+
+// StepOutcome reports how a step concluded, and whether it concluded at all.
+//
+// The three answers a resuming loop needs, and they have to stay three: concluded-with-an-outcome,
+// attempted-and-unknown, and never-seen. Collapsing the last two is what made a denied step
+// unresumable in the first place.
+func (s *RunState) StepOutcome(stepID string) (Outcome, string, bool) {
+	rec, ok := s.Completed(stepID)
+	if !ok {
+		return "", "", false
+	}
+	if len(rec.Payload) == 0 {
+		return OutcomeResult, "", true
+	}
+	var env outcomeEnvelope
+	if err := json.Unmarshal(rec.Payload, &env); err != nil || env.Outcome == "" {
+		// A payload that is not an envelope is a pre-INT-011 result, and reading it as one keeps every
+		// existing journal meaning what it meant. Guessing a denial from an unparseable payload would be
+		// far worse than assuming the ordinary case: it would strand a step that really did run.
+		return OutcomeResult, "", true
+	}
+	return env.Outcome, env.Reason, true
+}
+
+// ApprovalStep is the journal step_id an approval decision is recorded under (INT-011).
+//
+// Keyed by the APPROVAL and not by the node, which is the part worth agreeing on across the seam: two
+// decisions about the same approval are the same fact and must collapse to one record, while a second
+// approval on the same node — a retried step asking again — is a different fact and must not be
+// swallowed by the first. Using node_id would have collapsed the second case into the first.
+//
+// A function rather than a documented string format, so the three teams derive the id from the same
+// code path instead of each writing the prefix by hand.
+func ApprovalStep(approvalID string) string { return "approval:" + approvalID }
+
+// OutcomeForApproval maps a person's decision to the outcome recorded for it.
+func OutcomeForApproval(approved bool) Outcome {
+	if approved {
+		return OutcomeApprovalGranted
+	}
+	return OutcomeApprovalDenied
+}

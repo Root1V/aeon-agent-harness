@@ -126,6 +126,13 @@ func main() {
 		handlers.Executions = s.ToolExecutions()
 		log.Println("aeon-toolgw: execution deduplication live (idempotency_key honoured on /execute)")
 
+		// INT-011: a policy denial is journalled as a known outcome of the step, so a run suspended on a
+		// refusal can be resumed instead of looking like a step whose fate nobody knows. Without a DSN the
+		// denial still denies — it just answers journalled=false, which is a reported gap and not a silent
+		// one.
+		handlers.Checkpointer = s.Checkpointer()
+		log.Println("aeon-toolgw: policy denials journalled as known outcomes (INT-011)")
+
 		// TOOL-006: search.rag over indexed documents. Registered only when an embedding model is
 		// named AND the provider it needs is configured — an unregistered tool is denied with a
 		// clear "unknown tool" rather than answering from an empty corpus, which would look like a

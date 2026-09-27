@@ -115,28 +115,59 @@ func (c *Controller) PendingApproval(ctx context.Context, workflowID string) (ma
 // is what actually enforces that toolCallHash matches the parameters about to execute
 // (RUN-005's parameter binding) — passing it through unmodified here, rather than re-deriving it
 // from the pending approval, is what lets a caller approve the WRONG hash and be denied.
-func (c *Controller) Approve(ctx context.Context, workflowID, toolCallHash string) error {
-	return c.sendApprovalDecision(ctx, workflowID, "approve", toolCallHash)
+func (c *Controller) Approve(ctx context.Context, workflowID, toolCallHash string) (ApprovalDecision, error) {
+	return c.sendApprovalDecision(ctx, workflowID, "approve", toolCallHash, true)
 }
 
 // Reject signals rejection of toolCallHash.
-func (c *Controller) Reject(ctx context.Context, workflowID, toolCallHash string) error {
-	return c.sendApprovalDecision(ctx, workflowID, "reject", toolCallHash)
+func (c *Controller) Reject(ctx context.Context, workflowID, toolCallHash string) (ApprovalDecision, error) {
+	return c.sendApprovalDecision(ctx, workflowID, "reject", toolCallHash, false)
 }
 
-func (c *Controller) sendApprovalDecision(ctx context.Context, workflowID, signalName, toolCallHash string) error {
+// ApprovalDecision is what a person decided, returned so the caller can journal it (INT-011).
+//
+// Returned rather than journalled in here because this type's job is Temporal and nothing else; the
+// journal write belongs to the harness surface that received the person's request. What this type does
+// owe the caller is the IDENTITY of the decision — approval_id, node_id — which only it sees, because
+// it is the one that queried the pending approval to find them.
+type ApprovalDecision struct {
+	ApprovalID   string `json:"approval_id"`
+	NodeID       string `json:"node_id,omitempty"`
+	ToolCallHash string `json:"tool_call_hash"`
+	Approved     bool   `json:"approved"`
+}
+
+func (c *Controller) sendApprovalDecision(
+	ctx context.Context, workflowID, signalName, toolCallHash string, approved bool,
+) (ApprovalDecision, error) {
 	pending, err := c.PendingApproval(ctx, workflowID)
 	if err != nil {
-		return fmt.Errorf("runcontroller: %s: %w", signalName, err)
+		return ApprovalDecision{}, fmt.Errorf("runcontroller: %s: %w", signalName, err)
 	}
 	if pending == nil {
-		return fmt.Errorf("runcontroller: %s: no approval is currently pending for %s", signalName, workflowID)
+		return ApprovalDecision{}, fmt.Errorf("runcontroller: %s: no approval is currently pending for %s", signalName, workflowID)
 	}
 	decision := map[string]any{"approval_id": pending["approval_id"], "tool_call_hash": toolCallHash}
 	if err := c.Client.SignalWorkflow(ctx, workflowID, "", signalName, decision); err != nil {
-		return fmt.Errorf("runcontroller: %s: %w", signalName, err)
+		return ApprovalDecision{}, fmt.Errorf("runcontroller: %s: %w", signalName, err)
 	}
-	return nil
+	// Reported only after the signal landed. The decision becomes a FACT when the run receives it, and
+	// returning it earlier would invite the caller to journal a decision that never arrived — a resuming
+	// loop would then read a granted approval for a step nobody ever let through.
+	return ApprovalDecision{
+		ApprovalID:   stringField(pending, "approval_id"),
+		NodeID:       stringField(pending, "node_id"),
+		ToolCallHash: toolCallHash,
+		Approved:     approved,
+	}, nil
+}
+
+// stringField reads a string out of the workflow's query result, which is untyped by construction:
+// it crossed a process boundary as JSON. A missing or non-string field yields "" rather than an error
+// because none of these fields is worth failing a decision that already took effect.
+func stringField(m map[string]any, key string) string {
+	s, _ := m[key].(string)
+	return s
 }
 
 // Status is RunState's status field (proto/schemas/run_state.schema.json), derived from Temporal's
