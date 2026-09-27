@@ -10,6 +10,7 @@ policies:
         action,
         resource
       ) when {
+        resource is Tool &&
         ["search.web", "search.rag", "repository.read", "artifact.read"].contains(resource.name)
       };
   - id: allow-mcp-client-read-only-tools
@@ -20,6 +21,7 @@ policies:
         action,
         resource
       ) when {
+        resource is Tool &&
         ["search.web", "search.rag", "repository.read", "artifact.read"].contains(resource.name)
       };
   - id: forbid-shell-for-everyone
@@ -41,4 +43,24 @@ policies:
         resource
       ) when {
         resource.name like "external.write.*"
+      };
+
+  # A2A-002: delegation is a SEPARATE statement from tool use, and the `resource is` guards above are
+  # what make it separate. Measured before writing this: without them, `allow-deep-research-tools`
+  # authorized delegation to a remote agent named "search.web" — the permit listed names and never said
+  # what KIND of thing it was naming, so a destination that borrowed a tool's name inherited its permit.
+  #
+  # The distinction is not pedantry. A tool call is an effect inside our perimeter, checked by us. A
+  # delegation hands work to a third party whose own tools cross ITS gateway and not ours, so the two
+  # deserve to be permitted separately even when the same agent is allowed both.
+  - id: allow-deep-research-delegation
+    effect: permit
+    cedarSource: |
+      permit(
+        principal == Agent::"deep-research-general@0.1.0",
+        action,
+        resource
+      ) when {
+        resource is RemoteAgent &&
+        ["research-partner"].contains(resource.name)
       };

@@ -14,7 +14,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -133,6 +135,28 @@ func main() {
 		handlers.Checkpointer = s.Checkpointer()
 		log.Println("aeon-toolgw: policy denials journalled as known outcomes (INT-011)")
 
+		// A2A-002: governed A2A egress as a data-plane proxy. A framework points its A2A client at
+		// /a2a/egress/{remote_agent_id} and changes no code; the destination must be declared, Cedar must
+		// permit it, the credential is injected here, and the delegation is recorded.
+		//
+		// The fan-out limit is deliberately OFF unless configured. Width is the harness's half of blast
+		// radius (depth is Synaptum's), but picking a number for someone else's deployment would be
+		// inventing a bound rather than enforcing one they chose.
+		egress := &api.A2AEgressHandlers{
+			Policy:             engine,
+			RemoteAgents:       s.RemoteAgents(),
+			Delegations:        s.A2ADelegations(),
+			Broker:             broker,
+			MaxInFlightPerRun:  intFromEnv("AEON_A2A_MAX_INFLIGHT_PER_RUN", 0),
+			InFlightStaleAfter: time.Duration(intFromEnv("AEON_A2A_INFLIGHT_STALE_SECONDS", 3600)) * time.Second,
+		}
+		egress.Register(mux)
+		if egress.MaxInFlightPerRun > 0 {
+			log.Printf("aeon-toolgw: governed A2A egress live at /a2a/egress/{remote_agent_id}, fan-out limit %d per run (A2A-002)", egress.MaxInFlightPerRun)
+		} else {
+			log.Println("aeon-toolgw: governed A2A egress live at /a2a/egress/{remote_agent_id}, fan-out UNLIMITED (set AEON_A2A_MAX_INFLIGHT_PER_RUN) (A2A-002)")
+		}
+
 		// TOOL-006: search.rag over indexed documents. Registered only when an embedding model is
 		// named AND the provider it needs is configured — an unregistered tool is denied with a
 		// clear "unknown tool" rather than answering from an empty corpus, which would look like a
@@ -160,7 +184,12 @@ func main() {
 	}
 
 	srv := httpserver.New("aeon-toolgw", mux)
-	log.Println("aeon-toolgw starting (policy-checked execution + outbound MCP server live; dedupe table not yet implemented — see roadmap.md RUN-004)")
+	// Deliberately says nothing about which optional subsystems are live: every one of them logs for
+	// itself above, from the line that knows whether it actually came up. This line used to claim "dedupe
+	// table not yet implemented" directly underneath the line reporting deduplication as live — a summary
+	// that restates what the lines above already said is a second copy of the truth, and it is the copy
+	// nobody updates.
+	log.Println("aeon-toolgw starting (policy-checked execution; see the lines above for which optional subsystems came up)")
 	httpserver.MustListenAndServe(srv)
 }
 
@@ -193,4 +222,22 @@ func ragEmbedderFromEnv() *prometheusinference.Embedder {
 		},
 		ModelID: model,
 	}
+}
+
+// intFromEnv reads a whole number from the environment, falling back when unset or unparseable.
+//
+// An unparseable value falls back rather than aborting, and it SAYS SO: a typo in a limit should not stop
+// a gateway that can still route everything else, but a limit silently read as its default is how an
+// operator comes to believe a bound is in force that is not.
+func intFromEnv(name string, fallback int) int {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		log.Printf("aeon-toolgw: %s=%q is not a number, using %d", name, raw, fallback)
+		return fallback
+	}
+	return n
 }
