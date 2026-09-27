@@ -309,8 +309,12 @@ services:
     environment:
       # TOOL-004: this stack's worker still uses the ledger that executes nothing, and says so out
       # loud rather than defaulting to it. Flipping it to AEON_TOOLGW_ADDR waits for real tools
-      # (TOOL-006/TOOL-007) and for the policy bundle to permit what the example actually calls —
-      # today artifact.write, which the Go executor does not register and the bundle does not allow.
+      # (TOOL-006/TOOL-007) and for the Go executor to register artifact.write, which it does not.
+      #
+      # What changed with INT-010: the bundle now DOES name artifact.write, with
+      # disposition require_approval — so in gateway mode the call would be refused until a person
+      # approves, which is the intended behaviour and not a blocker. The line above used to say the
+      # bundle did not allow it at all; that stopped being true on 2026-09-27.
       AEON_TOOL_EXECUTION_MODE: local-ledger
       <<: *common-env
       AEON_TEMPORAL_ADDRESS: temporal:7233

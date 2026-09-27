@@ -25,11 +25,26 @@ type PolicyBundleItem struct {
 	ID          string `json:"id" yaml:"id"`
 	Effect      string `json:"effect" yaml:"effect"`
 	CedarSource string `json:"cedarSource" yaml:"cedarSource"`
+	// Disposition is INT-010: what the loop should DO when this policy determines the decision.
+	//
+	// It lives in the BUNDLE because Cedar is binary — it answers allow or deny and nothing richer — while
+	// the seam has to distinguish "refuse this step" from "end the run" and "allowed" from "allowed once a
+	// person says yes". Those are governance statements, so they belong in the versioned config the
+	// governance team writes, not in code that would be guessing on their behalf.
+	//
+	// Optional. An omitted disposition is DERIVED from the effect, which is faithful rather than assumed —
+	// see derivedDisposition.
+	Disposition Disposition `json:"disposition,omitempty" yaml:"disposition,omitempty"`
 }
 
 // Engine evaluates tool-call authorization against a loaded Cedar policy set.
 type Engine struct {
 	policySet *cedar.PolicySet
+	// dispositions maps a policy id to what the bundle declared for it (INT-010). Keyed by the id Cedar
+	// reports in its diagnostic, which is the SAME id the bundle declares only because LoadEngine now
+	// keys the policy set by it — before that it was a positional index, and a lookup here would have
+	// silently missed every time anyone reordered the file.
+	dispositions map[cedar.PolicyID]Disposition
 }
 
 // LoadEngine parses every policy's cedarSource into a single Cedar PolicySet, KEYED BY THE ID THE
@@ -47,9 +62,13 @@ type Engine struct {
 // read back later, a positional index stopped being good enough.
 func LoadEngine(doc PolicyBundleDoc) (*Engine, error) {
 	ps := cedar.NewPolicySet()
+	dispositions := map[cedar.PolicyID]Disposition{}
 	for i, p := range doc.Policies {
 		if p.ID == "" {
 			return nil, fmt.Errorf("policy: bundle entry %d declares no id: a decision it determines could only be reported by position, which changes whenever the bundle is reordered", i)
+		}
+		if err := validateDeclaredDisposition(p.Effect, p.Disposition); err != nil {
+			return nil, fmt.Errorf("policy: bundle entry %q: %w", p.ID, err)
 		}
 		list, err := cedar.NewPolicyListFromBytes(p.ID, []byte(p.CedarSource))
 		if err != nil {
@@ -72,17 +91,31 @@ func LoadEngine(doc PolicyBundleDoc) (*Engine, error) {
 			if !ps.Add(id, parsed) {
 				return nil, fmt.Errorf("policy: bundle declares id %q more than once: one of them would silently replace the other", id)
 			}
+			if p.Disposition != "" {
+				dispositions[id] = p.Disposition
+			}
 		}
 	}
-	return &Engine{policySet: ps}, nil
+	return &Engine{policySet: ps, dispositions: dispositions}, nil
 }
 
-// Decision is the result of an authorization check: whether the call is allowed, and — for
-// audit/debugging — which policy (if any) determined the outcome.
+// Decision is the result of an authorization check.
+//
+// Allowed means "may execute NOW", which is narrower than "was not forbidden" and deliberately so: a
+// require_approval decision reports Allowed FALSE, so every call site that reads only this field fails
+// closed instead of running an effect nobody approved. See Disposition.PermitsExecution.
 type Decision struct {
 	Allowed       bool
 	PolicyID      string
 	CedarDecision string
+	// Disposition is INT-010: what the loop should do. Never empty — a decision with no declared
+	// disposition carries the one derived from the effect.
+	Disposition Disposition `json:"disposition"`
+	// DispositionDeclared says whether the bundle stated it or we derived it from the effect. Reported
+	// rather than folded in, because "nobody has thought about this policy's disposition" and "somebody
+	// decided deny_step" are different facts about a bundle, and only the first is worth an operator's
+	// attention.
+	DispositionDeclared bool `json:"disposition_declared"`
 }
 
 // IsAllowed evaluates whether agentManifestRef (e.g. "deep-research-general@0.1.0") may invoke
@@ -146,9 +179,23 @@ func (e *Engine) authorize(principalType, principalID, resourceType, resourceNam
 		policyID = string(diagnostic.Reasons[0].PolicyID)
 	}
 
+	allowed := decision == types.Allow
+	// The STRICTEST declaration among every determining policy wins, and all of them are scanned rather
+	// than just Reasons[0]. Cedar can report several: if two permits match and only one says a person must
+	// approve, honouring the other would run the call and ask nobody — the comfortable error again.
+	disposition, declared := derivedDisposition(allowed), false
+	for _, reason := range diagnostic.Reasons {
+		if d, ok := e.dispositions[reason.PolicyID]; ok {
+			disposition, declared = stricter(disposition, d), true
+		}
+	}
+
 	return Decision{
-		Allowed:       decision == types.Allow,
+		Allowed:       allowed && disposition.PermitsExecution(),
 		PolicyID:      policyID,
 		CedarDecision: decision.String(),
+
+		Disposition:         disposition,
+		DispositionDeclared: declared,
 	}
 }

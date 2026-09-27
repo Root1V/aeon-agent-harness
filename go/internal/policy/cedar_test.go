@@ -251,3 +251,152 @@ func TestDelegationIsNotGrantedByAToolPermit(t *testing.T) {
 		t.Errorf("a TOOL named %q was permitted by %q — the delegation permit is leaking the other way", "research-partner", d.PolicyID)
 	}
 }
+
+// TestDispositionComesFromTheBundleNotFromCode is INT-010's policy-level half.
+//
+// Cedar answers allow or deny and nothing richer, so the four dispositions have to come from somewhere.
+// They come from the BUNDLE — they are governance statements, and the alternative was code guessing on the
+// governance team's behalf.
+func TestDispositionComesFromTheBundleNotFromCode(t *testing.T) {
+	t.Run("an omitted disposition is DERIVED from the effect, and says it was", func(t *testing.T) {
+		// deny_step is not a guess: it is exactly what a Cedar `forbid` says, and nothing more. What makes
+		// the default acceptable is that terminate_run asserts something Cedar does NOT say, so a bundle has
+		// to opt into it — and that the decision reports which of the two happened.
+		e, err := LoadEngine(PolicyBundleDoc{Policies: []PolicyBundleItem{
+			{ID: "forbid-plain", Effect: "forbid", CedarSource: `forbid(principal, action, resource) when { resource.name == "x" };`},
+		}})
+		if err != nil {
+			t.Fatalf("LoadEngine: %v", err)
+		}
+		d := e.IsAllowed("a@1", "x")
+		if d.Disposition != DispositionDenyStep {
+			t.Errorf("disposition = %q, want %q", d.Disposition, DispositionDenyStep)
+		}
+		if d.DispositionDeclared {
+			t.Error("reported as declared when nothing declared it — an operator cannot then tell a considered deny_step from one nobody thought about")
+		}
+	})
+
+	t.Run("require_approval permits nothing YET, so allowed is false", func(t *testing.T) {
+		// The most important assertion in this file. Every existing call site reads `if !decision.Allowed
+		// { refuse }`. If a require_approval decision left Allowed true, all of them would execute the
+		// effect without anybody being asked — so the seam has to fail closed by construction, and only
+		// code that understands dispositions can act on the difference.
+		e, err := LoadEngine(PolicyBundleDoc{Policies: []PolicyBundleItem{
+			{ID: "ask-first", Effect: "permit", Disposition: DispositionRequireApproval,
+				CedarSource: `permit(principal == Agent::"a@1", action, resource) when { resource.name == "danger" };`},
+		}})
+		if err != nil {
+			t.Fatalf("LoadEngine: %v", err)
+		}
+		d := e.IsAllowed("a@1", "danger")
+		if d.Allowed {
+			t.Fatal("allowed is true for a require_approval policy — every call site that reads only this field would run the effect with nobody asked")
+		}
+		if d.Disposition != DispositionRequireApproval {
+			t.Errorf("disposition = %q, want %q", d.Disposition, DispositionRequireApproval)
+		}
+		if d.CedarDecision != "allow" {
+			t.Errorf("CedarDecision = %q, want allow — Cedar DID permit it; the seam is what withholds execution, and conflating the two would hide which of them refused", d.CedarDecision)
+		}
+	})
+
+	t.Run("the STRICTEST declaration among matching policies wins", func(t *testing.T) {
+		// Cedar can report several determining policies. If two permits match and only one says a person
+		// must approve, honouring the other would run the call and ask nobody.
+		e, err := LoadEngine(PolicyBundleDoc{Policies: []PolicyBundleItem{
+			{ID: "broad-allow", Effect: "permit",
+				CedarSource: `permit(principal == Agent::"a@1", action, resource);`},
+			{ID: "narrow-ask", Effect: "permit", Disposition: DispositionRequireApproval,
+				CedarSource: `permit(principal == Agent::"a@1", action, resource) when { resource.name == "danger" };`},
+		}})
+		if err != nil {
+			t.Fatalf("LoadEngine: %v", err)
+		}
+		if d := e.IsAllowed("a@1", "danger"); d.Allowed || d.Disposition != DispositionRequireApproval {
+			t.Errorf("decision = %+v, want require_approval and allowed=false — a blanket permit must not cancel a narrower policy that asks for a person", d)
+		}
+		// And a tool only the broad permit covers is still plainly allowed, or the strictness rule would be
+		// quietly gating everything.
+		if d := e.IsAllowed("a@1", "ordinary"); !d.Allowed || d.Disposition != DispositionAllow {
+			t.Errorf("decision = %+v, want a plain allow", d)
+		}
+	})
+
+	t.Run("terminate_run outranks deny_step when both forbids match", func(t *testing.T) {
+		e, err := LoadEngine(PolicyBundleDoc{Policies: []PolicyBundleItem{
+			{ID: "soft", Effect: "forbid", Disposition: DispositionDenyStep,
+				CedarSource: `forbid(principal, action, resource) when { resource.name like "shell.*" };`},
+			{ID: "hard", Effect: "forbid", Disposition: DispositionTerminateRun,
+				CedarSource: `forbid(principal, action, resource) when { resource.name == "shell.exec" };`},
+		}})
+		if err != nil {
+			t.Fatalf("LoadEngine: %v", err)
+		}
+		if d := e.IsAllowed("a@1", "shell.exec"); d.Disposition != DispositionTerminateRun {
+			t.Errorf("disposition = %q, want terminate_run", d.Disposition)
+		}
+		if d := e.IsAllowed("a@1", "shell.sh"); d.Disposition != DispositionDenyStep {
+			t.Errorf("disposition = %q, want deny_step — only the narrower policy terminates", d.Disposition)
+		}
+	})
+
+	t.Run("a contradiction between effect and disposition fails at LOAD", func(t *testing.T) {
+		// It has to fail here: by evaluation time the bundle is already in force, and whichever half of the
+		// contradiction the code happened to honour would silently become the policy.
+		for _, tc := range []struct {
+			name        string
+			effect      string
+			disposition Disposition
+		}{
+			{"a forbid that allows", "forbid", DispositionAllow},
+			{"a forbid that asks for approval", "forbid", DispositionRequireApproval},
+			{"a permit that denies the step", "permit", DispositionDenyStep},
+			{"a permit that terminates the run", "permit", DispositionTerminateRun},
+			{"an invented disposition", "forbid", Disposition("burn_it_down")},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := LoadEngine(PolicyBundleDoc{Policies: []PolicyBundleItem{
+					{ID: "contradictory", Effect: tc.effect, Disposition: tc.disposition,
+						CedarSource: `forbid(principal, action, resource) when { resource.name == "x" };`},
+				}})
+				if err == nil {
+					t.Fatalf("%s loaded", tc.name)
+				}
+			})
+		}
+	})
+
+	t.Run("the checked-in bundle declares the four cases it means to", func(t *testing.T) {
+		// Against the real file, because the dispositions ARE the bundle: a test over an inline copy would
+		// verify that the mechanism works while saying nothing about what our deployment actually enforces.
+		e := loadRepoBundle(t)
+		const agent = "deep-research-general@0.1.0"
+		for _, tc := range []struct {
+			tool        string
+			allowed     bool
+			disposition Disposition
+			declared    bool
+		}{
+			{"search.web", true, DispositionAllow, false},
+			// shell.* ends the run: an agent trying for a shell is not making a recoverable mistake, and
+			// handing back the refusal would invite shell.sh, then bash, then sh.
+			{"shell.exec", false, DispositionTerminateRun, true},
+			// A write outside the perimeter IS recoverable — the refusal going back as evidence is what lets
+			// the model reach for the governed tool instead.
+			{"external.write.database", false, DispositionDenyStep, true},
+			// Permitted, but only once a person says yes.
+			{"artifact.write", false, DispositionRequireApproval, true},
+			// Default-deny: nothing permitted it, nothing declared anything.
+			{"nothing.permits.this", false, DispositionDenyStep, false},
+		} {
+			t.Run(tc.tool, func(t *testing.T) {
+				d := e.IsAllowed(agent, tc.tool)
+				if d.Allowed != tc.allowed || d.Disposition != tc.disposition || d.DispositionDeclared != tc.declared {
+					t.Errorf("decision = %+v, want allowed=%v disposition=%q declared=%v",
+						d, tc.allowed, tc.disposition, tc.declared)
+				}
+			})
+		}
+	})
+}

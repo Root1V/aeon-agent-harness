@@ -107,6 +107,23 @@ func approvalGraph(path string) map[string]any {
 	}
 }
 
+// sequentialGraph is n tool_call children under one sequential node.
+//
+// Used by the pause test so the pause gate (graph.py, checked before every node) gets n+1 chances to see the
+// signal instead of one. It does not make the race impossible — a worker that finished all n children before
+// the signal arrived would still escape — and waitForPaused says so when that happens rather than reporting
+// it as a broken pause.
+func sequentialGraph(prefix string, n int) map[string]any {
+	children := make([]any, 0, n)
+	for i := 0; i < n; i++ {
+		children = append(children, map[string]any{
+			"id": fmt.Sprintf("%s-n%d", prefix, i), "kind": "tool_call", "tool_name": "artifact.write",
+			"tool_args": map[string]any{"path": fmt.Sprintf("%s-%d.txt", prefix, i)},
+		})
+	}
+	return map[string]any{"id": prefix + "-root", "kind": "sequential", "children": children}
+}
+
 func getStatus(t *testing.T, srv *httptest.Server, runID string) map[string]any {
 	t.Helper()
 	resp, err := http.Get(srv.URL + "/runs/" + runID)
@@ -119,6 +136,30 @@ func getStatus(t *testing.T, srv *httptest.Server, runID string) map[string]any 
 		t.Fatalf("decoding status: %v", err)
 	}
 	return parsed
+}
+
+// waitForPaused polls until the run reports PAUSED.
+//
+// It distinguishes the two ways this can go wrong, which a fixed sleep could not: the run never pausing is a
+// product failure, and the run FINISHING before the pause could be observed is the test losing a race. They
+// have different fixes and conflating them sends whoever reads the failure to the wrong one.
+func waitForPaused(t *testing.T, srv *httptest.Server, runID string, timeout time.Duration) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last map[string]any
+	for time.Now().Before(deadline) {
+		last = getStatus(t, srv, runID)
+		if last["status"] == "PAUSED" {
+			return last
+		}
+		if last["status"] == "SUCCEEDED" {
+			t.Fatalf("run %s finished before the pause could be observed — this test lost a race and did NOT "+
+				"exercise pausing; it is not evidence that pause is broken. Last status: %v", runID, last)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for run %s to report PAUSED, last observed: %v", runID, last)
+	return nil
 }
 
 func waitForStatus(t *testing.T, srv *httptest.Server, runID, want string, timeout time.Duration) map[string]any {
@@ -144,15 +185,19 @@ func TestRunControllerLifecycle(t *testing.T) {
 
 	t.Run("pause blocks progress, resume lets it complete", func(t *testing.T) {
 		runID := newRunID("pause")
-		startRun(t, srv, runID, simpleGraph("pause-test.txt"))
+		startRun(t, srv, runID, sequentialGraph("pause-test", 8))
 
-		// Paused before the workflow's first task runs (graph.py checks the pause gate before
-		// every node, including the very first) — so this is not a race: however fast the worker
-		// is, it cannot get past node n0 until resumed.
+		// The comment that used to be here said "this is not a race: however fast the worker is, it cannot
+		// get past node n0 until resumed". THAT WAS FALSE, and it was observed being false — the run reached
+		// SUCCEEDED with tool_calls=1 before the pause signal landed. graph.py checks the gate before every
+		// node, but a single-node graph offers exactly one check, and the signal can arrive after it.
+		//
+		// Narrowed two ways rather than pretended away. The graph below has several sequential children, so
+		// the gate is checked once per child instead of once per run; and the observation polls instead of
+		// sleeping a fixed second, so it catches the paused state as soon as it exists.
 		postAction(t, srv, runID, "pause")
 
-		time.Sleep(1 * time.Second)
-		status := getStatus(t, srv, runID)
+		status := waitForPaused(t, srv, runID, 5*time.Second)
 		// mapStatus (controller.go) reports "PAUSED", not "RUNNING", once the is_paused query
 		// returns true — distinct from the raw Temporal execution status, which stays RUNNING the
 		// whole time (Temporal has no native "paused" state; ours is purely workflow-side).

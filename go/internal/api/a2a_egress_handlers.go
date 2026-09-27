@@ -156,7 +156,11 @@ func (h *A2AEgressHandlers) proxy(w http.ResponseWriter, r *http.Request) {
 
 	decision := h.Policy.IsAllowedToDelegate(rec.AgentManifestRef, remoteAgentID)
 	if !decision.Allowed {
-		h.deny(ctx, w, span, rec, http.StatusForbidden, "delegation "+denialReason(decision))
+		// The disposition travels on a delegation refusal for the same reason it does on a tool refusal
+		// (INT-010): whether the loop may try a different destination, must stop, or should ask a person
+		// are three different behaviours, and a 403 alone picks none of them.
+		span.SetAttributes(attribute.String("aeon.policy.disposition", string(decision.Disposition)))
+		h.denyWithDisposition(ctx, w, span, rec, http.StatusForbidden, "delegation "+denialReason(decision), decision.Disposition)
 		return
 	}
 
@@ -328,6 +332,17 @@ func (h *A2AEgressHandlers) deny(
 	ctx context.Context, w http.ResponseWriter, span trace.Span,
 	rec store.Delegation, status int, reason string,
 ) {
+	// A refusal that never reached Cedar — undeclared destination, no identity, fan-out — is deny_step:
+	// the loop may legitimately try something else, and none of these say the run is over. Stated rather
+	// than left empty, because a caller reading a disposition field has to get one every time or it has to
+	// handle an absent value, which is a fourth case nobody designed.
+	h.denyWithDisposition(ctx, w, span, rec, status, reason, policy.DispositionDenyStep)
+}
+
+func (h *A2AEgressHandlers) denyWithDisposition(
+	ctx context.Context, w http.ResponseWriter, span trace.Span,
+	rec store.Delegation, status int, reason string, disposition policy.Disposition,
+) {
 	span.SetStatus(codes.Error, reason)
 	if h.Delegations != nil {
 		if err := h.Delegations.RecordDenial(ctx, rec, reason); err != nil {
@@ -338,6 +353,7 @@ func (h *A2AEgressHandlers) deny(
 		"allowed":         false,
 		"reason":          reason,
 		"remote_agent_id": rec.RemoteAgentID,
+		"disposition":     disposition,
 	})
 }
 
