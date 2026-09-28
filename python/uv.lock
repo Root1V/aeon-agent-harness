@@ -14,13 +14,12 @@ source = { editable = "." }
 dependencies = [
     { name = "agent-framework-core" },
     { name = "agent-framework-openai" },
+    { name = "argus-obs-sdk", extra = ["http"] },
     { name = "claude-agent-sdk" },
     { name = "crewai" },
     { name = "jsonschema" },
     { name = "langgraph" },
     { name = "openai-agents" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-sdk" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "temporalio" },
@@ -37,13 +36,12 @@ dev = [
 requires-dist = [
     { name = "agent-framework-core", specifier = ">=1.15" },
     { name = "agent-framework-openai", specifier = ">=1.14" },
+    { name = "argus-obs-sdk", extras = ["http"], specifier = ">=1.0.0a8" },
     { name = "claude-agent-sdk", specifier = ">=0.2" },
     { name = "crewai", specifier = ">=1.15" },
     { name = "jsonschema", specifier = ">=4.23" },
     { name = "langgraph", specifier = ">=1.0" },
     { name = "openai-agents", specifier = ">=0.20,<0.21" },
-    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.29" },
-    { name = "opentelemetry-sdk", specifier = ">=1.29" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
@@ -242,6 +240,36 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d7/d8/05696357e0311f5b5c316d7b95f46c669dd9c15aaeecbb48c7d0aeb88c40/appdirs-1.4.4.tar.gz", hash = "sha256:7d5d0167b2b1ba821647616af46a749d1c653740dd0d2415100fe26e27afdf41", size = 13470, upload-time = "2020-05-11T07:59:51.037Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3b/00/2344469e2084fb287c2e0b57b72910309874c3245463acd6cf5e3db69324/appdirs-1.4.4-py2.py3-none-any.whl", hash = "sha256:a841dacd6b99318a741b166adb07e19ee71a274450e68237b4650ca1055ab128", size = 9566, upload-time = "2020-05-11T07:59:49.499Z" },
+]
+
+[[package]]
+name = "argus-obs-sdk"
+version = "1.0.0a8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "argus-obs-semconv" },
+    { name = "opentelemetry-sdk" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b8/55/06eb79cf7b10303c7c1f5e17bde993b66cd4157d14d8c8457a96cfbcfed1/argus_obs_sdk-1.0.0a8.tar.gz", hash = "sha256:de7a5102151f4752ba8c17707c2ae9b0b499e2134afa922ef9d7802bd5134035", size = 38875, upload-time = "2026-09-28T02:23:31.098Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/69/de/d4faf9621dc207dc145e75192acfacf23a60154a3d08d5f85bc5cc6053fb/argus_obs_sdk-1.0.0a8-py3-none-any.whl", hash = "sha256:5e0c98842260c26a8cf603fd20cbc373682900b7bcd46d9379ad7f16e911a695", size = 32862, upload-time = "2026-09-28T02:23:29.71Z" },
+]
+
+[package.optional-dependencies]
+http = [
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+]
+
+[[package]]
+name = "argus-obs-semconv"
+version = "1.0.0a8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f2/a1/035b675d00604b21994654affb7689dd2329d406b05cccb2c0cfc62415a8/argus_obs_semconv-1.0.0a8.tar.gz", hash = "sha256:9b9495f2174e8f7940560a2ea3374b723d8e0e31d1a201c6825caf7e21d0167b", size = 41655, upload-time = "2026-09-28T02:23:36.424Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8b/ca/8cd4aa1813fcdf98deada3b3ef99cbf994b75a8cee72137442046e0b0700/argus_obs_semconv-1.0.0a8-py3-none-any.whl", hash = "sha256:df9a38526c51e0a4af8c0085b97635ef2eb4c8b584a36fb67c1b35199aa5ee4f", size = 22618, upload-time = "2026-09-28T02:23:35.175Z" },
 ]
 
 [[package]]

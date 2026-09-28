@@ -12,6 +12,14 @@ name: aeon
 
 x-common-env: &common-env
   AEON_TENANT_ID: "default"
+  # OBS-006b: where the GO services export spans. They defaulted to otel-collector:4318 in code, so tracing
+  # was on but always pointed at this stack's own collector — pointing the whole deployment at an Argus agent
+  # meant editing four binaries' environments one by one, and I found that out by watching Argus's hot
+  # counter not move on a denial that had definitely happened.
+  #
+  # One variable for the whole stack now. From a CONTAINER an Argus agent is host.docker.internal, because
+  # the agent binds to 127.0.0.1 — measured, localhost from a container returns 000. See .env.example.
+  AEON_OTEL_ENDPOINT: ${AEON_OTEL_ENDPOINT:-otel-collector:4318}
 
 services:
   # ---- Durable execution -----------------------------------------------------------------
@@ -318,15 +326,23 @@ services:
       AEON_TOOL_EXECUTION_MODE: local-ledger
       <<: *common-env
       AEON_TEMPORAL_ADDRESS: temporal:7233
-      # OBS-001's Python half. Same variable the Go services read, and host:port without a scheme, which is
-      # the Go convention — aeon_observability accepts either.
+      # OBS-006b: the worker runs Argus's own SDK (argus-obs-sdk), so these are ITS variables.
       #
-      # Points at this stack's own collector by service name. ARGUS'S CONVENTION IS LOCALHOST: an
-      # application exports to a per-machine agent on localhost:4318 and never learns the central plane's
-      # address, which is why aeon_observability DEFAULTS to localhost. In compose there is no per-machine
-      # agent, so the service name is what exists here — and pointing at an Argus agent is exactly this one
-      # variable, with nothing else to change.
-      AEON_OTEL_ENDPOINT: ${AEON_OTEL_ENDPOINT:-otel-collector:4318}
+      # ARGUS_PROTOCOL IS PINNED, and that is not tidiness. Their Config auto-detects the protocol from the
+      # installed exporter packages, and this image has both the HTTP and the gRPC exporters on disk (other
+      # dependencies pull grpc in). It picked gRPC, then spoke gRPC at port 4318 — the HTTP port — and every
+      # export failed with StatusCode.UNAVAILABLE in a retry loop. An auto-detected protocol plus an
+      # explicitly configured port is a combination that CAN disagree, and it fails at runtime, not at start.
+      ARGUS_PROTOCOL: ${ARGUS_PROTOCOL:-http/protobuf}
+      ARGUS_ENDPOINT: ${ARGUS_ENDPOINT:-http://otel-collector:4318}
+      ARGUS_SERVICE: aeon-worker
+      ARGUS_ENVIRONMENT: ${ARGUS_ENVIRONMENT:-local}
+      ARGUS_ROLE: worker
+      # ARGUS'S CONVENTION IS LOCALHOST: an application exports to a per-machine agent on localhost and never
+      # learns the central plane's address. This compose stack has no per-machine agent, so the collector's
+      # service name is what exists here. Pointing at a real Argus agent is these two variables and nothing
+      # else — and from a CONTAINER that address must be host.docker.internal, because the agent binds to
+      # 127.0.0.1 (measured: localhost from a container returns 000). See .env.example.
       AEON_SERVICE_NAME: aeon-worker
       AEON_MODELGW_ADDR: modelgw:9402
       # DX-001's Deep Research Activities import aeon_profiles/aeon_worker modules that load JSON
