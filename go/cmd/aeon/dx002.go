@@ -16,6 +16,7 @@ import (
 	"time"
 
 	enumspb "go.temporal.io/api/enums/v1"
+	historypb "go.temporal.io/api/history/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
 	"gopkg.in/yaml.v3"
@@ -197,11 +198,45 @@ func resolveTemporalAddr() string {
 	return "localhost:7233"
 }
 
-// runReplay is `aeon replay <run_id>` (DX-002): fetches a run's real Temporal workflow history —
-// the actual recorded event sequence a replay would apply, not a re-execution or diff (that's
-// EVAL/observability polish for later — see backlog.md). A run_id with no history is reported
-// honestly, not an error.
+// replayCommandFor is the command that actually replays a run, printed by --assert-identical.
+//
+// It names the WORKER image because that is where the workflow definitions live. This CLI is a static Go
+// binary: a Go replayer has no AgentRunWorkflow to replay a history against, so it cannot do this itself,
+// and pretending to would be the worst of the three options. See python/aeon_worker/replay.py.
+func replayCommandFor(runID string) string {
+	// `uv run` and not a bare `python`: the worker image installs its dependencies into a uv-managed
+	// virtualenv (deploy/compose/Dockerfile.python), so a bare `python -m` cannot import temporalio. The
+	// first version of this string omitted it and failed with ModuleNotFoundError — found by running the
+	// command this function prints, which is the only way to find out that a printed command is wrong.
+	return "docker compose -f deploy/compose/docker-compose.yml exec worker " +
+		"uv run python -m aeon_worker.replay " + runID
+}
+
+// runReplay is `aeon replay <run_id>` (DX-002): prints a run's real Temporal workflow history — the
+// actual recorded event sequence a replay would apply.
+//
+// A run_id with no history is reported honestly, not as an error.
 func runReplay(w io.Writer, runID string) error {
+	return replayRun(w, runID, false)
+}
+
+// runReplayAssertIdentical is `aeon replay <run_id> --assert-identical`.
+//
+// WHAT IT CAN ANSWER FROM HERE, and it is worth having: whether this run ALREADY suffered a
+// non-determinism failure. Temporal records that as a WorkflowTaskFailed event with cause
+// NON_DETERMINISTIC_ERROR, so it is a fact about the recorded history and needs no replay at all — and it
+// is the one question a person asking "did determinism hold?" most often actually means, because a run
+// that already broke is a run that broke in production.
+//
+// WHAT IT CANNOT: a fresh replay against today's code. That needs the workflow definitions, which are
+// Python. So it exits non-zero on a recorded failure, and otherwise says plainly that the history holds no
+// failure AND that a fresh replay is a different check, with the command that performs it. Reporting
+// "identical" from here would be claiming a verification that never ran.
+func runReplayAssertIdentical(w io.Writer, runID string) error {
+	return replayRun(w, runID, true)
+}
+
+func replayRun(w io.Writer, runID string, assertIdentical bool) error {
 	address := resolveTemporalAddr()
 	c, err := client.Dial(client.Options{HostPort: address})
 	if err != nil {
@@ -211,6 +246,7 @@ func runReplay(w io.Writer, runID string) error {
 
 	iter := c.GetWorkflowHistory(context.Background(), runID, "", false, enumspb.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
 	count := 0
+	var recordedFailures []string
 	for iter.HasNext() {
 		event, err := iter.Next()
 		if err != nil {
@@ -226,12 +262,60 @@ func runReplay(w io.Writer, runID string) error {
 			return fmt.Errorf("reading workflow history for %s: %w", runID, err)
 		}
 		count++
-		fmt.Fprintf(w, "%d\t%s\t%s\n", event.GetEventId(), event.GetEventTime().AsTime().Format(time.RFC3339), event.GetEventType())
+		if cause := nonDeterminismCause(event); cause != "" {
+			recordedFailures = append(recordedFailures, fmt.Sprintf("event %d: %s", event.GetEventId(), cause))
+		}
+		if !assertIdentical {
+			fmt.Fprintf(w, "%d\t%s\t%s\n", event.GetEventId(), event.GetEventTime().AsTime().Format(time.RFC3339), event.GetEventType())
+		}
 	}
 	if count == 0 {
+		// An absent history is NOT a passing assertion. A run_id nobody ever started and a run that
+		// replays cleanly are different facts, and answering "identical" for the first would report a
+		// check that never ran — the failure mode this whole command exists to avoid.
 		fmt.Fprintf(w, "no history events found for run_id=%s\n", runID)
+		if assertIdentical {
+			return fmt.Errorf("nothing to verify for run_id=%s: an absent history is not a passing assertion", runID)
+		}
+		return nil
 	}
+	if !assertIdentical {
+		return nil
+	}
+
+	if len(recordedFailures) > 0 {
+		for _, f := range recordedFailures {
+			fmt.Fprintf(w, "NON-DETERMINISM RECORDED IN HISTORY\t%s\n", f)
+		}
+		return fmt.Errorf("run %s already failed a workflow task with a non-determinism cause (%d occurrence(s)) — "+
+			"the boundary of ADR-001 was crossed by the code that ran, and no fresh replay is needed to know it",
+			runID, len(recordedFailures))
+	}
+
+	fmt.Fprintf(w, "run %s: %d events, and the history records NO non-determinism failure.\n", runID, count)
+	fmt.Fprintf(w, "That is what a history can answer. A FRESH replay against today's code is a different "+
+		"check and runs where the workflow definitions live:\n  %s\n", replayCommandFor(runID))
 	return nil
+}
+
+// nonDeterminismCause returns a description when this event is a workflow task that failed on
+// non-determinism, or "" otherwise.
+//
+// Only that cause is singled out. A workflow task can fail for many reasons — a bad Activity result, an
+// unhandled error — and reporting those here would make this command answer a question it was not asked,
+// which is how a signal becomes noise and stops being read.
+func nonDeterminismCause(event *historypb.HistoryEvent) string {
+	attrs := event.GetWorkflowTaskFailedEventAttributes()
+	if attrs == nil {
+		return ""
+	}
+	if attrs.GetCause() != enumspb.WORKFLOW_TASK_FAILED_CAUSE_NON_DETERMINISTIC_ERROR {
+		return ""
+	}
+	if f := attrs.GetFailure(); f != nil {
+		return "NON_DETERMINISTIC_ERROR: " + f.GetMessage()
+	}
+	return "NON_DETERMINISTIC_ERROR"
 }
 
 // ---- publish --------------------------------------------------------------------------------

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---- init ---------------------------------------------------------------------------------
@@ -296,4 +298,54 @@ func TestAeonPublish(t *testing.T) {
 			t.Error("expected an error for a manifest missing 'spec'")
 		}
 	})
+}
+
+// TestReplayAssertIdenticalRefusesToPassWithoutEvidence is the Go half of DX-002's --assert-identical.
+//
+// The property it pins is the one a verification command gets wrong most easily: an ABSENT history must
+// not be a passing assertion. A run_id nobody ever started and a run that replays cleanly are different
+// facts, and answering "identical" for the first reports a check that never ran — which is exactly how the
+// normalization corpus came to publish 5/14 earlier in this project.
+func TestReplayAssertIdenticalRefusesToPassWithoutEvidence(t *testing.T) {
+	if os.Getenv("AEON_TEST_TEMPORAL_ADDRESS") == "" {
+		t.Skip("AEON_TEST_TEMPORAL_ADDRESS not set — skipping Temporal integration test (see make test-go-integration)")
+	}
+	t.Setenv("AEON_TEMPORAL_ADDRESS", os.Getenv("AEON_TEST_TEMPORAL_ADDRESS"))
+
+	var buf bytes.Buffer
+	runID := fmt.Sprintf("never-started-%d", time.Now().UnixNano())
+
+	// Without the flag: printing "no history" is the honest answer and not an error.
+	if err := runReplay(&buf, runID); err != nil {
+		t.Fatalf("plain replay of an unknown run should not error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "no history events found") {
+		t.Errorf("output = %q, want it to say there is no history", buf.String())
+	}
+
+	// WITH the flag: it must fail. This is the assertion.
+	buf.Reset()
+	err := runReplayAssertIdentical(&buf, runID)
+	if err == nil {
+		t.Fatal("--assert-identical passed on a run with no history — it reported a verification that never ran")
+	}
+	if !strings.Contains(err.Error(), "not a passing assertion") {
+		t.Errorf("error = %v, want it to say why an absent history is not a pass", err)
+	}
+}
+
+// TestReplayCommandNamesTheWorker pins that --assert-identical points at where a real replay happens.
+//
+// Without this, the one thing the Go side CANNOT do would be easy to quietly drop from the output, and the
+// command would look like it had performed a replay it never performed.
+func TestReplayCommandNamesTheWorker(t *testing.T) {
+	cmd := replayCommandFor("run-42")
+	// "uv run" is in the list because omitting it is the mistake that was actually made: the worker image
+	// keeps its dependencies in a uv virtualenv, so a bare `python -m` cannot import temporalio, and a
+	// printed command that does not run is worse than no command at all.
+	for _, want := range []string{"worker", "uv run", "aeon_worker.replay", "run-42"} {
+		if !strings.Contains(cmd, want) {
+			t.Errorf("replay command %q does not mention %q — the workflow definitions are Python, and a user told only that Go cannot replay has nowhere to go", cmd, want)
+		}
+	}
 }
