@@ -217,59 +217,79 @@ func TestStepIdentityMatchesGoldenCorpus(t *testing.T) {
 	t.Logf("verified %d golden case(s) from %s", len(corpus.Cases), corpus.Canonicalization)
 }
 
-// TestTheBoundOnlyProtectsCallersWhoKeepTheDigits states a LIMIT of the Go implementation, and checks it.
+// TestTheFloatBoundIsInclusiveAndWhy pins the asymmetry between the integer rule and the float rule.
 //
-// The bound refuses any integer of magnitude above 2^53 — but it can only refuse a value it can still see.
-// encoding/json decodes a JSON number into float64 unless the caller asks for json.Number, and
-// float64(9007199254740993) IS 9007199254740992: the digit is gone one layer before this package is
-// reached, and what arrives is a perfectly legal value at the boundary.
+// The bound is `> 2^53` for an integer and `>= 2^53` FOR A FLOAT, and the difference is about provenance
+// rather than magnitude. With an integer there is no ambiguity: 2^53 is 2^53. With a float there is no way
+// to know where the value came from, because 9007199254740993.0 parses to exactly 9007199254740992.0 — so
+// binding it would bind two different values to one hash, which is the whole thing this check prevents.
 //
-// So the guarantee is precisely this: NO VALUE ABOVE 2^53 IS EVER HASHED. It is NOT "no step that
-// originally carried such a value is ever hashed", because in Go that depends on how the caller decoded.
-// The difference is invisible and it is exactly the kind of gap that gets discovered in production, so it
-// is written down here, with the measurement, rather than in a comment nobody re-reads.
+// HOW THIS WAS FOUND, because it is the useful part: Synaptum found it on THEIR side on 2026-09-28, from
+// the warning we sent about Go and Python losing digits at opposite ends. The same hole was in this code —
+// a float literal above 2^53 passed a `> 2^53` cut and got hashed. Neither of us found it by reasoning
+// about the rule; both found it by running a literal through it.
 //
-// Synaptum has the mirror image: Python keeps arbitrary-precision integers, so the digit arrives intact and
-// their risk is losing it on the way OUT. Same rule, opposite failure mode — worth knowing when the two
-// implementations are compared.
-func TestTheBoundOnlyProtectsCallersWhoKeepTheDigits(t *testing.T) {
-	body := []byte(`{"reference": 9007199254740993}`)
-
-	t.Run("decoded WITHOUT UseNumber: already folded, and accepted", func(t *testing.T) {
+// An earlier version of this test asserted the OPPOSITE — that a float64-decoded 2^53+1 was accepted, and
+// documented that as an acceptable limit of the Go side. It was not acceptable; it was the hole.
+func TestTheFloatBoundIsInclusiveAndWhy(t *testing.T) {
+	hashOf := func(t *testing.T, body string, useNumber bool) (string, error) {
+		t.Helper()
 		var args map[string]any
-		if err := json.Unmarshal(body, &args); err != nil {
+		if useNumber {
+			dec := json.NewDecoder(bytes.NewReader([]byte(body)))
+			dec.UseNumber()
+			if err := dec.Decode(&args); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := json.Unmarshal([]byte(body), &args); err != nil {
 			t.Fatal(err)
 		}
-		step := stepidentity.Step{StepID: "s", ToolName: "payments.capture", ToolArgs: args}
-		hash, err := step.Hash()
-		if err != nil {
-			t.Fatalf("expected this to be ACCEPTED, since the value reaching us is exactly 2^53: %v", err)
-		}
-		// And it hashes as 2^53, which is the collision the bound was meant to prevent — happening one layer
-		// before the bound can act. This assertion exists so the limit cannot quietly stop being true.
-		boundary := stepidentity.Step{StepID: "s", ToolName: "payments.capture",
-			ToolArgs: map[string]any{"reference": json.Number("9007199254740992")}}
-		boundaryHash, err := boundary.Hash()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if hash != boundaryHash {
-			t.Errorf("a float64-decoded 2^53+1 hashed as %s and 2^53 hashed as %s — if these now differ, the "+
-				"folding described above has changed and this limit needs rewriting, not silently passing",
-				hash, boundaryHash)
+		return stepidentity.Step{StepID: "s", ToolName: "payments.capture", ToolArgs: args}.Hash()
+	}
+
+	t.Run("a float literal above 2^53 is refused, digits already gone or not", func(t *testing.T) {
+		// The hole itself: this parses to exactly 2^53 and used to hash as the boundary value.
+		for _, useNumber := range []bool{true, false} {
+			if _, err := hashOf(t, `{"reference": 9007199254740993.0}`, useNumber); err == nil {
+				t.Errorf("useNumber=%v: a float above 2^53 was accepted — it parses to exactly 2^53, so it would "+
+					"share a hash with a different value", useNumber)
+			}
 		}
 	})
 
-	t.Run("decoded WITH UseNumber: refused, which is the point", func(t *testing.T) {
-		dec := json.NewDecoder(bytes.NewReader(body))
-		dec.UseNumber()
-		var args map[string]any
-		if err := dec.Decode(&args); err != nil {
-			t.Fatal(err)
+	t.Run("a float AT 2^53 is refused too, although it looks exact", func(t *testing.T) {
+		if _, err := hashOf(t, `{"reference": 9007199254740992.0}`, true); err == nil {
+			t.Error("a float at 2^53 was accepted — indistinguishable from a folded 2^53+1, which is the point")
 		}
-		step := stepidentity.Step{StepID: "s", ToolName: "payments.capture", ToolArgs: args}
-		if _, err := step.Hash(); err == nil {
-			t.Fatal("2^53+1 was accepted even with its digits intact — the bound is not doing its job")
+	})
+
+	t.Run("the same value as an INTEGER at 2^53 is accepted", func(t *testing.T) {
+		// The asymmetry, asserted. Without this the two rules could be collapsed into one by anyone tidying
+		// up, and the corpus case big-integer-at-the-boundary would stop being reachable.
+		if _, err := hashOf(t, `{"reference": 9007199254740992}`, true); err != nil {
+			t.Errorf("an integer at 2^53 was refused: %v — 2^53 is exactly representable and unambiguous", err)
+		}
+	})
+
+	t.Run("ordinary fractions still pass", func(t *testing.T) {
+		// The bug the first version of the float branch introduced: it refused EVERY json.Number that was not
+		// a valid int64, so 1.5 came back as "too large to bind". The bound is about integers used as
+		// identifiers, and refusing a price would have been found by the first caller rather than by a test.
+		for _, body := range []string{`{"amount": 1.5}`, `{"amount": 0.1}`, `{"amount": 1.0}`} {
+			if _, err := hashOf(t, body, true); err != nil {
+				t.Errorf("%s was refused: %v", body, err)
+			}
+		}
+	})
+
+	t.Run("without UseNumber the error is CONSERVATIVE, not permissive", func(t *testing.T) {
+		// What remains of the Go-specific asymmetry, and its direction now matters: a caller who decodes
+		// without UseNumber hands us a float64, so even a legitimate integer 2^53 is refused. That is a false
+		// refusal — annoying, visible, and fixable by the caller. It is the opposite of the old behaviour,
+		// which silently accepted a value whose digits were already lost.
+		if _, err := hashOf(t, `{"reference": 9007199254740992}`, false); err == nil {
+			t.Error("an integer 2^53 decoded as float64 was accepted — then the Go side is permissive again " +
+				"exactly where it cannot tell what it was given")
 		}
 	})
 }
