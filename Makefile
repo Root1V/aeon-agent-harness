@@ -51,12 +51,19 @@ test-python-integration: ## Run Python tests against a real Tool Gateway + Postg
 	# about policy or deduplication, which is the whole point.
 	# --build no es opcional: sin él este target levanta la imagen que hubiera, y una toolgw
 	# anterior a TOOL-005 ignora la idempotency_key por completo — el test mediría código viejo.
-	$(COMPOSE) --profile core up -d --build --wait postgres toolgw
+	# OBS-001's Python half needs the observability stack too: test_end_to_end_tracing asserts that ONE
+	# trace contains spans from both languages, which cannot be checked without a real collector and a real
+	# Tempo to read back from. Without these variables those tests self-skip, and a self-skipping test in the
+	# only target that would run it is a test nobody runs.
+	$(COMPOSE) --profile core --profile obs up -d --build --wait postgres toolgw otel-collector tempo
 	docker run --rm --network aeon_default -v "$(PWD):/repo" -w /repo/python \
 		-e AEON_TEST_TOOLGW_ADDR="toolgw:9403" \
+		-e AEON_TEST_OTEL_ENDPOINT="otel-collector:4318" \
+		-e AEON_TEST_TEMPO_QUERY_URL="http://tempo:3200" \
+		-e AEON_TOOL_EXECUTION_MODE=local-ledger \
 		python:3.13-slim sh -c \
-		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q tests/integration/test_tool_execution_through_gateway.py"
-	$(COMPOSE) --profile core stop postgres toolgw
+		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q tests/integration/test_tool_execution_through_gateway.py tests/integration/test_end_to_end_tracing.py"
+	$(COMPOSE) --profile core --profile obs stop postgres toolgw otel-collector tempo
 
 test-python: ## Run Python unit + integration tests in a throwaway container via uv
 	# Mounts the whole repo, not just python/: test_contracts.py and (from DR-001) the Deep

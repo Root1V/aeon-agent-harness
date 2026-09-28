@@ -27,6 +27,7 @@ from aeon_worker.activities.framework_adapter_activities import (
 )
 from aeon_worker.activities.model_activities import decide_activity
 from aeon_worker.activities.tool_activities import execute_tool_activity
+from aeon_observability import init_tracing
 from aeon_worker.registry import WORKFLOWS
 
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +38,11 @@ async def main() -> None:
     address = os.environ.get("AEON_TEMPORAL_ADDRESS", "localhost:7233")
     task_queue = os.environ.get("AEON_TASK_QUEUE", "aeon-agent-run")
     namespace = os.environ.get("AEON_TEMPORAL_NAMESPACE", "default")
+
+    # Tracing initialised before the worker connects, so the very first Activity is already traced.
+    # Never fatal: see aeon_observability.init_tracing — a worker that refuses to start because a collector
+    # is unreachable would trade a diagnostic for an outage.
+    init_tracing(os.environ.get("AEON_SERVICE_NAME", "aeon-worker"))
 
     logger.info("connecting to Temporal at %s (namespace=%s, task_queue=%s)", address, namespace, task_queue)
     client = await Client.connect(address, namespace=namespace)
