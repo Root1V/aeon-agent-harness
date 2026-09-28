@@ -23,6 +23,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
+	"sort"
+	"strconv"
 
 	"github.com/gowebpki/jcs"
 )
@@ -66,6 +69,11 @@ func (s Step) Hash() (string, error) {
 // Exposed separately because it is the artifact worth comparing when two implementations disagree: two
 // different hashes tell you nothing, two different byte sequences tell you where.
 func (s Step) CanonicalJSON() ([]byte, error) {
+	// The integer bound is checked FIRST, before anything is serialized. Afterwards the digit is gone and
+	// there is nothing left to detect — see checkIntegerBounds.
+	if err := checkIntegerBounds("tool_args", s.ToolArgs); err != nil {
+		return nil, err
+	}
 	// Marshalled first and re-canonicalized, rather than hand-built: this way a nested value inside
 	// ToolArgs goes through the same path as a top-level one, with no second code path to keep in step.
 	raw, err := json.Marshal(s)
@@ -77,4 +85,124 @@ func (s Step) CanonicalJSON() ([]byte, error) {
 		return nil, fmt.Errorf("stepidentity: canonicalizing step: %w", err)
 	}
 	return canonical, nil
+}
+
+// maxExactInteger is 2^53: the last CONSECUTIVE integer JCS round-trips exactly.
+//
+// The bound is a CLEAN CUT at this magnitude, not a round-trip check, and Synaptum agreed to the same on
+// 2026-09-27 after measuring it themselves. The round-trip version is the one either of us would have
+// written first — parse to a double, format it back, compare to the literal — and it is the trap: above
+// 2^53 doubles step by two, so every EVEN integer up there still round-trips exactly.
+//
+//	2^53-1  exact     2^53    exact
+//	2^53+1  FOLDS     2^53+2  exact      <- the trap
+//	2^53+3  FOLDS     2^53+4  exact
+//
+// A round-trip check would therefore accept half the identifiers anyone uses, by parity. That is not a
+// lax guard, it is worse than none: whoever integrates it watches their test values pass and concludes
+// the matter is settled. So 2^53+2 is refused ALTHOUGH IT IS EXACT, because its neighbour is not and
+// nobody can reason about the parity of an id that does not exist yet.
+const maxExactInteger = 1 << 53
+
+// ErrIntegerTooLargeToBind is returned when a step carries an integer no hash can safely bind.
+type ErrIntegerTooLargeToBind struct {
+	// Path is where the value sits inside the step, e.g. tool_args.payment.lines[0].id. Named because a
+	// caller has to change THAT field: an error saying only "there is a large integer somewhere" makes
+	// them hunt for it, and the hunt is the part that gets skipped.
+	Path  string
+	Value string
+}
+
+func (e *ErrIntegerTooLargeToBind) Error() string {
+	return fmt.Sprintf("stepidentity: %s is %s, of magnitude greater than 2^53 (%d). A number that large "+
+		"cannot be bound by this hash: RFC 8785 mandates ECMAScript number serialization and ECMAScript "+
+		"numbers ARE IEEE-754 doubles, so two different values can canonicalize identically and an approval "+
+		"granted for one would validate the other. If it is an identifier, send it as a string",
+		e.Path, e.Value, int64(maxExactInteger))
+}
+
+// checkIntegerBounds walks the step's values BEFORE canonicalization.
+//
+// Before, because afterwards the digit is already gone and there is nothing left to detect. In Go the
+// subtlety runs the opposite way from Python: encoding/json decodes a number into float64 unless the
+// caller asked for json.Number, so by the time a big integer reaches here as a float64 it may ALREADY
+// have been folded. That is why the bound is on the VALUE and not on whether the text survived: any
+// magnitude above 2^53 is refused, folded or not, which is the same guarantee either way round.
+func checkIntegerBounds(path string, v any) error {
+	switch n := v.(type) {
+	case json.Number:
+		// Compared AS AN INTEGER, never via float64. The first version of this converted to float64 first
+		// and then compared — and float64(9007199254740993) is 9007199254740992, so the guard folded the
+		// value before judging it and ACCEPTED the single case it exists for. Measured: 2^53+1 passed.
+		// The checker was destroyed by the very rounding it was written to catch.
+		if i, err := n.Int64(); err == nil {
+			return checkIntMagnitude(path, n.String(), i)
+		}
+		// Too big even for int64, so certainly over the bound. Reported without parsing: a value that
+		// overflows int64 cannot be made safe by any further inspection.
+		if _, err := n.Float64(); err != nil {
+			return nil // Not a number at all; JCS will reject it if it is malformed.
+		}
+		return &ErrIntegerTooLargeToBind{Path: path, Value: n.String()}
+	case float64:
+		if n != math.Trunc(n) {
+			// A genuine fraction. The bound is about integers used as identifiers; a fractional value
+			// above 2^53 is imprecise by nature and nobody binds an approval to one.
+			return nil
+		}
+		// A float64 that arrived here may ALREADY have been folded by whoever decoded it, so this cannot
+		// recover the original digits — it can only refuse the magnitude, which is the same guarantee.
+		if math.Abs(n) > maxExactInteger {
+			return &ErrIntegerTooLargeToBind{Path: path, Value: formatBigFloat(n)}
+		}
+	case int:
+		return checkIntMagnitude(path, strconv.Itoa(n), int64(n))
+	case int64:
+		return checkIntMagnitude(path, strconv.FormatInt(n, 10), n)
+	case uint64:
+		if n > maxExactInteger {
+			return &ErrIntegerTooLargeToBind{Path: path, Value: strconv.FormatUint(n, 10)}
+		}
+	case map[string]any:
+		// Sorted so the error names the same field every time for the same input. An unordered walk would
+		// report whichever offending key came up first, and two runs would blame different fields.
+		keys := make([]string, 0, len(n))
+		for k := range n {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if err := checkIntegerBounds(path+"."+k, n[k]); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, item := range n {
+			if err := checkIntegerBounds(fmt.Sprintf("%s[%d]", path, i), item); err != nil {
+				return err
+			}
+		}
+	}
+	// bool is deliberately not handled: it is never an identifier. Nor are strings — sending a large id as
+	// a string is exactly the escape this bound exists to push people toward.
+	return nil
+}
+
+// checkIntMagnitude compares in int64, which is the whole point: no float64 anywhere on this path.
+func checkIntMagnitude(path, literal string, v int64) error {
+	if v > maxExactInteger || v < -maxExactInteger {
+		return &ErrIntegerTooLargeToBind{Path: path, Value: literal}
+	}
+	return nil
+}
+
+// formatBigFloat renders a float for the error message without pasting three hundred digits into it.
+//
+// Scientific notation past int64 range: the exact digits of a folded float are not the useful part of the
+// message — the field path is — and a screen of zeros buries it.
+func formatBigFloat(v float64) string {
+	if math.Abs(v) < 1e18 {
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	}
+	return strconv.FormatFloat(v, 'g', -1, 64)
 }
