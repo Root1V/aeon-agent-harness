@@ -4,6 +4,9 @@
 package httpserver
 
 import (
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+
 	"encoding/json"
 	"log"
 	"net/http"
@@ -23,7 +26,24 @@ func New(serviceName string, mux *http.ServeMux) *http.Server {
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	return &http.Server{Addr: ":" + Port(), Handler: mux}
+	// Trace context is extracted for EVERY request of every binary, here, once. Doing it per-handler
+	// would mean each new endpoint has to remember, and the ones that forgot would silently start their
+	// own trace — which is the failure this whole change is fixing, reintroduced one handler at a time.
+	return &http.Server{Addr: ":" + Port(), Handler: ExtractTraceContext(mux)}
+}
+
+// ExtractTraceContext reads W3C traceparent/baggage off the request and puts it in the request context,
+// so a span started by a handler becomes a CHILD of the caller's span instead of a new root.
+//
+// A plain wrapper rather than otelhttp.NewHandler: otelhttp would also create a server span per request,
+// named after the route, and every handler here already creates its own span with OTel GenAI semantics
+// (`chat`, `execute_tool`, `invoke_agent`). Two spans per request where one is meaningful would double the
+// cold-path volume to buy a name we already have.
+func ExtractTraceContext(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // Port reads AEON_PORT from the environment, defaulting to 8090. Individual binaries override

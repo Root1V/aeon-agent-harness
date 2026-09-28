@@ -14,6 +14,7 @@ from typing import Any
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from aeon_observability import inject_trace_context, tracer
 from aeon_worker.idempotency import EffectsLedger, derive_idempotency_key
 
 DEFAULT_LEDGER_PATH = os.environ.get("AEON_EFFECTS_LEDGER_PATH", "/tmp/aeon_effects_ledger.json")
@@ -136,7 +137,9 @@ async def _execute_through_gateway(inp: ExecuteToolInput, key: str) -> ExecuteTo
     request = urllib.request.Request(
         f"http://{TOOLGW_ADDR}/execute",
         data=payload,
-        headers={"Content-Type": "application/json"},
+        # Trace context injected here, so the gateway's execute_tool span becomes a CHILD of this one
+        # instead of the root of its own trace.
+        headers=inject_trace_context({"Content-Type": "application/json"}),
     )
 
     try:
@@ -170,4 +173,25 @@ async def _execute_through_gateway(inp: ExecuteToolInput, key: str) -> ExecuteTo
 
 @activity.defn
 async def execute_tool_activity(inp: ExecuteToolInput) -> ExecuteToolOutput:
-    return await execute_tool(inp)
+    """The Activity boundary, and where the Python span for a tool call is created.
+
+    The span lives HERE and not inside execute_tool because this is the boundary Temporal retries: a
+    redelivered Activity is a new attempt and deserves its own span, while a helper called twice inside one
+    attempt does not. Putting it deeper would make a retry invisible in the trace, which is the one thing a
+    durable execution engine most needs to show.
+    """
+    with tracer().start_as_current_span("execute_tool") as span:
+        span.set_attribute("gen_ai.operation.name", "execute_tool")
+        span.set_attribute("gen_ai.tool.name", inp.tool_name)
+        span.set_attribute("aeon.run.id", inp.run_id)
+        span.set_attribute("aeon.node.id", inp.node_id)
+        span.set_attribute("aeon.step.seq", inp.step_seq)
+        # attempt is on the span because Temporal redelivers, and "this ran three times" is invisible in a
+        # trace whose spans do not say which attempt they are.
+        try:
+            span.set_attribute("aeon.activity.attempt", activity.info().attempt)
+        except RuntimeError:
+            # Called outside an Activity context (a direct unit-test call). Not an error: the attribute is
+            # simply unknown, and inventing 1 would claim a first attempt we cannot see.
+            pass
+        return await execute_tool(inp)

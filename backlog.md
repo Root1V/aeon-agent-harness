@@ -408,7 +408,15 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   contabilizar nada contra un presupuesto real.
 - **Coste:** M.
 
-### Tracing real de punta a punta para runs Python (`DeepResearchWorkflow`, `LangGraphInteropWorkflow`)
+### ~~Tracing real de punta a punta para runs Python~~ — PROMOVIDA a `roadmap.md` como `OBS-006b` el 2026-09-28
+
+> **Cerrada.** Su criterio de entrada era «ninguno especial». Y al implementarla resultó que el problema no
+> era el que esta entrada describía: no es que al lado Python le faltaran spans, es que **no había traza** —
+> el propagador global de OTel en Go es no-op por defecto, así que cada servicio creaba raíces y el test de
+> `OBS-001` no lo vio porque consultaba los tres spans por separado. Incluye la integración con Argus, que
+> es configuración y no dependencia. Ver la fila `OBS-006b`.
+
+### Tracing real de punta a punta para runs Python (contexto original, para la trazabilidad)
 
 - **Descripción:** `OBS-001` instrumentó los servicios Go (`invoke_agent`/`chat`/`execute_tool`)
   pero nunca se extendió al lado Python — `DeepResearchWorkflow` (`DX-001`) y

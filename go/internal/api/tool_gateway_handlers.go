@@ -16,6 +16,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/toolexec"
+	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
 
 // toolGatewayTracer emits OBS-001's "execute_tool" spans (OTel GenAI semantic conventions) around
@@ -102,6 +103,10 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 			attribute.String("aeon.policy.disposition", string(decision.Disposition)),
 			attribute.Bool("aeon.policy.disposition_declared", decision.DispositionDeclared),
 		)
+		// Argus's hot path (2s) rather than the 30-60s cold one. The KIND comes from the disposition, because
+		// "a person must approve this" and "policy forbids this" need answering differently and within
+		// seconds of each other — see go/internal/tracing/argus.go.
+		tracing.MarkGuardrail(span, guardrailFor(decision.Disposition), "denied by policy "+decision.PolicyID)
 
 		// Journalled BEFORE the response, on purpose: after it, a crash in this process between writing
 		// the 403 and writing the record would leave the step looking unfinished, which is the exact
@@ -329,4 +334,19 @@ func outcomeOrEmpty(o checkpoint.Outcome) any {
 		return nil
 	}
 	return o
+}
+
+// guardrailFor maps a policy disposition to the guardrail kind reported to Argus.
+//
+// require_approval is NOT a denial and gets its own kind: a run suspended waiting for a person is an
+// operational event someone must act on, while a forbidden call is one nobody needs to act on at all. Both
+// reach the hot path in two seconds; sending them under one name would make the urgent one indistinguishable
+// from the routine one.
+func guardrailFor(d policy.Disposition) string {
+	switch d {
+	case policy.DispositionRequireApproval:
+		return tracing.GuardrailApprovalRequired
+	default:
+		return tracing.GuardrailPolicyDenied
+	}
 }

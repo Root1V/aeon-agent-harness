@@ -16,6 +16,8 @@ from typing import Any
 
 from temporalio import activity
 
+from aeon_observability import inject_trace_context, tracer
+
 DEFAULT_MODELGW_ADDR = os.environ.get("AEON_MODELGW_ADDR", "localhost:9402")
 
 
@@ -61,17 +63,35 @@ async def call_model_gateway(inp: DecideInput) -> DecideOutput:
     ).encode("utf-8")
 
     url = f"http://{DEFAULT_MODELGW_ADDR}/decide"
-    request = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 — fixed internal URL, not user input
-            parsed = json.loads(response.read())
-    except urllib.error.HTTPError as exc:
-        detail = json.loads(exc.read()).get("error", exc.reason)
-        raise ModelGatewayError(f"model gateway at {DEFAULT_MODELGW_ADDR} returned {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise ModelGatewayError(f"model gateway at {DEFAULT_MODELGW_ADDR} unreachable: {exc.reason}") from exc
+    # OTel GenAI semantic conventions, the same ones the Go gateways use (OBS-001): the operation is named
+    # `chat` and the model attributes carry the gen_ai.* prefix, so a trace reads the same whichever side of
+    # the seam produced the span.
+    with tracer().start_as_current_span("chat") as span:
+        span.set_attribute("gen_ai.operation.name", "chat")
+        if inp.candidates:
+            span.set_attribute("gen_ai.request.model", inp.candidates[0].model)
+            span.set_attribute("gen_ai.system", inp.candidates[0].provider)
+        if inp.data_sensitivity:
+            span.set_attribute("aeon.data_sensitivity", inp.data_sensitivity)
 
-    return DecideOutput(provider_used=parsed["provider_used"], model=parsed["model"], output=parsed["output"])
+        # THE LINE THAT MAKES ONE TRACE. Without it the gateway starts a root span and this run's spans end
+        # up scattered across unrelated traces — each present, none connected.
+        headers = inject_trace_context({"Content-Type": "application/json"})
+        request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 — fixed internal URL, not user input
+                parsed = json.loads(response.read())
+        except urllib.error.HTTPError as exc:
+            detail = json.loads(exc.read()).get("error", exc.reason)
+            span.record_exception(exc)
+            raise ModelGatewayError(f"model gateway at {DEFAULT_MODELGW_ADDR} returned {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            span.record_exception(exc)
+            raise ModelGatewayError(f"model gateway at {DEFAULT_MODELGW_ADDR} unreachable: {exc.reason}") from exc
+
+        span.set_attribute("gen_ai.response.model", parsed.get("model", ""))
+        span.set_attribute("aeon.provider_used", parsed.get("provider_used", ""))
+        return DecideOutput(provider_used=parsed["provider_used"], model=parsed["model"], output=parsed["output"])
 
 
 @activity.defn

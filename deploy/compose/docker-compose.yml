@@ -318,6 +318,16 @@ services:
       AEON_TOOL_EXECUTION_MODE: local-ledger
       <<: *common-env
       AEON_TEMPORAL_ADDRESS: temporal:7233
+      # OBS-001's Python half. Same variable the Go services read, and host:port without a scheme, which is
+      # the Go convention — aeon_observability accepts either.
+      #
+      # Points at this stack's own collector by service name. ARGUS'S CONVENTION IS LOCALHOST: an
+      # application exports to a per-machine agent on localhost:4318 and never learns the central plane's
+      # address, which is why aeon_observability DEFAULTS to localhost. In compose there is no per-machine
+      # agent, so the service name is what exists here — and pointing at an Argus agent is exactly this one
+      # variable, with nothing else to change.
+      AEON_OTEL_ENDPOINT: ${AEON_OTEL_ENDPOINT:-otel-collector:4318}
+      AEON_SERVICE_NAME: aeon-worker
       AEON_MODELGW_ADDR: modelgw:9402
       # DX-001's Deep Research Activities import aeon_profiles/aeon_worker modules that load JSON
       # Schemas from proto/ at import time — proto/ isn't in this image's build context (see

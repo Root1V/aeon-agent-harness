@@ -19,6 +19,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/secrets"
 	"github.com/aeon-ai/aeon/go/internal/store"
+	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
 
 // delegationCredentialTTL is how long the lease for an injected credential lives.
@@ -144,8 +145,11 @@ func (h *A2AEgressHandlers) proxy(w http.ResponseWriter, r *http.Request) {
 	// a decision, fixed in different places by different people.
 	remote, err := h.RemoteAgents.Get(ctx, remoteAgentID)
 	if errors.Is(err, store.ErrRemoteAgentNotDeclared) {
-		h.deny(ctx, w, span, rec, http.StatusForbidden,
-			"remote agent "+remoteAgentID+" is not declared in the registry: a delegation destination must be declared, with an explicit risk, before anything can delegate to it")
+		reason := "remote agent " + remoteAgentID + " is not declared in the registry: a delegation destination must be declared, with an explicit risk, before anything can delegate to it"
+		// Its own guardrail kind. "Nobody declared this destination" is a missing registry entry and "policy
+		// refused it" is a decision; they reach the same hot path and are fixed by different people.
+		h.denyWithDisposition(ctx, w, span, rec, http.StatusForbidden, reason,
+			policy.DispositionDenyStep, tracing.GuardrailDestinationUnknown)
 		return
 	}
 	if err != nil {
@@ -160,7 +164,8 @@ func (h *A2AEgressHandlers) proxy(w http.ResponseWriter, r *http.Request) {
 		// (INT-010): whether the loop may try a different destination, must stop, or should ask a person
 		// are three different behaviours, and a 403 alone picks none of them.
 		span.SetAttributes(attribute.String("aeon.policy.disposition", string(decision.Disposition)))
-		h.denyWithDisposition(ctx, w, span, rec, http.StatusForbidden, "delegation "+denialReason(decision), decision.Disposition)
+		h.denyWithDisposition(ctx, w, span, rec, http.StatusForbidden, "delegation "+denialReason(decision),
+			decision.Disposition, guardrailFor(decision.Disposition))
 		return
 	}
 
@@ -332,18 +337,30 @@ func (h *A2AEgressHandlers) deny(
 	ctx context.Context, w http.ResponseWriter, span trace.Span,
 	rec store.Delegation, status int, reason string,
 ) {
-	// A refusal that never reached Cedar — undeclared destination, no identity, fan-out — is deny_step:
-	// the loop may legitimately try something else, and none of these say the run is over. Stated rather
-	// than left empty, because a caller reading a disposition field has to get one every time or it has to
-	// handle an absent value, which is a fourth case nobody designed.
-	h.denyWithDisposition(ctx, w, span, rec, status, reason, policy.DispositionDenyStep)
+	// A refusal that never reached Cedar — no identity, fan-out — is deny_step: the loop may legitimately
+	// try something else, and none of these say the run is over. Stated rather than left empty, because a
+	// caller reading a disposition field has to get one every time or it has to handle an absent value,
+	// which is a fourth case nobody designed.
+	//
+	// Fan-out gets its own guardrail kind: an agent hitting the width limit is a runaway, and a refused
+	// destination is a misconfiguration. Two different pages for whoever is woken up.
+	guardrail := tracing.GuardrailPolicyDenied
+	if status == http.StatusTooManyRequests {
+		guardrail = tracing.GuardrailFanOutExceeded
+	}
+	h.denyWithDisposition(ctx, w, span, rec, status, reason, policy.DispositionDenyStep, guardrail)
 }
 
 func (h *A2AEgressHandlers) denyWithDisposition(
 	ctx context.Context, w http.ResponseWriter, span trace.Span,
-	rec store.Delegation, status int, reason string, disposition policy.Disposition,
+	rec store.Delegation, status int, reason string, disposition policy.Disposition, guardrail string,
 ) {
 	span.SetStatus(codes.Error, reason)
+	// The guardrail kind is PASSED IN rather than derived here. The first version derived it from the HTTP
+	// status, which meant the undeclared-destination path set its own specific kind and then this function
+	// immediately overwrote it with the generic one — a second write silently undoing the first, which is
+	// the class of bug that leaves a correct-looking attribute carrying the wrong value.
+	tracing.MarkGuardrail(span, guardrail, reason)
 	if h.Delegations != nil {
 		if err := h.Delegations.RecordDenial(ctx, rec, reason); err != nil {
 			log.Printf("aeon-toolgw: recording a denied delegation to %q: %v", rec.RemoteAgentID, err)

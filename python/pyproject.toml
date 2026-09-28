@@ -24,6 +24,15 @@ dependencies = [
     # ...) Aeon never uses, the same over-installation problem crewai's dependency footprint already
     # showed (see backlog.md).
     "agent-framework-core>=1.15",
+    # OBS-001's Python half (aeon_observability). The SDK and the OTLP/HTTP exporter only — no
+    # instrumentation packages, because every span Aeon emits is created deliberately with OTel GenAI
+    # semantics, and auto-instrumentation would add a second, differently-named span per HTTP call.
+    #
+    # Deliberately NOT argus-sdk. Argus is OTel-native and ingests plain OTLP, so integrating with it is an
+    # endpoint plus two attribute names — and a deployment without Argus stays fully traced. Requiring
+    # somebody's SDK to get traces is the coupling this platform exists to avoid.
+    "opentelemetry-sdk>=1.29",
+    "opentelemetry-exporter-otlp-proto-http>=1.29",
     "agent-framework-openai>=1.14",
     # aeon_adapters.claude_agent_sdk (INT-007, Modo B) runs a real claude_agent_sdk.ClaudeSDKClient
     # turn loop. This package is a thin wrapper around the real `claude` (Claude Code) CLI (spawned
@@ -52,6 +61,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = [
+    "aeon_observability",
     "aeon_sdk",
     "aeon_worker",
     "aeon_context",
