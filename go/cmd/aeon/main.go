@@ -125,10 +125,25 @@ func main() {
 		}
 	case "replay":
 		if len(os.Args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: aeon replay <run_id>")
+			fmt.Fprintln(os.Stderr, "usage: aeon replay <run_id> [--assert-identical]")
 			os.Exit(1)
 		}
-		if err := runReplay(os.Stdout, os.Args[2]); err != nil {
+		// --assert-identical exits non-zero when the history records a non-determinism failure, so a CI
+		// step can gate on it. See runReplayAssertIdentical for what it can and cannot answer from here.
+		assertIdentical := false
+		for _, arg := range os.Args[3:] {
+			if arg == "--assert-identical" {
+				assertIdentical = true
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "replay: unknown flag %q\n", arg)
+			os.Exit(1)
+		}
+		run := runReplay
+		if assertIdentical {
+			run = runReplayAssertIdentical
+		}
+		if err := run(os.Stdout, os.Args[2]); err != nil {
 			fmt.Fprintf(os.Stderr, "replay: %v\n", err)
 			os.Exit(1)
 		}

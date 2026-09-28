@@ -356,7 +356,15 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   segundo caso real que la valide.
 - **Coste:** L.
 
-### `aeon replay --assert-identical` (diff/reejecución real, no sólo historial)
+### ~~`aeon replay --assert-identical`~~ — PROMOVIDA a `roadmap.md` como `DX-003` el 2026-09-27
+
+> **Cerrada.** Su criterio de entrada era «ninguno especial: trabajo directo», y es una de las siete
+> comprobaciones del §7 del plan contra el riesgo nº1 (determinismo). Tenerla aquí era lo que estaba mal:
+> una entrada de backlog sin criterio de entrada no es trabajo diferido, es trabajo sin hacer. Ver la fila
+> `DX-003` para lo implementado, incluido el hallazgo de que un test de replay que graba y reproduce con el
+> mismo código solo prueba que el código coincide consigo mismo.
+
+### `aeon replay --assert-identical` (contexto original, para la trazabilidad)
 
 - **Descripción:** `aeon replay <run_id>` (DX-002) hoy imprime el historial real de eventos de
   Temporal — prueba que el CLI puede conectarse y consultar de verdad, pero no reejecuta el

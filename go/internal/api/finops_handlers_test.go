@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -93,9 +94,18 @@ func TestFinOpsDashboardShowsRealCostPerModel(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	buf := make([]byte, 64*1024)
-	n, _ := resp.Body.Read(buf)
-	page := string(buf[:n])
+	// io.ReadAll and not a single Read into a fixed buffer, which is what this used to do.
+	//
+	// A single Read returns whatever happens to be available, not a full buffer — so as the shared test
+	// database accumulated rows across runs, the dashboard grew past one read's worth and the assertions
+	// below started failing on a page that was CORRECT and merely truncated by the test. The
+	// compute_based row was the first to disappear because the query orders by cost DESC NULLS LAST, and
+	// an unpriced row sorts last by construction.
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading the dashboard: %v", err)
+	}
+	page := string(raw)
 
 	if !strings.Contains(page, tokenModel) || !strings.Contains(page, "0.0250") {
 		t.Errorf("expected the dashboard to show the real token_based cost for %s, got:\n%s", tokenModel, page)

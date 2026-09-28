@@ -27,14 +27,7 @@ from aeon_worker.activities.framework_adapter_activities import (
 )
 from aeon_worker.activities.model_activities import decide_activity
 from aeon_worker.activities.tool_activities import execute_tool_activity
-from aeon_worker.workflows.agent_run import AgentRunWorkflow
-from aeon_worker.workflows.claude_agent_interop_run import ClaudeAgentInteropWorkflow
-from aeon_worker.workflows.crewai_interop_run import CrewAIInteropWorkflow
-from aeon_worker.workflows.deep_research_run import DeepResearchWorkflow
-from aeon_worker.workflows.graph_run import GraphRunWorkflow
-from aeon_worker.workflows.langgraph_interop_run import LangGraphInteropWorkflow
-from aeon_worker.workflows.maf_interop_run import MafInteropWorkflow
-from aeon_worker.workflows.openai_agents_interop_run import OpenAIAgentsInteropWorkflow
+from aeon_worker.registry import WORKFLOWS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("aeon_worker")
@@ -51,16 +44,10 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue=task_queue,
-        workflows=[
-            AgentRunWorkflow,
-            GraphRunWorkflow,
-            DeepResearchWorkflow,
-            LangGraphInteropWorkflow,
-            CrewAIInteropWorkflow,
-            OpenAIAgentsInteropWorkflow,
-            MafInteropWorkflow,
-            ClaudeAgentInteropWorkflow,
-        ],
+        # From aeon_worker.registry, shared with the replayer (DX-002's --assert-identical). A replayer
+        # registered with a different list than the worker ran reports the difference as an unknown
+        # workflow type, which looks like a corrupt history instead of a stale list.
+        workflows=WORKFLOWS,
         activities=[
             execute_tool_activity,
             decide_activity,
