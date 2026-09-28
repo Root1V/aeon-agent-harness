@@ -1,181 +1,247 @@
-"""Tracer setup, context propagation and the Argus guardrail vocabulary."""
+"""Telemetry for the Python side, on Argus's own SDK (OBS-006b).
+
+WHY THE SDK AND NOT PLAIN OTLP, since the first version of this module argued the opposite. I claimed the
+integration was "an endpoint plus two attribute names, so a dependency buys nothing". Reading their code
+showed that is wrong in the way that matters: `argus-obs-semconv` carries the VALUES and the companion
+attributes, not only the keys.
+
+  - `argus.guardrail` is a COMMA-SEPARATED LIST of breached guardrails, and it arrives together with
+    `argus.hot`. My hand-rolled version set a single string and deliberately did not set `argus.hot`.
+  - Their guardrail kinds are hyphenated (`tool-call-budget`, `cost-budget`, `token-budget`,
+    `tool-call-loop`). Mine were snake_case inventions.
+  - `GenAISpan` and `Step` already model what Aeon spent three features naming: `Step.outcome()` is
+    INT-011's outcome, `usage(input_tokens=, output_tokens=, cached_input_tokens=)` is MDL-014's
+    three-state counters, and `backend(circuit_state=, fallback=, backend_id=)` is A5 and OBS-005.
+
+Hand-rolled attributes would have produced telemetry that looks right and that their alert rules and
+dashboards silently do not match — the most expensive kind of nearly-correct, and the exact failure mode
+this project keeps finding in its own artefacts.
+
+WHAT IS STILL OURS, and it is a boundary worth stating. `argus_semconv.guardrails` ships a Budget/AgentRun
+model that tracks tool calls and cost in CONTEXTVARS. Aeon does not use it for enforcement: our budgets
+live in Temporal workflow state because they must be deterministic and survive a replay, and contextvars
+are neither. We use their VOCABULARY to report a breach and our own state to decide there was one.
+
+This module stays as a thin seam over `argus` rather than letting call sites import it directly, for one
+reason: every span Aeon emits should carry Aeon's run/step identity, and a seam is where that happens once
+instead of at forty call sites.
+"""
 from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 logger = logging.getLogger("aeon_observability")
 
-# Argus's routing attributes, read from its collector config (platform/collector/agent.yaml) and not from
-# its README, which does not state them. Its routing connector's condition, verbatim:
-#
-#   attributes["argus.hot"] == true
-#     or status.code == STATUS_CODE_ERROR
-#     or attributes["argus.guardrail"] != nil
-#
-# A span matching any of those reaches the hot path — an alert bus in about two seconds, skipping the
-# datastore — as well as the cold one. Everything else waits 30-60s for ClickHouse.
+# Argus's routing attributes, for the places Aeon sets them directly (the Go side mirrors these in
+# go/internal/tracing/argus.go). Read from platform/collector/agent.yaml, whose routing connector is the
+# only place they are stated: a span reaches the hot path — an alert bus in ~2s, skipping the datastore —
+# when `argus.hot` is true, the status is ERROR, or `argus.guardrail` is present.
 ARGUS_HOT = "argus.hot"
 ARGUS_GUARDRAIL = "argus.guardrail"
 
-# The one guardrail the Python side owns. Policy denials, fan-out and approvals are refused in the Go
-# gateways and marked there (go/internal/tracing/argus.go); a budget running out is decided in the
-# workflow, so nothing else can report it.
-GUARDRAIL_BUDGET_EXHAUSTED = "budget_exhausted"
+# Guardrail kinds. The first four are THEIRS, verbatim from argus_semconv.guardrails, so a breach Aeon
+# reports lands in the same bucket as one their own Budget model would report. The rest are Aeon's, in
+# their hyphenated style, for refusals their model has no concept of — a Cedar policy denial is not a
+# budget, and calling it `cost-budget` to reuse a name would make two different incidents look identical.
+GUARDRAIL_TOOL_CALL_BUDGET = "tool-call-budget"
+GUARDRAIL_TOOL_CALL_LOOP = "tool-call-loop"
+GUARDRAIL_TOKEN_BUDGET = "token-budget"
+GUARDRAIL_COST_BUDGET = "cost-budget"
+GUARDRAIL_POLICY_DENIED = "policy-denied"
+GUARDRAIL_APPROVAL_REQUIRED = "approval-required"
+GUARDRAIL_FAN_OUT = "fan-out-budget"
+GUARDRAIL_DESTINATION_UNKNOWN = "destination-not-declared"
 
-# ARGUS'S CONVENTION: applications export to localhost, never to the central plane. A per-machine agent
-# collector receives there and forwards. So this default is localhost and not the compose service name —
-# pointing elsewhere is an explicit deployment decision, which is the whole point of the convention: the
-# app's configuration stops changing when the infrastructure does.
-DEFAULT_OTLP_ENDPOINT = "http://localhost:4318"
-
-# A DEPLOYMENT FACT WORTH THE PARAGRAPH, because the naive reading of Argus's convention fails silently.
-#
-# The Argus agent binds to 127.0.0.1 only. Measured against the real agent running on this machine:
-#
-#   from a container on a docker network:  http://localhost:4318/v1/traces            -> 000 (unreachable)
-#                                          http://host.docker.internal:4318/v1/traces -> 200
-#
-# So "applications export to localhost" is true of a process on the host and false of one in a container,
-# and the failure mode is the worst kind: the exporter retries in the background, the app works perfectly,
-# and no span ever arrives. Anything containerised must point at the host — host.docker.internal on Docker
-# Desktop, or the gateway's address when the agent is not reachable at all.
-#
-# This is why init_tracing LOGS the endpoint it resolved. An operator who sees "exporting spans to
-# http://localhost:4318" from inside a container has the answer in front of them.
-
-# THE SAME ENV VAR THE GO SIDE READS. The first version of this module invented AEON_OTLP_ENDPOINT, which
-# would have meant two names for one endpoint and a deployment that configured only one of them — half the
-# services exporting and half silent, with nothing failing. Go's convention is host:port with no scheme
-# (go/internal/tracing), so a value without one is accepted and http:// is added.
-OTLP_ENDPOINT_ENV = "AEON_OTEL_ENDPOINT"
+_handle: Any = None
+_argus: Any = None
 
 
-def _resolve_endpoint(explicit: str | None) -> str:
-    raw = explicit or os.environ.get(OTLP_ENDPOINT_ENV) or DEFAULT_OTLP_ENDPOINT
-    if "://" not in raw:
-        raw = "http://" + raw
-    return raw.rstrip("/")
+def init_tracing(service_name: str | None = None, endpoint: str | None = None) -> Any:
+    """Initialise Argus telemetry. Never raises.
 
-_tracer: Any = None
-_provider: Any = None
+    Their `init()` is documented as idempotent and failure-proof, which is the same property this module
+    needed anyway: a worker that refuses to start because a collector is unreachable trades a diagnostic
+    for an outage. The import is still guarded, because a deployment that has not installed the extra
+    should degrade to no telemetry rather than to no worker.
 
-
-def init_tracing(service_name: str, endpoint: str | None = None) -> Any:
-    """Configure the process-global tracer provider, or return a no-op one.
-
-    IT NEVER RAISES, and that is deliberate: a worker that refuses to start because a collector is
-    unreachable trades a diagnostic for an outage. Observability failing closed would make the platform
-    less available than not having it. The failure is logged and the no-op tracer keeps every call site
-    working unchanged.
+    ENV VARS ARE THEIRS: `ARGUS_SERVICE`, `ARGUS_ENDPOINT` (default localhost:4317/4318),
+    `ARGUS_ENVIRONMENT`, `ARGUS_ROLE`, `ARGUS_DISABLED`, with the `OTEL_*` equivalents as fallbacks. Aeon
+    passes AEON_SERVICE_NAME through when set, so the compose file keeps naming services the way the rest
+    of this repo does, and otherwise stays out of the way.
     """
-    global _tracer, _provider
-    if _tracer is not None:
-        return _tracer
-
-    endpoint = _resolve_endpoint(endpoint)
+    global _handle, _argus
+    if _handle is not None:
+        return _handle
     try:
-        from opentelemetry import trace
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-        from opentelemetry.propagate import set_global_textmap
-        from opentelemetry.propagators.composite import CompositePropagator
-        from opentelemetry.sdk.resources import Resource
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor
-        from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
-        from opentelemetry.baggage.propagation import W3CBaggagePropagator
+        import argus
     except ImportError as exc:
-        logger.warning("aeon_observability: OpenTelemetry not installed (%s) — tracing disabled", exc)
-        _tracer = _NoopTracer()
-        return _tracer
+        logger.warning("aeon_observability: argus-obs-sdk not installed (%s) — telemetry disabled", exc)
+        _argus = None
+        _handle = _NoopHandle()
+        return _handle
 
+    _argus = argus
+    kwargs: dict[str, Any] = {}
+    service = service_name or os.environ.get("AEON_SERVICE_NAME")
+    if service:
+        kwargs["service"] = service
+
+    # AEON_OTEL_ENDPOINT is bridged to their `endpoint` argument, and the bridge is not cosmetic.
+    #
+    # The Go services read AEON_OTEL_ENDPOINT and the compose file sets it; their SDK reads ARGUS_ENDPOINT or
+    # OTEL_EXPORTER_OTLP_ENDPOINT. Without this, moving to the SDK would have left the worker silently
+    # exporting to its DEFAULT (localhost) while the compose file said otherwise — the endpoint configured in
+    # one place and read from another, with nothing failing. Their variables still win when set, because a
+    # deployment that speaks Argus's own configuration should not have to learn ours.
+    resolved = (
+        endpoint
+        or os.environ.get("ARGUS_ENDPOINT")
+        or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+        or os.environ.get("AEON_OTEL_ENDPOINT")
+    )
+    if resolved:
+        kwargs["endpoint"] = resolved
     try:
-        provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
-        provider.add_span_processor(BatchSpanProcessor(
-            OTLPSpanExporter(endpoint=endpoint + "/v1/traces")
-        ))
-        trace.set_tracer_provider(provider)
-        # The same composite the Go side sets, and it has to be the same: W3C traceparent is what carries
-        # the trace across the HTTP hop into the gateways, and baggage is what would carry run_id if we
-        # ever put it there.
-        set_global_textmap(CompositePropagator([
-            TraceContextTextMapPropagator(), W3CBaggagePropagator(),
-        ]))
-        _provider = provider
-        _tracer = trace.get_tracer(service_name)
-        logger.info("aeon_observability: exporting spans to %s as %s", endpoint, service_name)
-    except Exception as exc:  # noqa: BLE001 - see the docstring: this must not take the worker down
-        logger.warning("aeon_observability: could not initialise tracing against %s (%s) — disabled", endpoint, exc)
-        _tracer = _NoopTracer()
-    return _tracer
-
-
-def tracer() -> Any:
-    """The process tracer, initialising a no-op one if nobody called init_tracing."""
-    if _tracer is None:
-        return _NoopTracer()
-    return _tracer
-
-
-def shutdown() -> None:
-    """Flush buffered spans. Called at worker shutdown and by tests that need to read spans back."""
-    if _provider is not None:
-        _provider.force_flush()
-        _provider.shutdown()
+        _handle = argus.init(**kwargs)
+        logger.info(
+            "aeon_observability: argus %s initialised (service=%s, endpoint=%s)",
+            getattr(argus, "__version__", "?"),
+            service or os.environ.get("ARGUS_SERVICE") or "<from env>",
+            resolved or "<their default: localhost>",
+        )
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.warning("aeon_observability: argus.init failed (%s) — telemetry disabled", exc)
+        _handle = _NoopHandle()
+    return _handle
 
 
 def inject_trace_context(headers: dict[str, str]) -> dict[str, str]:
-    """Add W3C traceparent/baggage to outgoing request headers.
+    """Add the propagation headers to an outgoing request.
 
-    THIS IS THE LINE THAT MAKES ONE TRACE. Without it the gateway starts a root span and the run's spans
-    are scattered across unrelated traces — each present, none connected, which is what OBS-001 actually
-    shipped. Mutates and returns headers so a caller can write it inline at the request it belongs to.
+    Delegates to `argus.propagate.inject_headers`, which is the SDK's own and therefore agrees with
+    whatever trust mode and header set Argus expects — `ARGUS_PROPAGATE` governs the inbound side, and
+    hand-writing the outbound half is how the two drift.
+
+    THIS IS THE LINE THAT MAKES ONE TRACE. Without it a gateway starts a root span and a run's spans end up
+    scattered across unrelated traces, each present and none connected.
     """
+    if _argus is None:
+        return headers
     try:
-        from opentelemetry.propagate import inject
-
-        inject(headers)
+        headers.update(_argus.propagate.inject_headers())
     except Exception as exc:  # noqa: BLE001
         logger.debug("aeon_observability: could not inject trace context (%s)", exc)
     return headers
 
 
 def current_traceparent() -> str:
-    """The current W3C traceparent, or "" when there is no recording span.
+    """The current W3C traceparent, or "" when nothing is recording."""
+    return inject_trace_context({}).get("traceparent", "")
 
-    Exposed for tests and for logs: a trace id in a log line is what lets someone move from a message to
-    the trace, and reconstructing it by hand from the span context is the kind of thing each caller would
-    do slightly differently.
+
+@contextmanager
+def tool_span(name: str, *, args: Any = None, call_id: str | None = None) -> Iterator[Any]:
+    """An `execute_tool` span, via `argus.tool`.
+
+    `args` goes to the SDK, which decides whether to record it: content capture is off unless
+    `ARGUS_CAPTURE_CONTENT` is set, and that decision belongs to the platform operator rather than to
+    this call site. Passing the arguments and letting their masking apply is the difference between
+    honouring that switch and quietly ignoring it.
     """
-    headers: dict[str, str] = {}
-    inject_trace_context(headers)
-    return headers.get("traceparent", "")
+    if _argus is None:
+        yield _NoopSpan()
+        return
+    with _argus.tool(name, args=args, call_id=call_id) as span:
+        yield span
+
+
+@contextmanager
+def chat_span(*, provider: str, request_model: str | None = None) -> Iterator[Any]:
+    """A `chat` span, via `argus.genai` with the operation literal their semconv defines."""
+    if _argus is None:
+        yield _NoopSpan()
+        return
+    with _argus.genai("chat", provider=provider, request_model=request_model) as span:
+        yield span
+
+
+@contextmanager
+def run_span(name: str, *, run_id: str | None = None) -> Iterator[Any]:
+    """A run-scoped span, via `argus.propagate.run`.
+
+    Their helper puts the run id in BAGGAGE as well as on the span, which is what carries it across the
+    HTTP hop into the Go gateways — something a plain span attribute cannot do.
+    """
+    if _argus is None:
+        yield _NoopSpan()
+        return
+    with _argus.propagate.run(name, run_id=run_id) as span:
+        yield span
+
+
+@contextmanager
+def step_span(name: str, **fields: Any) -> Iterator[Any]:
+    """An Aeon durable step, via `argus.step`.
+
+    Used where INT-011's outcome vocabulary belongs: the returned `Step` has `.outcome(value)`, which is
+    the same concept `checkpoint.Outcome` names on the Go side. Reporting our outcome through their field
+    means a step that was denied, approved or expired is queryable in their store under the name their
+    tooling already uses.
+    """
+    if _argus is None:
+        yield _NoopSpan()
+        return
+    with _argus.step(name, **fields) as step:
+        yield step
 
 
 def mark_guardrail(span: Any, kind: str, reason: str) -> None:
-    """Record that a guardrail refused this operation, routing the span to Argus's hot path.
+    """Record a guardrail breach on a span, in Argus's own shape.
 
-    It does NOT set the span status to error, for the same reason the Go side does not: a budget stop is
-    the system working, and reporting it as an error buries real failures under a stream of correct
-    refusals. Argus routes on the guardrail attribute independently of status, which is exactly why the
-    attribute exists separately.
+    BOTH attributes, because that is what their own `AgentRun.attributes()` emits: `argus.guardrail` with
+    the kind and `argus.hot` true. My first version set only the guardrail and argued `argus.hot` was
+    redundant since the router triggers on either — true of the router, and wrong for everything
+    downstream that filters on `argus.hot` because their SDK always sets it.
+
+    It still does NOT set the span status to error: a policy denial is the system working, and reporting it
+    as an error would bury real failures under a stream of correct refusals.
     """
     if span is None:
         return
+    target = getattr(span, "span", span)
     try:
-        span.set_attribute(ARGUS_GUARDRAIL, kind)
-        span.set_attribute("aeon.guardrail.reason", reason)
+        target.set_attribute(ARGUS_GUARDRAIL, kind)
+        target.set_attribute(ARGUS_HOT, True)
+        target.set_attribute("aeon.guardrail.reason", reason)
     except Exception as exc:  # noqa: BLE001
         logger.debug("aeon_observability: could not mark guardrail (%s)", exc)
 
 
-class _NoopSpan:
-    """Absorbs every span operation so call sites need no conditionals.
+def shutdown() -> None:
+    """Flush buffered telemetry. For worker shutdown and for tests that read spans back."""
+    if _handle is None:
+        return
+    for attr in ("shutdown", "flush", "force_flush"):
+        fn = getattr(_handle, attr, None)
+        if callable(fn):
+            try:
+                fn()
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("aeon_observability: %s failed (%s)", attr, exc)
 
-    The alternative — `if tracer: span = ...` at each call site — is how instrumentation ends up present in
-    some paths and absent in others, and the absent ones are never the ones anybody notices.
+
+class _NoopSpan:
+    """Absorbs every operation so call sites need no conditionals.
+
+    The alternative — `if telemetry: ...` at each site — is how instrumentation ends up present in some
+    paths and missing in others, and the missing ones are never the ones anybody notices.
     """
+
+    span: Any = None
 
     def __enter__(self) -> "_NoopSpan":
         return self
@@ -183,22 +249,10 @@ class _NoopSpan:
     def __exit__(self, *_: object) -> None:
         return None
 
-    def set_attribute(self, *_: object) -> None:
-        return None
-
-    def set_status(self, *_: object) -> None:
-        return None
-
-    def record_exception(self, *_: object) -> None:
-        return None
-
-    def end(self) -> None:
-        return None
+    def __getattr__(self, _name: str) -> Any:
+        return lambda *a, **k: self
 
 
-class _NoopTracer:
-    def start_as_current_span(self, *_: object, **__: object) -> _NoopSpan:
-        return _NoopSpan()
-
-    def start_span(self, *_: object, **__: object) -> _NoopSpan:
-        return _NoopSpan()
+class _NoopHandle:
+    def __getattr__(self, _name: str) -> Any:
+        return lambda *a, **k: None

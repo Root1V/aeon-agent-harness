@@ -13,6 +13,15 @@ processors:
   batch: {}
 
 exporters:
+  # OBS-006b: the Argus SDK exports LOGS as well as traces and metrics, and our pipeline had no logs path —
+  # so every worker emitted "Failed to export logs batch code: 404" in a retry loop. Harmless to the traces
+  # and noisy enough to hide a real error, which is the part that matters: a log full of a known failure is
+  # a log nobody reads.
+  #
+  # Dropped rather than stored, and stated rather than silently accepted: this dev stack has no log backend
+  # (Argus's own has one), so accepting and discarding is the honest behaviour for it. A deployment pointing
+  # at a real Argus agent never reaches this pipeline.
+  nop: {}
   otlp/tempo:
     endpoint: tempo:4317
     tls:
@@ -30,3 +39,7 @@ service:
       receivers: [otlp]
       processors: [batch]
       exporters: [prometheus]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [nop]

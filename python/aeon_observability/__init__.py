@@ -1,40 +1,49 @@
-"""Aeon's OpenTelemetry wiring for the Python side (OBS-001, extended past the Go gateways).
+"""Aeon's telemetry seam, on Argus's SDK (OBS-006b).
 
-WHAT WAS MISSING AND WHY IT MATTERED. The Go gateways emit `chat`, `execute_tool` and `invoke_agent`
-spans, and they reach Tempo — OBS-001's test proves that. What they did NOT form was a trace: OTel's
-default propagator in Go is a no-op, nothing extracted an incoming context, and the Python Activities that
-call those gateways emitted nothing at all. So one Deep Research run appeared as half a dozen unrelated
-root spans, and OBS-001's test never noticed because it queried each span SEPARATELY and each existed.
-
-INTEGRATION WITH ARGUS (github.com/Root1V/argus-observability-platform) IS CONFIGURATION, NOT A DEPENDENCY.
-Argus ships `argus-sdk` and `argus-semconv`; Aeon uses neither. It is OTel-native and ingests plain OTLP on
-4317/4318, so what the integration needs is an endpoint and two attribute names. That keeps a deployment
-without Argus fully traced, and it follows the rule this codebase applies to every provider: nothing in
-Aeon should require somebody else's SDK in order to work.
-
-Its one convention that does change our configuration: APPLICATIONS EXPORT TO LOCALHOST. An app never
-learns the central plane's address — a per-machine agent collector listens on localhost:4318 and forwards
-to the gateway with its own auth and its own queueing. So the default here is localhost, and pointing
-somewhere else is something a deployment does explicitly.
+See aeon_observability.tracing for why the SDK rather than plain OTLP — the short version is that
+`argus-obs-semconv` carries the VALUES and companion attributes, not just the attribute keys, so
+hand-rolling them produces telemetry that looks right and that their alert rules do not match.
 """
 from aeon_observability.tracing import (
     ARGUS_GUARDRAIL,
     ARGUS_HOT,
-    GUARDRAIL_BUDGET_EXHAUSTED,
+    GUARDRAIL_APPROVAL_REQUIRED,
+    GUARDRAIL_COST_BUDGET,
+    GUARDRAIL_DESTINATION_UNKNOWN,
+    GUARDRAIL_FAN_OUT,
+    GUARDRAIL_POLICY_DENIED,
+    GUARDRAIL_TOKEN_BUDGET,
+    GUARDRAIL_TOOL_CALL_BUDGET,
+    GUARDRAIL_TOOL_CALL_LOOP,
+    chat_span,
     current_traceparent,
     init_tracing,
     inject_trace_context,
     mark_guardrail,
-    tracer,
+    run_span,
+    shutdown,
+    step_span,
+    tool_span,
 )
 
 __all__ = [
     "ARGUS_GUARDRAIL",
     "ARGUS_HOT",
-    "GUARDRAIL_BUDGET_EXHAUSTED",
+    "GUARDRAIL_APPROVAL_REQUIRED",
+    "GUARDRAIL_COST_BUDGET",
+    "GUARDRAIL_DESTINATION_UNKNOWN",
+    "GUARDRAIL_FAN_OUT",
+    "GUARDRAIL_POLICY_DENIED",
+    "GUARDRAIL_TOKEN_BUDGET",
+    "GUARDRAIL_TOOL_CALL_BUDGET",
+    "GUARDRAIL_TOOL_CALL_LOOP",
+    "chat_span",
     "current_traceparent",
     "init_tracing",
     "inject_trace_context",
     "mark_guardrail",
-    "tracer",
+    "run_span",
+    "shutdown",
+    "step_span",
+    "tool_span",
 ]

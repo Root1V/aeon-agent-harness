@@ -16,7 +16,7 @@ from typing import Any
 
 from temporalio import activity
 
-from aeon_observability import inject_trace_context, tracer
+from aeon_observability import chat_span, inject_trace_context
 
 DEFAULT_MODELGW_ADDR = os.environ.get("AEON_MODELGW_ADDR", "localhost:9402")
 
@@ -66,13 +66,16 @@ async def call_model_gateway(inp: DecideInput) -> DecideOutput:
     # OTel GenAI semantic conventions, the same ones the Go gateways use (OBS-001): the operation is named
     # `chat` and the model attributes carry the gen_ai.* prefix, so a trace reads the same whichever side of
     # the seam produced the span.
-    with tracer().start_as_current_span("chat") as span:
-        span.set_attribute("gen_ai.operation.name", "chat")
-        if inp.candidates:
-            span.set_attribute("gen_ai.request.model", inp.candidates[0].model)
-            span.set_attribute("gen_ai.system", inp.candidates[0].provider)
+    # argus.genai("chat", ...) rather than a hand-built span: the operation literal, the span name and the
+    # gen_ai.* attribute keys are all theirs, so this span is indistinguishable from one their own SDK
+    # produced — which is what their dashboards and alert rules are written against.
+    first = inp.candidates[0] if inp.candidates else None
+    with chat_span(
+        provider=first.provider if first else "unknown",
+        request_model=first.model if first else None,
+    ) as span:
         if inp.data_sensitivity:
-            span.set_attribute("aeon.data_sensitivity", inp.data_sensitivity)
+            span.set("aeon.data_sensitivity", inp.data_sensitivity)
 
         # THE LINE THAT MAKES ONE TRACE. Without it the gateway starts a root span and this run's spans end
         # up scattered across unrelated traces — each present, none connected.
@@ -83,14 +86,28 @@ async def call_model_gateway(inp: DecideInput) -> DecideOutput:
                 parsed = json.loads(response.read())
         except urllib.error.HTTPError as exc:
             detail = json.loads(exc.read()).get("error", exc.reason)
-            span.record_exception(exc)
+            # Their error() carries the retryability, which is the part a consumer acts on. A 5xx from the
+            # gateway is worth retrying and a 4xx is not, and that distinction is invisible in a recorded
+            # exception.
+            span.error("model_gateway_http_error", retryable=exc.code >= 500)
             raise ModelGatewayError(f"model gateway at {DEFAULT_MODELGW_ADDR} returned {exc.code}: {detail}") from exc
         except urllib.error.URLError as exc:
-            span.record_exception(exc)
+            span.error("model_gateway_unreachable", retryable=True)
             raise ModelGatewayError(f"model gateway at {DEFAULT_MODELGW_ADDR} unreachable: {exc.reason}") from exc
 
-        span.set_attribute("gen_ai.response.model", parsed.get("model", ""))
-        span.set_attribute("aeon.provider_used", parsed.get("provider_used", ""))
+        # response()/usage()/backend() are their typed setters, so the attribute keys are the ones their
+        # store indexes. usage() takes the three counters MDL-014 made nullable, and passing None keeps
+        # "not reported" distinct from zero all the way into their pipeline instead of collapsing here.
+        span.response(model=parsed.get("model"))
+        usage = (parsed.get("output") or {}).get("usage") or {}
+        span.usage(
+            input_tokens=usage.get("prompt_tokens"),
+            output_tokens=usage.get("completion_tokens"),
+            cached_input_tokens=usage.get("cache_read_tokens"),
+        )
+        # backend() is where OBS-005's "which deployment answered" belongs: the provider that served is a
+        # fact about the backend, not about the request.
+        span.backend(backend_id=parsed.get("provider_used"))
         return DecideOutput(provider_used=parsed["provider_used"], model=parsed["model"], output=parsed["output"])
 
 

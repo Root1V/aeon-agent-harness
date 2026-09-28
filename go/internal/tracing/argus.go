@@ -18,10 +18,21 @@ import (
 // A span matching any of those goes to the HOT path — an alert bus reached in about two seconds, bypassing
 // the datastore — as well as the cold one. Everything else waits 30-60s for ClickHouse.
 //
-// WHY THIS IS CONFIGURATION AND NOT A DEPENDENCY. Argus ships argus-sdk and argus-semconv, and Aeon uses
-// neither: the platform is OTel-native and ingests plain OTLP on 4317/4318, so the integration is two
-// attribute names and an endpoint. That keeps a deployment without Argus fully traced, and it is the same
-// rule this codebase applies to every provider — nothing in Aeon should require somebody's SDK to work.
+// THE PYTHON SIDE USES THEIR SDK (argus-obs-sdk); GO DOES NOT, because they ship none for it. So these
+// constants exist to make Go's spans indistinguishable from the ones their SDK produces — the names and the
+// VALUE SHAPES below are copied from argus_semconv.guardrails, not invented here.
+//
+// Three things WERE invented here at first, and all three produce telemetry that looks right and that their
+// tooling does not match:
+//
+//   - `argus.guardrail` is a COMMA-SEPARATED LIST in their model (AgentRun.attributes joins the breaches),
+//     so a consumer may split on commas. A single value is a list of one, which is compatible; a value
+//     containing a comma would not be, which is why no kind below has one.
+//   - Their AgentRun sets `argus.hot` ALONGSIDE the guardrail. The first version here deliberately did not,
+//     reasoning that the router triggers on either — true of the router, and wrong for anything downstream
+//     filtering on `argus.hot`, which their own spans always carry.
+//   - Their kinds are HYPHENATED (`tool-call-budget`, `cost-budget`); ours were snake_case.
+
 const (
 	// AttrArgusHot marks a span as urgent when nothing else about it would.
 	AttrArgusHot = "argus.hot"
@@ -35,14 +46,29 @@ const (
 // they are exactly what an operator wants woken up for: not "a request failed" but "governance stopped
 // something".
 const (
-	GuardrailPolicyDenied       = "policy_denied"
-	GuardrailBudgetExhausted    = "budget_exhausted"
-	GuardrailApprovalRequired   = "approval_required"
-	GuardrailFanOutExceeded     = "fan_out_exceeded"
-	GuardrailDestinationUnknown = "destination_not_declared"
-	GuardrailModalityRefused    = "modality_refused"
-	GuardrailCircuitOpen        = "circuit_open"
+	// THEIRS, verbatim from argus_semconv.guardrails, so a breach Aeon reports lands in the same bucket as
+	// one their own Budget model reports.
+	GuardrailToolCallBudget = "tool-call-budget"
+	GuardrailToolCallLoop   = "tool-call-loop"
+	GuardrailTokenBudget    = "token-budget"
+	GuardrailCostBudget     = "cost-budget"
+
+	// OURS, in their style, for refusals their budget model has no concept of. A Cedar policy denial is not
+	// a budget, and reusing `cost-budget` to avoid adding a name would make two unrelated incidents
+	// indistinguishable on a dashboard.
+	GuardrailPolicyDenied       = "policy-denied"
+	GuardrailApprovalRequired   = "approval-required"
+	GuardrailFanOutExceeded     = "fan-out-budget"
+	GuardrailDestinationUnknown = "destination-not-declared"
 )
+
+// There are deliberately NO constants for the modality refusal (MDL-011) or the circuit breaker (A5).
+//
+// Both are real guardrails and NEITHER of their handlers creates a span, so a constant for them is a name
+// with nowhere to be set. The previous commit's roadmap entry CLAIMED they had been left out and they were
+// still here, unused — the script that removed them failed its own assertion and I did not check. A
+// document asserting something the code does not do, which is the defect this project has spent a week
+// finding in other people's artefacts and has now produced in its own.
 
 // MarkGuardrail records that a guardrail refused this operation.
 //
@@ -56,15 +82,19 @@ func MarkGuardrail(span trace.Span, kind, reason string) {
 	}
 	span.SetAttributes(
 		attribute.String(AttrArgusGuardrail, kind),
+		// BOTH, because their AgentRun.attributes() emits both. The router triggers on either, so the first
+		// version here set only the guardrail — which left every Aeon span invisible to anything downstream
+		// filtering on argus.hot, while their own spans always carry it.
+		attribute.Bool(AttrArgusHot, true),
 		attribute.String("aeon.guardrail.reason", reason),
 	)
 }
 
 // MarkHot marks a span urgent for a reason that is neither an error nor a guardrail.
 //
-// Kept deliberately unused by the gateways today. The two triggers above already cover every case Aeon
-// produces, and reaching for a manual "this is important" flag is how a hot path fills up until nobody
-// reads it. It exists so that a future caller has the named constant rather than a string literal.
+// Unused by the gateways, and kept for one reason: MarkGuardrail now sets argus.hot itself, so the only
+// caller left would be something urgent that is NOT a guardrail breach — and reaching for a bare "this is
+// important" flag is how a hot path fills up until nobody reads it.
 func MarkHot(span trace.Span) {
 	if span == nil {
 		return

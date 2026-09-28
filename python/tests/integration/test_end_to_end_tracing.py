@@ -68,17 +68,20 @@ def _spans_of(trace: dict) -> list[tuple[str, str, str]]:
 
 def test_run_produces_one_trace_across_both_languages():
     _require_stack()
-    from aeon_observability import current_traceparent, init_tracing, inject_trace_context, tracer
-    from aeon_observability.tracing import shutdown
+    from aeon_observability import current_traceparent, init_tracing, inject_trace_context, run_span, shutdown
 
-    init_tracing("aeon-test-client", OTEL_ENDPOINT)
+    # The SDK decides its protocol from the installed exporters, and this image has both — so it must be
+    # pinned, or it speaks gRPC at an HTTP port and every export fails in a retry loop. Found by running it.
+    os.environ.setdefault("ARGUS_PROTOCOL", "http/protobuf")
+    init_tracing("aeon-test-client", "http://" + OTEL_ENDPOINT)
 
     # A Python parent span, then a real HTTP call into the real Tool Gateway with the context injected.
     # Deliberately a DENIED tool: the denial path is the one Aeon's guardrail marking runs through, and it
     # needs no Postgres, no executor and no run — so the test exercises the propagation and the guardrail
     # attribute at once, without a second moving part that could fail for its own reasons.
-    with tracer().start_as_current_span("invoke_agent") as span:
-        span.set_attribute("gen_ai.operation.name", "invoke_agent")
+    # argus.propagate.run(...) via the seam: their run helper, which also puts the run id in BAGGAGE —
+    # the thing a plain span attribute cannot carry across the HTTP hop into the Go gateways.
+    with run_span("invoke_agent", run_id="tracing-test") as span:
         traceparent = current_traceparent()
         assert traceparent, "no traceparent — nothing would be propagated and this test would prove nothing"
         trace_id = traceparent.split("-")[1]
@@ -139,12 +142,14 @@ def test_a_guardrail_refusal_is_marked_for_the_hot_path():
     an integration that is only a constant in a header file is an intention.
     """
     _require_stack()
-    from aeon_observability import current_traceparent, init_tracing, inject_trace_context, tracer
-    from aeon_observability.tracing import shutdown
+    from aeon_observability import current_traceparent, init_tracing, inject_trace_context, run_span, shutdown
 
-    init_tracing("aeon-test-client", OTEL_ENDPOINT)
+    # The SDK decides its protocol from the installed exporters, and this image has both — so it must be
+    # pinned, or it speaks gRPC at an HTTP port and every export fails in a retry loop. Found by running it.
+    os.environ.setdefault("ARGUS_PROTOCOL", "http/protobuf")
+    init_tracing("aeon-test-client", "http://" + OTEL_ENDPOINT)
 
-    with tracer().start_as_current_span("invoke_agent"):
+    with run_span("invoke_agent", run_id="guardrail-test"):
         traceparent = current_traceparent()
         trace_id = traceparent.split("-")[1]
         body = json.dumps({
@@ -163,7 +168,7 @@ def test_a_guardrail_refusal_is_marked_for_the_hot_path():
     shutdown()
 
     deadline = time.time() + 60
-    guardrail = None
+    guardrail, hot = None, None
     while time.time() < deadline and guardrail is None:
         trace = _tempo_trace(trace_id)
         for batch in (trace or {}).get("batches", []):
@@ -172,10 +177,19 @@ def test_a_guardrail_refusal_is_marked_for_the_hot_path():
                     for attr in span.get("attributes", []):
                         if attr.get("key") == "argus.guardrail":
                             guardrail = attr.get("value", {}).get("stringValue")
+                        if attr.get("key") == "argus.hot":
+                            hot = attr.get("value", {}).get("boolValue")
         if guardrail is None:
             time.sleep(1)
 
-    assert guardrail == "policy_denied", (
-        f"argus.guardrail on the denial span = {guardrail!r}, want 'policy_denied' — without it the refusal "
-        "waits 30-60s in Argus's cold path instead of reaching the alert bus in two"
+    assert guardrail == "policy-denied", (
+        f"argus.guardrail on the denial span = {guardrail!r}, want 'policy-denied' — without it the refusal "
+        "waits 30-60s in Argus's cold path instead of reaching the alert bus in two. HYPHENATED, because that "
+        "is the style argus_semconv.guardrails uses for its own kinds (tool-call-budget, cost-budget); a "
+        "snake_case value of ours would land in a different bucket from theirs on the same dashboard"
+    )
+    assert hot is True, (
+        f"argus.hot on the denial span = {hot!r}, want True. Their own AgentRun.attributes() sets BOTH, and "
+        "anything downstream that filters on argus.hot rather than on the guardrail would not see Aeon's "
+        "refusals at all — the router triggers on either, and the router is not the only consumer"
     )
