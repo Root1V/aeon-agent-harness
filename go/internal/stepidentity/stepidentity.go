@@ -111,9 +111,21 @@ type ErrIntegerTooLargeToBind struct {
 	// them hunt for it, and the hunt is the part that gets skipped.
 	Path  string
 	Value string
+	// Float marks a value that arrived as a floating-point number, which is refused AT 2^53 rather than
+	// above it. Reported because whoever gets a number refused that visibly "fits" will ask why, and the
+	// answer is about provenance rather than size.
+	Float bool
 }
 
 func (e *ErrIntegerTooLargeToBind) Error() string {
+	if e.Float {
+		return fmt.Sprintf("stepidentity: %s is the floating-point value %s, at or above 2^53 (%d). A float "+
+			"at that magnitude cannot be bound EVEN IF IT LOOKS EXACT: 9007199254740993.0 becomes "+
+			"9007199254740992.0 when parsed, so there is no way to tell which value was sent, and an "+
+			"approval granted for one would validate the other. With an integer there is no ambiguity and "+
+			"2^53 itself is accepted. If it is an identifier, send it as a string",
+			e.Path, e.Value, int64(maxExactInteger))
+	}
 	return fmt.Sprintf("stepidentity: %s is %s, of magnitude greater than 2^53 (%d). A number that large "+
 		"cannot be bound by this hash: RFC 8785 mandates ECMAScript number serialization and ECMAScript "+
 		"numbers ARE IEEE-754 doubles, so two different values can canonicalize identically and an approval "+
@@ -138,23 +150,17 @@ func checkIntegerBounds(path string, v any) error {
 		if i, err := n.Int64(); err == nil {
 			return checkIntMagnitude(path, n.String(), i)
 		}
-		// Too big even for int64, so certainly over the bound. Reported without parsing: a value that
-		// overflows int64 cannot be made safe by any further inspection.
-		if _, err := n.Float64(); err != nil {
+		// Not an int64: either a fraction, or an integer too large to fit. Both are judged as FLOATS, which
+		// also fixes a bug the first version had — it rejected every json.Number that was not an integer,
+		// so a perfectly ordinary 1.5 was refused as "too large to bind". Found by printing the boundary
+		// values rather than by reading this function.
+		f, err := n.Float64()
+		if err != nil {
 			return nil // Not a number at all; JCS will reject it if it is malformed.
 		}
-		return &ErrIntegerTooLargeToBind{Path: path, Value: n.String()}
+		return checkFloatMagnitude(path, n.String(), f)
 	case float64:
-		if n != math.Trunc(n) {
-			// A genuine fraction. The bound is about integers used as identifiers; a fractional value
-			// above 2^53 is imprecise by nature and nobody binds an approval to one.
-			return nil
-		}
-		// A float64 that arrived here may ALREADY have been folded by whoever decoded it, so this cannot
-		// recover the original digits — it can only refuse the magnitude, which is the same guarantee.
-		if math.Abs(n) > maxExactInteger {
-			return &ErrIntegerTooLargeToBind{Path: path, Value: formatBigFloat(n)}
-		}
+		return checkFloatMagnitude(path, formatBigFloat(n), n)
 	case int:
 		return checkIntMagnitude(path, strconv.Itoa(n), int64(n))
 	case int64:
@@ -192,6 +198,30 @@ func checkIntegerBounds(path string, v any) error {
 func checkIntMagnitude(path, literal string, v int64) error {
 	if v > maxExactInteger || v < -maxExactInteger {
 		return &ErrIntegerTooLargeToBind{Path: path, Value: literal}
+	}
+	return nil
+}
+
+// checkFloatMagnitude applies the FLOAT rule: at-or-above 2^53 is refused, not merely above it.
+//
+// INCLUSIVE, and the asymmetry with the integer rule is the point. Synaptum found this hole on their side
+// on 2026-09-28 from the warning about our decoding asymmetry, and it was in this code too: a float
+// literal 9007199254740993.0 becomes exactly 9007199254740992.0, which passes a `> 2^53` cut and gets
+// hashed. Measured here before fixing.
+//
+// With an integer there is no ambiguity — 2^53 is 2^53. With a float there is no way to know where the
+// value came from, and binding something we cannot distinguish from a different value is exactly what this
+// check exists to prevent. So a float AT 2^53 is refused even though 2^53 itself is a legal bound: the
+// refusal is about provenance, not magnitude.
+//
+// A genuine fraction below the bound passes, because the bound is about integers used as identifiers.
+func checkFloatMagnitude(path, literal string, v float64) error {
+	if v != math.Trunc(v) && math.Abs(v) < maxExactInteger {
+		// A real fraction in the ordinary range: not an identifier, nothing to bind.
+		return nil
+	}
+	if math.Abs(v) >= maxExactInteger {
+		return &ErrIntegerTooLargeToBind{Path: path, Value: literal, Float: true}
 	}
 	return nil
 }
