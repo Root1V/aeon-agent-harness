@@ -30,6 +30,21 @@ GUARDRAIL_BUDGET_EXHAUSTED = "budget_exhausted"
 # app's configuration stops changing when the infrastructure does.
 DEFAULT_OTLP_ENDPOINT = "http://localhost:4318"
 
+# A DEPLOYMENT FACT WORTH THE PARAGRAPH, because the naive reading of Argus's convention fails silently.
+#
+# The Argus agent binds to 127.0.0.1 only. Measured against the real agent running on this machine:
+#
+#   from a container on a docker network:  http://localhost:4318/v1/traces            -> 000 (unreachable)
+#                                          http://host.docker.internal:4318/v1/traces -> 200
+#
+# So "applications export to localhost" is true of a process on the host and false of one in a container,
+# and the failure mode is the worst kind: the exporter retries in the background, the app works perfectly,
+# and no span ever arrives. Anything containerised must point at the host — host.docker.internal on Docker
+# Desktop, or the gateway's address when the agent is not reachable at all.
+#
+# This is why init_tracing LOGS the endpoint it resolved. An operator who sees "exporting spans to
+# http://localhost:4318" from inside a container has the answer in front of them.
+
 # THE SAME ENV VAR THE GO SIDE READS. The first version of this module invented AEON_OTLP_ENDPOINT, which
 # would have meant two names for one endpoint and a deployment that configured only one of them — half the
 # services exporting and half silent, with nothing failing. Go's convention is host:port with no scheme
