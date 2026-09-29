@@ -9,10 +9,13 @@
 package tracing
 
 import (
+	"os"
+
 	"context"
 	"fmt"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -21,11 +24,23 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// DefaultNamespace is the application every Aeon service belongs to. Overridable by ARGUS_NAMESPACE so a
+// deployment running two Aeon installations can tell them apart, which is the level their incident routing
+// keys on.
+const DefaultNamespace = "aeon-ai"
+
+func namespace() string {
+	if ns := os.Getenv("ARGUS_NAMESPACE"); ns != "" {
+		return ns
+	}
+	return DefaultNamespace
+}
+
 // Init configures the process-global TracerProvider to batch-export spans over OTLP/HTTP to
 // endpoint (host:port, no scheme — e.g. "otel-collector:4318") tagged with serviceName, and
 // returns a Tracer plus a shutdown func the caller should defer (flushes buffered spans and closes
 // the exporter).
-func Init(ctx context.Context, serviceName, endpoint string) (trace.Tracer, func(context.Context) error, error) {
+func Init(ctx context.Context, serviceName, role, endpoint string) (trace.Tracer, func(context.Context) error, error) {
 	exp, err := otlptracehttp.New(ctx,
 		otlptracehttp.WithEndpoint(endpoint),
 		otlptracehttp.WithInsecure(),
@@ -34,9 +49,26 @@ func Init(ctx context.Context, serviceName, endpoint string) (trace.Tracer, func
 		return nil, nil, fmt.Errorf("tracing: building OTLP exporter for %s: %w", endpoint, err)
 	}
 
+	// THREE ATTRIBUTES AND NOT ONE, and Argus found out why by looking at their own incident board.
+	//
+	// We were sending only service.name. Their gateway fills a missing service.namespace with
+	// `unregistered`, deliberately — a service that emits without declaring itself still shows up — but an
+	// `unregistered` application enters with medium criticality AND NO NOTIFICATION CHANNELS, so its alerts
+	// go to their own console log. Our policy denial from the day before was sitting there as
+	// `unregistered / aeon-toolgw`, detected correctly and delivered to nobody.
+	//
+	//   service.namespace      the APPLICATION            aeon-ai
+	//   service.name           the SUB-COMPONENT          toolgw, worker, modelgw, ...
+	//   argus.component.role   from their closed set      api | worker | scheduler | cli | model-server
+	//
+	// The component name drops the `aeon-` prefix: with the namespace present it repeats what the namespace
+	// already says. That redundancy is exactly what their own check caught in our test client, which was
+	// sending service.namespace equal to service.name and so collapsing two levels of identity into one.
 	res, err := resource.Merge(resource.Default(), resource.NewWithAttributes(
 		semconv.SchemaURL,
 		semconv.ServiceName(serviceName),
+		semconv.ServiceNamespace(namespace()),
+		attribute.String("argus.component.role", role),
 	))
 	if err != nil {
 		return nil, nil, fmt.Errorf("tracing: building resource: %w", err)

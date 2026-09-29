@@ -45,7 +45,7 @@ func main() {
 	if otelEndpoint == "" {
 		otelEndpoint = "otel-collector:4318"
 	}
-	if _, shutdown, err := tracing.Init(context.Background(), "aeon-toolgw", otelEndpoint); err != nil {
+	if _, shutdown, err := tracing.Init(context.Background(), "toolgw", "api", otelEndpoint); err != nil {
 		log.Printf("aeon-toolgw: tracing disabled: %v", err)
 	} else {
 		defer shutdown(context.Background())
