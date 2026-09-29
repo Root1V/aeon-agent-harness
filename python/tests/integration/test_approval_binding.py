@@ -20,6 +20,7 @@ from temporalio.client import Client, WorkflowFailureError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
+from aeon_worker.activities.approval_activities import record_approval_wait_activity
 from aeon_worker.activities.tool_activities import execute_tool_activity
 from aeon_worker.graph import compute_tool_call_hash
 from aeon_worker.workflows.graph_run import GraphRunWorkflow
@@ -60,7 +61,7 @@ async def test_approval_binding_approved_runs_the_call():
     run_id = str(uuid.uuid4())
     task_queue = f"aeon-approval-test-{uuid.uuid4().hex[:8]}"
     async with await WorkflowEnvironment.start_local() as env:
-        async with Worker(env.client, task_queue=task_queue, workflows=[GraphRunWorkflow], activities=[execute_tool_activity]) as worker:
+        async with Worker(env.client, task_queue=task_queue, workflows=[GraphRunWorkflow], activities=[execute_tool_activity, record_approval_wait_activity]) as worker:
             handle = await _start(env, worker, run_id)
             pending = await _wait_for_pending_approval(handle)
             assert pending["tool_call_hash"] == REAL_HASH
@@ -76,7 +77,7 @@ async def test_approval_binding_rejected_never_runs():
     run_id = str(uuid.uuid4())
     task_queue = f"aeon-approval-test-{uuid.uuid4().hex[:8]}"
     async with await WorkflowEnvironment.start_local() as env:
-        async with Worker(env.client, task_queue=task_queue, workflows=[GraphRunWorkflow], activities=[execute_tool_activity]) as worker:
+        async with Worker(env.client, task_queue=task_queue, workflows=[GraphRunWorkflow], activities=[execute_tool_activity, record_approval_wait_activity]) as worker:
             handle = await _start(env, worker, run_id)
             pending = await _wait_for_pending_approval(handle)
 
@@ -98,7 +99,7 @@ async def test_approval_binding_mismatched_hash_is_denied():
     run_id = str(uuid.uuid4())
     task_queue = f"aeon-approval-test-{uuid.uuid4().hex[:8]}"
     async with await WorkflowEnvironment.start_local() as env:
-        async with Worker(env.client, task_queue=task_queue, workflows=[GraphRunWorkflow], activities=[execute_tool_activity]) as worker:
+        async with Worker(env.client, task_queue=task_queue, workflows=[GraphRunWorkflow], activities=[execute_tool_activity, record_approval_wait_activity]) as worker:
             handle = await _start(env, worker, run_id)
             pending = await _wait_for_pending_approval(handle)
 
@@ -119,7 +120,7 @@ async def test_approval_binding_expires_without_decision():
     run_id = str(uuid.uuid4())
     task_queue = f"aeon-approval-test-{uuid.uuid4().hex[:8]}"
     async with await WorkflowEnvironment.start_local() as env:
-        async with Worker(env.client, task_queue=task_queue, workflows=[GraphRunWorkflow], activities=[execute_tool_activity]) as worker:
+        async with Worker(env.client, task_queue=task_queue, workflows=[GraphRunWorkflow], activities=[execute_tool_activity, record_approval_wait_activity]) as worker:
             # A 1-second TTL and no signal at all — the call must never run.
             handle = await _start(env, worker, run_id, {"approvals": {"default_ttl_seconds": 1}})
             with pytest.raises(WorkflowFailureError) as exc_info:
