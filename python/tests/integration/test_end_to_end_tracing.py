@@ -133,8 +133,8 @@ def test_run_produces_one_trace_across_both_languages():
     )
 
 
-def test_a_guardrail_refusal_is_marked_for_the_hot_path():
-    """The Argus integration, asserted on a real span.
+def test_a_policy_denial_is_recorded_as_denied_and_does_not_page():
+    """The Argus integration, asserted on a real span, after their correction.
 
     Argus routes a span to its ~2s alert path when `argus.guardrail` is present (its collector's routing
     connector, platform/collector/agent.yaml). Aeon's refusals are exactly what that path is for: not "a
@@ -168,8 +168,8 @@ def test_a_guardrail_refusal_is_marked_for_the_hot_path():
     shutdown()
 
     deadline = time.time() + 60
-    guardrail, hot = None, None
-    while time.time() < deadline and guardrail is None:
+    guardrail, outcome = None, None
+    while time.time() < deadline and outcome is None:
         trace = _tempo_trace(trace_id)
         for batch in (trace or {}).get("batches", []):
             for scope in batch.get("scopeSpans", []):
@@ -177,19 +177,24 @@ def test_a_guardrail_refusal_is_marked_for_the_hot_path():
                     for attr in span.get("attributes", []):
                         if attr.get("key") == "argus.guardrail":
                             guardrail = attr.get("value", {}).get("stringValue")
-                        if attr.get("key") == "argus.hot":
-                            hot = attr.get("value", {}).get("boolValue")
-        if guardrail is None:
+                        if attr.get("key") == "argus.outcome":
+                            outcome = attr.get("value", {}).get("stringValue")
+        if outcome is None:
             time.sleep(1)
 
-    assert guardrail == "policy-denied", (
-        f"argus.guardrail on the denial span = {guardrail!r}, want 'policy-denied' — without it the refusal "
-        "waits 30-60s in Argus's cold path instead of reaching the alert bus in two. HYPHENATED, because that "
-        "is the style argus_semconv.guardrails uses for its own kinds (tool-call-budget, cost-budget); a "
-        "snake_case value of ours would land in a different bucket from theirs on the same dashboard"
+    # NO GUARDRAIL on a policy denial any more, on Argus's recommendation of 2026-09-29: setting
+    # argus.guardrail requests a page within two seconds, and a Cedar denial may be routine in a given
+    # deployment. The refusal is carried by argus.outcome=denied, which their gateway's audit policy
+    # retains in full — they measured it: with only outcome=denied, sampling kept 0 of 8 denials until
+    # `denied` entered that policy, then 8 of 8.
+    #
+    # `denied` and not `ok`, which is where they corrected us: a denial counted as `ok` is counted with the
+    # successes, and "how many times did policy say no" becomes unanswerable.
+    assert outcome == "denied", (
+        f"argus.outcome on the denial span = {outcome!r}, want 'denied'. Their Step finaliser defaults this "
+        "to 'ok', so a refusal that set nothing would be stored as a successful step"
     )
-    assert hot is True, (
-        f"argus.hot on the denial span = {hot!r}, want True. Their own AgentRun.attributes() sets BOTH, and "
-        "anything downstream that filters on argus.hot rather than on the guardrail would not see Aeon's "
-        "refusals at all — the router triggers on either, and the router is not the only consumer"
+    assert guardrail is None, (
+        f"argus.guardrail = {guardrail!r} on a policy denial. Its presence alone requests a two-second "
+        "page, and a routine denial paging every time is alert fatigue built from inside"
     )

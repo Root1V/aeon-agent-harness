@@ -98,7 +98,15 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 
 	decision := h.Policy.IsAllowed(body.AgentManifestRef, body.ToolName)
 	if !decision.Allowed {
-		span.SetStatus(codes.Error, "denied by policy")
+		// NOT codes.Error, and this corrects a contradiction that sat in this file for a while: the
+		// MarkGuardrail comment said a policy denial is the system working correctly and must not be
+		// reported as an error, while this line marked it as one three functions away.
+		//
+		// It matters beyond tidiness. Argus's router pages on `status.code == STATUS_CODE_ERROR` as well as
+		// on argus.guardrail, so removing the guardrail from a denial changed nothing until this changed
+		// too — measured: the hot-path counter still moved by 1. A refusal is this gateway doing its job,
+		// so the span describes a successful operation whose OUTCOME was `denied`.
+		span.SetStatus(codes.Ok, "denied by policy")
 		span.SetAttributes(
 			attribute.String("aeon.policy.disposition", string(decision.Disposition)),
 			attribute.Bool("aeon.policy.disposition_declared", decision.DispositionDeclared),
@@ -106,7 +114,8 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 		// Argus's hot path (2s) rather than the 30-60s cold one. The KIND comes from the disposition, because
 		// "a person must approve this" and "policy forbids this" need answering differently and within
 		// seconds of each other — see go/internal/tracing/argus.go.
-		tracing.MarkGuardrail(span, guardrailFor(decision.Disposition), "denied by policy "+decision.PolicyID)
+		tracing.MarkOutcome(span, tracing.OutcomeForDisposition(decision.Disposition))
+		span.SetAttributes(attribute.String("aeon.guardrail.reason", "denied by policy "+decision.PolicyID))
 
 		// Journalled BEFORE the response, on purpose: after it, a crash in this process between writing
 		// the 403 and writing the record would leave the step looking unfinished, which is the exact
@@ -336,17 +345,19 @@ func outcomeOrEmpty(o checkpoint.Outcome) any {
 	return o
 }
 
-// guardrailFor maps a policy disposition to the guardrail kind reported to Argus.
+// A POLICY REFUSAL NO LONGER SETS argus.guardrail AT ALL, on Argus's own recommendation (2026-09-29), and
+// that replaces what this function used to do.
 //
-// require_approval is NOT a denial and gets its own kind: a run suspended waiting for a person is an
-// operational event someone must act on, while a forbidden call is one nobody needs to act on at all. Both
-// reach the hot path in two seconds; sending them under one name would make the urgent one indistinguishable
-// from the routine one.
-func guardrailFor(d policy.Disposition) string {
-	switch d {
-	case policy.DispositionRequireApproval:
-		return tracing.GuardrailApprovalRequired
-	default:
-		return tracing.GuardrailPolicyDenied
-	}
-}
+// Their router triggers on the PRESENCE of argus.guardrail, so setting it is requesting a page within two
+// seconds — whatever the value. Two consequences they pointed out and we had wrong:
+//
+//   - A require_approval step is normal operation. Paging on every approval would be alert fatigue built
+//     from inside, so it gets no guardrail at all.
+//   - A Cedar denial may be ROUTINE in a given deployment, and a guardrail that fires on routine is noise
+//     with a good name. So a denial carries `argus.outcome=denied` instead, which their gateway's audit
+//     policy retains in full — measured by them: with only outcome=denied, sampling kept 0 of 8 denials
+//     until `denied` entered the audit policy, then 8 of 8.
+//
+// What remains a guardrail here is nothing: the tool gateway's refusals are all policy decisions. Fan-out
+// and undeclared destinations still are guardrails, in the A2A egress path, because a runaway and a
+// misconfiguration are both rare and both worth a page.

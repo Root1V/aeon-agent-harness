@@ -36,7 +36,7 @@ dev = [
 requires-dist = [
     { name = "agent-framework-core", specifier = ">=1.15" },
     { name = "agent-framework-openai", specifier = ">=1.14" },
-    { name = "argus-obs-sdk", extras = ["http"], specifier = ">=1.0.0a8" },
+    { name = "argus-obs-sdk", extras = ["http"], specifier = ">=1.0.0a12" },
     { name = "claude-agent-sdk", specifier = ">=0.2" },
     { name = "crewai", specifier = ">=1.15" },
     { name = "jsonschema", specifier = ">=4.23" },
@@ -244,15 +244,15 @@ wheels = [
 
 [[package]]
 name = "argus-obs-sdk"
-version = "1.0.0a8"
+version = "1.0.0a12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "argus-obs-semconv" },
     { name = "opentelemetry-sdk" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b8/55/06eb79cf7b10303c7c1f5e17bde993b66cd4157d14d8c8457a96cfbcfed1/argus_obs_sdk-1.0.0a8.tar.gz", hash = "sha256:de7a5102151f4752ba8c17707c2ae9b0b499e2134afa922ef9d7802bd5134035", size = 38875, upload-time = "2026-09-28T02:23:31.098Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/73/dc/bd8e3f1c1dba44b788940ef002f8fc97956961ca6c76fb90565f7ac85b1c/argus_obs_sdk-1.0.0a12.tar.gz", hash = "sha256:d43884b537ef8b1a38c21d041471c4f60806058a409c5455e796b6ea69c3129a", size = 44677, upload-time = "2026-09-29T09:59:30.436Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/69/de/d4faf9621dc207dc145e75192acfacf23a60154a3d08d5f85bc5cc6053fb/argus_obs_sdk-1.0.0a8-py3-none-any.whl", hash = "sha256:5e0c98842260c26a8cf603fd20cbc373682900b7bcd46d9379ad7f16e911a695", size = 32862, upload-time = "2026-09-28T02:23:29.71Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/f7/68e85ff92feef10d643deea5a87c6a4f06a6c4251950bb4e0b8dc34d7aa3/argus_obs_sdk-1.0.0a12-py3-none-any.whl", hash = "sha256:b5568aabb48741f1c92f93d361883e750a26c9fb037ac20bfb45b5d795138cdf", size = 35554, upload-time = "2026-09-29T09:59:28.945Z" },
 ]
 
 [package.optional-dependencies]
@@ -262,14 +262,14 @@ http = [
 
 [[package]]
 name = "argus-obs-semconv"
-version = "1.0.0a8"
+version = "1.0.0a12"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "opentelemetry-api" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f2/a1/035b675d00604b21994654affb7689dd2329d406b05cccb2c0cfc62415a8/argus_obs_semconv-1.0.0a8.tar.gz", hash = "sha256:9b9495f2174e8f7940560a2ea3374b723d8e0e31d1a201c6825caf7e21d0167b", size = 41655, upload-time = "2026-09-28T02:23:36.424Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/09/7e6bacfb8638cc53933c131244da5e92f81f1283e5eab9da7407ac6560a7/argus_obs_semconv-1.0.0a12.tar.gz", hash = "sha256:e0b0334b3be67bf823168abd62ae36d0cdfa37e180719760e6174f9e9633ade1", size = 48514, upload-time = "2026-09-29T09:59:32.563Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8b/ca/8cd4aa1813fcdf98deada3b3ef99cbf994b75a8cee72137442046e0b0700/argus_obs_semconv-1.0.0a8-py3-none-any.whl", hash = "sha256:df9a38526c51e0a4af8c0085b97635ef2eb4c8b584a36fb67c1b35199aa5ee4f", size = 22618, upload-time = "2026-09-28T02:23:35.175Z" },
+    { url = "https://files.pythonhosted.org/packages/88/ad/d5e9c2faf2719da0fd73182794c3ed19356521c93aa94955af213f25fba9/argus_obs_semconv-1.0.0a12-py3-none-any.whl", hash = "sha256:7d2666826b97638ecc500dbdaf71c84b2ca46f8596e131f5d1cd8bf3c4265153", size = 27989, upload-time = "2026-09-29T09:59:31.174Z" },
 ]
 
 [[package]]
