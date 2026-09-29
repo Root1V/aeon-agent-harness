@@ -517,7 +517,22 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   tool descubierto vía `ListTools` no trae esa clasificación consigo.
 - **Coste:** M.
 
-### Catálogo MCP de salida (`INT-003`) es estático por proceso y sin identidad real de cliente
+### Catálogo MCP de salida (`INT-003`): identidad real de cliente MCP
+
+> **El refresco en vivo se PROMOVIÓ como `INT-003b` el 2026-09-29** y queda cerrado. Al implementarlo
+> apareció lo que esta entrada no podía anticipar: el catálogo no solo era estático, **exponía la versión
+> MÁS ANTIGUA** de cada tool, porque `List` devuelve todas las versiones y el bucle de arranque dejaba que
+> la última iterada ganara. Refrescar sin arreglarlo habría refrescado a la versión equivocada.
+>
+> **Lo que sigue aquí es la otra mitad:** todo llamador MCP externo se autoriza como un único principal
+> Cedar compartido (`McpClient::"external-mcp-client"`), porque el `clientInfo` que un cliente MCP declara
+> no lo verifica el protocolo y usarlo como principal sería inventar una frontera de confianza que no
+> existe. Necesita identidad de carga de trabajo real (SPIFFE/SVID) — ver su entrada en este fichero.
+>
+> - **Criterio de entrada:** que exista un mecanismo real de identidad de workload.
+> - **Coste:** M.
+
+### Catálogo MCP de salida (contexto original, para la trazabilidad)
 
 - **Descripción:** `aeon-toolgw` lee el Tool Registry (Postgres) una sola vez al arrancar para
   construir el servidor MCP (`/mcp`) — un tool registrado o modificado en `aeon-controlplane`

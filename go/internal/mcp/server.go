@@ -9,7 +9,6 @@ import (
 
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/store"
-	"github.com/aeon-ai/aeon/go/internal/toolexec"
 )
 
 // McpClientPrincipalType is the Cedar entity type every external MCP caller is authorized as
@@ -32,33 +31,29 @@ const McpClientPrincipalID = "external-mcp-client"
 // policy-then-execute ordering ToolGatewayHandlers.execute already enforces for native calls (see
 // go/internal/api/tool_gateway_handlers.go); this is a second front door onto the same gate, never
 // a bypass of it.
-func NewToolGatewayServer(tools []*store.ToolRecord, eng *policy.Engine, executor *toolexec.Executor) *sdkmcp.Server {
-	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "aeon-toolgw", Version: "0.1.0"}, nil)
-
-	for _, rec := range tools {
-		schema, _ := rec.Descriptor["input_schema"].(map[string]any)
-		if schema == nil {
-			// AddTool requires a non-nil, type:"object" input schema — a tool registered without
-			// one (shouldn't happen for a real ToolDescriptor, since input_schema is required by
-			// tool_descriptor.schema.json, but this stays defensive rather than panicking on a
-			// malformed registry row) falls back to "accept anything".
-			schema = map[string]any{"type": "object"}
-		}
-		description, _ := rec.Descriptor["description"].(string)
-
-		server.AddTool(
-			&sdkmcp.Tool{Name: rec.Name, Description: description, InputSchema: schema},
-			toolCallHandler(rec.Name, eng, executor),
-		)
-	}
+func NewToolGatewayServer(tools []*store.ToolRecord, eng *policy.Engine, executor ToolExecutor) *sdkmcp.Server {
+	server, _ := NewToolGatewayCatalog(tools, eng, executor)
 	return server
 }
 
-// toolCallHandler builds the raw ToolHandler for one tool name, closing over it so every call
-// through this handler is authorized and executed as that specific tool regardless of what the
-// wire request itself claims to be for (defense in depth: the handler is keyed by registration,
-// not by trusting req.Params.Name to match).
-func toolCallHandler(toolName string, eng *policy.Engine, executor *toolexec.Executor) sdkmcp.ToolHandler {
+// NewToolGatewayCatalog builds the server AND the catalogue that keeps it fresh (INT-003's live refresh).
+//
+// The initial load goes through Catalog.Apply, the same path a refresh takes — NOT through a separate
+// startup loop. That separate loop is what had the version bug: it called AddTool once per registry row,
+// and since List returns every version newest-first, each tool ended up registered with its OLDEST
+// schema. One code path means a refresh cannot disagree with a cold start about what the catalogue is.
+func NewToolGatewayCatalog(tools []*store.ToolRecord, eng *policy.Engine, executor ToolExecutor) (*sdkmcp.Server, *Catalog) {
+	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "aeon-toolgw", Version: "0.1.0"}, nil)
+	catalog := NewCatalog(server, eng, executor)
+	catalog.Apply(tools)
+	return server, catalog
+}
+
+// toolCallHandler takes the ToolExecutor INTERFACE (see catalog.go) rather than the concrete
+// *toolexec.Executor, so the live catalogue can share exactly this handler instead of a near-copy. A
+// second handler for the MCP path would be a second place the policy-then-execute ordering has to be kept
+// right, which is the one thing INT-003 must not duplicate.
+func toolCallHandler(toolName string, eng *policy.Engine, executor ToolExecutor) sdkmcp.ToolHandler {
 	return func(_ context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
 		var args map[string]any
 		if len(req.Params.Arguments) > 0 {
