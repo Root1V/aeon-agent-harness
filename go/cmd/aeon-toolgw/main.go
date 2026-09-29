@@ -176,9 +176,27 @@ func main() {
 		if err != nil {
 			log.Fatalf("aeon-toolgw: listing the Tool Registry for the MCP server: %v", err)
 		}
-		mcpServer := aeonmcp.NewToolGatewayServer(tools, engine, executor)
+		mcpServer, catalog := aeonmcp.NewToolGatewayCatalog(tools, engine, executor)
 		mux.Handle("/mcp", sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return mcpServer }, &sdkmcp.StreamableHTTPOptions{Stateless: true}))
-		log.Printf("aeon-toolgw: MCP server live at /mcp with %d tool(s) from the Tool Registry", len(tools))
+		// The count reported is the DISTINCT TOOLS exposed, not the registry rows read. List returns every
+		// version of every tool, so the old message said "213 tool(s)" for a catalogue of a handful — a
+		// number that looked like a fact about the MCP surface and was a fact about the table.
+		exposed := len(aeonmcp.CurrentVersions(tools))
+		log.Printf("aeon-toolgw: MCP server live at /mcp with %d tool(s) exposed from %d Tool Registry row(s)",
+			exposed, len(tools))
+
+		// INT-003's live refresh. The registry is written by aeon-controlplane, a different process, so
+		// without this a tool registered after start-up stayed invisible until aeon-toolgw was restarted.
+		// Clients learn through the protocol's own notifications/tools/list_changed, which the MCP SDK
+		// emits from AddTool/RemoveTools — and Catalog.Apply only touches what actually differs, so an
+		// unchanged catalogue sends no notification at all.
+		refresh := time.Duration(intFromEnv("AEON_MCP_CATALOG_REFRESH_SECONDS", 30)) * time.Second
+		if refresh > 0 {
+			go catalog.Watch(context.Background(), s.ToolRegistry(), refresh)
+			log.Printf("aeon-toolgw: MCP catalog refreshing every %s (AEON_MCP_CATALOG_REFRESH_SECONDS=0 disables)", refresh)
+		} else {
+			log.Println("aeon-toolgw: MCP catalog refresh DISABLED — a tool registered after now stays invisible until restart")
+		}
 	} else {
 		log.Println("aeon-toolgw: AEON_PG_DSN not set — /mcp not mounted (Tool Registry unavailable)")
 	}
