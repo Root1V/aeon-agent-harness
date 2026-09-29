@@ -27,6 +27,11 @@ class DeepResearchReport:
     cited_claim_ids: list[str] = field(default_factory=list)
     sufficient: bool = False
     topics_to_replan: list[str] = field(default_factory=list)
+    # MEM-003. Both, not just the count: a zero with no note means reflection ran and proposed nothing;
+    # a zero WITH a note means it could not run. Collapsing them would make a misconfigured deployment
+    # look like a run the model had no lessons from.
+    memory_candidates_written: int = 0
+    reflection_note: str = ""
 
 
 async def start_deep_research_run(
@@ -39,6 +44,8 @@ async def start_deep_research_run(
     data_sensitivity: str = "",
     agent_manifest_ref: str = "",
     allowed_tools: list[str] | None = None,
+    reflect: bool = False,
+    tenant_id: str = "default",
 ) -> DeepResearchReport:
     """Starts a real DeepResearchWorkflow execution and blocks until it completes. `candidates` is
     already-resolved Model Gateway routing (see aeon_sdk.model_policy.resolve_candidates) — this
@@ -55,6 +62,10 @@ async def start_deep_research_run(
             data_sensitivity=data_sensitivity,
             agent_manifest_ref=agent_manifest_ref,
             allowed_tools=allowed_tools or [],
+            # MEM-003: off by default. Reflecting costs an extra model call per run, and a caller who
+            # has not thought about memory should not start paying for one by upgrading.
+            reflect=reflect,
+            tenant_id=tenant_id,
         ),
         id=run_id,
         task_queue=task_queue,
@@ -67,4 +78,6 @@ async def start_deep_research_run(
         cited_claim_ids=result.cited_claim_ids,
         sufficient=result.sufficient,
         topics_to_replan=result.topics_to_replan,
+        memory_candidates_written=result.memory_candidates_written,
+        reflection_note=result.reflection_note,
     )

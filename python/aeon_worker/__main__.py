@@ -25,6 +25,7 @@ from aeon_worker.activities.framework_adapter_activities import (
     run_maf_interop_activity,
     run_openai_agents_interop_activity,
 )
+from aeon_worker.activities.memory_activities import reflect_activity, write_memory_candidates_activity
 from aeon_worker.activities.model_activities import decide_activity
 from aeon_worker.activities.tool_activities import execute_tool_activity
 from aeon_observability import init_tracing
@@ -65,6 +66,9 @@ async def main() -> None:
             run_openai_agents_interop_activity,
             run_maf_interop_activity,
             run_claude_agent_interop_activity,
+            # MEM-003: reflection and its governed write path.
+            reflect_activity,
+            write_memory_candidates_activity,
         ],
     )
     logger.info("worker ready, polling task_queue=%s", task_queue)

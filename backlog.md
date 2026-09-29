@@ -431,7 +431,15 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   atributos `gen_ai.*`).
 - **Coste:** M.
 
-### Conectar Reflection (MEM-003) a un workflow real
+### ~~Conectar Reflection (MEM-003) a un workflow real~~ — PROMOVIDA como `MEM-003b` el 2026-09-29
+
+> **Cerrada.** Criterio de entrada: «ninguno especial». Al implementarla salió lo que la entrada no podía
+> anticipar: `MemoryStore.Create` asigna un UUID aleatorio y su `INSERT` no tiene `ON CONFLICT`, así que un
+> reintento de la Activity duplicaba candidatos **en silencio**. El arreglo es un `memory_id` determinista
+> (UUIDv5 — la primera versión usaba un hash y la columna es UUID), que convierte el duplicado silencioso
+> en un 409 que ya existía. Ver la fila `MEM-003b`.
+
+### Conectar Reflection (MEM-003) a un workflow real (contexto original, para la trazabilidad)
 
 - **Descripción:** `python/aeon_memory/reflection.py` es un módulo puro, testeado con un `decide`
   falso (`test_reflection_extracts_candidates`), pero nada lo llama todavía desde un run real:
