@@ -335,7 +335,13 @@ services:
       # explicitly configured port is a combination that CAN disagree, and it fails at runtime, not at start.
       ARGUS_PROTOCOL: ${ARGUS_PROTOCOL:-http/protobuf}
       ARGUS_ENDPOINT: ${ARGUS_ENDPOINT:-http://otel-collector:4318}
-      ARGUS_SERVICE: aeon-worker
+      # THE IDENTITY TRIPLE, and it is not cosmetic. Argus's gateway fills a missing service.namespace
+      # with `unregistered`, and an unregistered application enters their registry with NO notification
+      # channels — so its incidents go to their own console log and reach nobody. They found our policy
+      # denial sitting there. The component name drops the `aeon-` prefix because the namespace already
+      # says it; repeating it is the same redundancy their check caught in our test client.
+      ARGUS_NAMESPACE: ${ARGUS_NAMESPACE:-aeon-ai}
+      ARGUS_SERVICE: worker
       ARGUS_ENVIRONMENT: ${ARGUS_ENVIRONMENT:-local}
       ARGUS_ROLE: worker
       # ARGUS'S CONVENTION IS LOCALHOST: an application exports to a per-machine agent on localhost and never
@@ -343,7 +349,7 @@ services:
       # service name is what exists here. Pointing at a real Argus agent is these two variables and nothing
       # else — and from a CONTAINER that address must be host.docker.internal, because the agent binds to
       # 127.0.0.1 (measured: localhost from a container returns 000). See .env.example.
-      AEON_SERVICE_NAME: aeon-worker
+      AEON_SERVICE_NAME: worker
       AEON_MODELGW_ADDR: modelgw:9402
       # DX-001's Deep Research Activities import aeon_profiles/aeon_worker modules that load JSON
       # Schemas from proto/ at import time — proto/ isn't in this image's build context (see

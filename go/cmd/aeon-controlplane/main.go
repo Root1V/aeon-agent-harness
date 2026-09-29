@@ -22,6 +22,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/circuitbreaker"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	"github.com/aeon-ai/aeon/go/internal/store"
+	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
 
 func main() {
@@ -29,6 +30,20 @@ func main() {
 		os.Setenv("AEON_PORT", p)
 	} else {
 		os.Setenv("AEON_PORT", "9401")
+	}
+
+	// The control plane did not trace at all, which Argus noticed from the other side: it is the service
+	// that writes the Tool Registry and the memory pipeline, so a run whose tools or memories came from
+	// here had a trace that simply stopped at the gateway. Same endpoint variable and same identity
+	// triple as every other binary.
+	otelEndpoint := os.Getenv("AEON_OTEL_ENDPOINT")
+	if otelEndpoint == "" {
+		otelEndpoint = "otel-collector:4318"
+	}
+	if _, shutdown, err := tracing.Init(context.Background(), "control-plane", "api", otelEndpoint); err != nil {
+		log.Printf("aeon-controlplane: tracing disabled: %v", err)
+	} else {
+		defer shutdown(context.Background())
 	}
 
 	dsn := os.Getenv("AEON_PG_DSN")
