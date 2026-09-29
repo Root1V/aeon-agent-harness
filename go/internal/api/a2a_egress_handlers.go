@@ -164,8 +164,12 @@ func (h *A2AEgressHandlers) proxy(w http.ResponseWriter, r *http.Request) {
 		// (INT-010): whether the loop may try a different destination, must stop, or should ask a person
 		// are three different behaviours, and a 403 alone picks none of them.
 		span.SetAttributes(attribute.String("aeon.policy.disposition", string(decision.Disposition)))
+		// NO GUARDRAIL for a policy refusal — the empty kind. Setting argus.guardrail requests a page
+		// within two seconds (the router triggers on its presence), and a Cedar denial may be routine;
+		// `argus.outcome=denied` carries it instead, and Argus's gateway retains that in full. Fan-out and
+		// undeclared destinations keep their guardrails below, because both are rare by construction.
 		h.denyWithDisposition(ctx, w, span, rec, http.StatusForbidden, "delegation "+denialReason(decision),
-			decision.Disposition, guardrailFor(decision.Disposition))
+			decision.Disposition, "")
 		return
 	}
 
@@ -355,12 +359,22 @@ func (h *A2AEgressHandlers) denyWithDisposition(
 	ctx context.Context, w http.ResponseWriter, span trace.Span,
 	rec store.Delegation, status int, reason string, disposition policy.Disposition, guardrail string,
 ) {
-	span.SetStatus(codes.Error, reason)
+	// Ok for a refusal WITH a named guardrail too: the guardrail attribute is what asks for attention, and
+	// an error status on top would page for a second reason while claiming the gateway failed. What did
+	// fail, if anything, is recorded where it happened — the transport error path below still sets Error.
+	span.SetStatus(codes.Ok, reason)
 	// The guardrail kind is PASSED IN rather than derived here. The first version derived it from the HTTP
 	// status, which meant the undeclared-destination path set its own specific kind and then this function
 	// immediately overwrote it with the generic one — a second write silently undoing the first, which is
 	// the class of bug that leaves a correct-looking attribute carrying the wrong value.
-	tracing.MarkGuardrail(span, guardrail, reason)
+	// The outcome is always set; the guardrail only when one was named. Their Step finaliser defaults
+	// argus.outcome to "ok", so a refusal that set nothing would be recorded as a successful step.
+	tracing.MarkOutcome(span, tracing.OutcomeForDisposition(disposition))
+	if guardrail != "" {
+		tracing.MarkGuardrail(span, guardrail, reason)
+	} else {
+		span.SetAttributes(attribute.String("aeon.guardrail.reason", reason))
+	}
 	if h.Delegations != nil {
 		if err := h.Delegations.RecordDenial(ctx, rec, reason); err != nil {
 			log.Printf("aeon-toolgw: recording a denied delegation to %q: %v", rec.RemoteAgentID, err)

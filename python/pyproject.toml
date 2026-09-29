@@ -40,7 +40,10 @@ dependencies = [
     # The [http] extra, not [all]: we want the OTLP/HTTP exporter and NOT the auto-instrumentation
     # packages, because every span Aeon emits is created deliberately and auto-instrumentation would add a
     # second, differently-named span per HTTP call.
-    "argus-obs-sdk[http]>=1.0.0a8",
+    # a12 pinned as a FLOOR, not because we administer objects (that is a12's headline) but because a10
+    # closed the vocabularies and a11 added `suspended` to argus.outcome — the value INT-011's waiting
+    # step needs, and the answer to a question we asked them.
+    "argus-obs-sdk[http]>=1.0.0a12",
     "agent-framework-openai>=1.14",
     # aeon_adapters.claude_agent_sdk (INT-007, Modo B) runs a real claude_agent_sdk.ClaudeSDKClient
     # turn loop. This package is a thin wrapper around the real `claude` (Claude Code) CLI (spawned

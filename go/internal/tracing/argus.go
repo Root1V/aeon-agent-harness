@@ -3,6 +3,8 @@ package tracing
 import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/aeon-ai/aeon/go/internal/policy"
 )
 
 // Attributes the Argus observability platform routes on
@@ -56,10 +58,40 @@ const (
 	// OURS, in their style, for refusals their budget model has no concept of. A Cedar policy denial is not
 	// a budget, and reusing `cost-budget` to avoid adding a name would make two unrelated incidents
 	// indistinguishable on a dashboard.
-	GuardrailPolicyDenied       = "policy-denied"
-	GuardrailApprovalRequired   = "approval-required"
 	GuardrailFanOutExceeded     = "fan-out-budget"
 	GuardrailDestinationUnknown = "destination-not-declared"
+	GuardrailPolicyDenied       = "policy-denied"
+)
+
+// TWO KINDS AEON DOES NOT SET, and both removals came from Argus on 2026-09-29.
+//
+// `approval-required` is GONE, and the reason is the one thing we could not have known: putting
+// `argus.guardrail` at all IS requesting a notification within two seconds, because their router triggers
+// on the attribute's PRESENCE, whatever its value. A run waiting for a person is normal operation, so
+// marking it would page on every approval — alert fatigue built from inside the platform that exists to
+// prevent it. The field means "this run stopped and someone must look now".
+//
+// `policy-denied` still exists as a name and Aeon DOES NOT EMIT IT YET, on their recommendation: a Cedar
+// denial may be routine in a given deployment, and a guardrail that fires on routine is noise with a good
+// name. Instead a denial carries `argus.outcome=denied`, which their gateway's audit policy retains in
+// full — they measured that: with only `outcome=denied` and no guardrail, sampling kept 0 of 8 denials
+// until they added `denied` to the audit policy, and then 8 of 8. Their first version of that advice
+// would have had us measure a rate over a record missing 90% of its rows, and they corrected it
+// themselves. If our denial rate turns out to be rare, the name is here ready to be promoted.
+
+// Outcome values from argus_semconv.attributes.ARGUS_OUTCOME_VALUES (a12), which is a CLOSED set.
+//
+// `denied` and `suspended` exist because we asked. The mapping from INT-011's own outcomes is in
+// OutcomeForStep, and the reason the two vocabularies are not the same one is worth keeping in view:
+// theirs says how an execution ENDED, ours says WHY a step completed.
+const (
+	AttrArgusOutcome = "argus.outcome"
+	OutcomeOK        = "ok"
+	OutcomeError     = "error"
+	OutcomeTimeout   = "timeout"
+	OutcomeDenied    = "denied"
+	OutcomeSuspended = "suspended"
+	OutcomeCancelled = "cancelled"
 )
 
 // There are deliberately NO constants for the modality refusal (MDL-011) or the circuit breaker (A5).
@@ -100,4 +132,41 @@ func MarkHot(span trace.Span) {
 		return
 	}
 	span.SetAttributes(attribute.Bool(AttrArgusHot, true))
+}
+
+// MarkOutcome records how an operation ended, in Argus's closed vocabulary.
+//
+// IT MUST BE SET EXPLICITLY FOR ANYTHING THAT IS NOT PLAINLY OK, and that is not a style preference.
+// Their Step finaliser does `setdefault(ARGUS_OUTCOME, "ok")`, so leaving the field alone does not leave
+// it empty — it records the step as having succeeded. We proposed omitting it for a step waiting on a
+// person and they showed what that actually does: every approval wait would have been stored as a
+// completed success. The default is right for a step that reached the end without failing; what was
+// missing was a value for the case that does not fit.
+func MarkOutcome(span trace.Span, outcome string) {
+	if span == nil || outcome == "" {
+		return
+	}
+	span.SetAttributes(attribute.String(AttrArgusOutcome, outcome))
+}
+
+// OutcomeForDisposition maps a policy disposition to Argus's outcome vocabulary.
+//
+// A denial is `denied` and NOT `ok`, and Argus is right about why — I had argued `ok`, reasoning that
+// refusing correctly is not an error. The first half is true and the second does not follow: if a denial
+// counts as `ok` it is counted with the successes, and "how many times did policy say no" becomes
+// unanswerable without depending on the guardrail attribute being set — which, per the note above, we no
+// longer set for policy denials. Without `denied` a refusal dirtied the success rate instead of the error
+// rate, which is equally wrong and less visible.
+func OutcomeForDisposition(d policy.Disposition) string {
+	switch d {
+	case policy.DispositionRequireApproval:
+		// The run is parked awaiting a person. `suspended` and not `degraded`: degraded means it worked
+		// worse, not that it is pending. In a registry "has not finished yet" is a fact, and it has to be
+		// distinguishable from "nobody set it" and above all from "finished fine".
+		return OutcomeSuspended
+	case policy.DispositionDenyStep, policy.DispositionTerminateRun:
+		return OutcomeDenied
+	default:
+		return OutcomeOK
+	}
 }

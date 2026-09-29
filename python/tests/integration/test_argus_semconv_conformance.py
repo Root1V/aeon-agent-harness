@@ -40,7 +40,11 @@ AEON_OWN_PREFIX = "aeon."
 # would not have been noticed by a test whose expectations lived in the test. It would have checked that
 # two lists in two files agreed with Argus while saying nothing about what the gateways actually emit.
 ARGUS_OWNED_KINDS = {"tool-call-budget", "tool-call-loop", "token-budget", "cost-budget"}
-AEON_OWNED_KINDS = {"policy-denied", "approval-required", "fan-out-budget", "destination-not-declared"}
+# `approval-required` is GONE: Argus rejected it on 2026-09-29 because setting argus.guardrail at all
+# requests a two-second page, and an approval wait is normal operation. `fan-out-budget`, `policy-denied`
+# and `destination-not-declared` they adopted verbatim into their own model — so two of the three are no
+# longer "ours" in any meaningful sense, and the split below is about who NAMED them.
+AEON_OWNED_KINDS = {"policy-denied", "fan-out-budget", "destination-not-declared"}
 
 
 def _kinds_declared_in_go() -> set[str]:
@@ -173,4 +177,49 @@ def test_their_outcome_is_not_int011s_outcome():
     assert "ok" in theirs and "error" in theirs, (
         f"ARGUS_OUTCOME_VALUES = {sorted(theirs)} no longer looks like an execution outcome. If it has become "
         "a step-reason vocabulary, INT-011's outcomes should map onto it and this test should say how"
+    )
+
+
+def test_the_outcome_values_aeon_emits_are_in_their_closed_set():
+    """Aeon's argus.outcome values must all be in ARGUS_OUTCOME_VALUES.
+
+    `denied` and `suspended` exist in that tuple because we asked for them, which is exactly why this
+    check matters: a value we needed and they added is a value a future release could rename, and the Go
+    constants are hand-written.
+    """
+    attrs, _ = _semconv()
+    theirs = set(attrs.ARGUS_OUTCOME_VALUES)
+
+    text = (REPO / "go/internal/tracing/argus.go").read_text()
+    block = text[text.index("AttrArgusOutcome") :]
+    block = block[: block.index("\n)")]
+    ours = set(re.findall(r'=\s*"([a-z]+)"', block)) - {"argus.outcome"}
+
+    assert ours, "found no outcome constants in the Go source, so this check verifies nothing"
+    missing = ours - theirs
+    assert not missing, (
+        f"Aeon declares outcome value(s) {sorted(missing)} that argus_semconv does not publish. "
+        f"ARGUS_OUTCOME_VALUES = {sorted(theirs)}. An outcome outside their closed set is a value their "
+        "store cannot aggregate and their dashboards will not group"
+    )
+    for required in ("denied", "suspended"):
+        assert required in theirs, (
+            f"{required!r} is no longer in ARGUS_OUTCOME_VALUES. It was added at our request — a denial "
+            "counted as `ok` dirties the success rate, and a step waiting for a person recorded as `ok` is "
+            "an approval wait stored as a completed success"
+        )
+
+
+def test_approval_required_is_not_a_guardrail():
+    """The removal Argus asked for, pinned so it cannot come back by good intentions.
+
+    Their router triggers on the PRESENCE of argus.guardrail, so marking an approval wait would page on
+    every approval — alert fatigue built inside the platform that exists to prevent it. A run waiting for a
+    person carries argus.outcome=suspended instead, which records the fact without paging anyone.
+    """
+    in_go = _kinds_declared_in_go()
+    assert "approval-required" not in in_go, (
+        "approval-required is back as a guardrail kind. Setting argus.guardrail requests a notification "
+        "within two seconds, and an approval wait is normal operation — it belongs in argus.outcome as "
+        "`suspended`, not in the guardrail field"
     )
