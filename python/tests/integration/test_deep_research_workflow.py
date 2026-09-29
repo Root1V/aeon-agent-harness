@@ -70,6 +70,23 @@ class _FakeModelGatewayHandler(BaseHTTPRequestHandler):
             # controls or needs to parse. Read as plain prose (CrewOutput.raw), same as the
             # LangGraph interop branch above.
             content = "Plan: investigate the query via a single web search."
+        elif "Reflection step for an agent harness" in system_prompt:
+            # MEM-003. The candidate's evidence_refs are taken FROM THE PROMPT's own evidence list, not
+            # invented: the Reflector rejects a candidate citing anything the run did not produce, so a
+            # fake that made one up would exercise the rejection path instead of the happy one — and the
+            # rejection path has its own test.
+            available = re.findall(r"^- (\S+)$", system_prompt, re.MULTILINE)
+            content = {
+                "candidates": [
+                    {
+                        "type": "PROCEDURAL",
+                        "scope": "project",
+                        "content": "Searching per-subtask before synthesising produced a verified report.",
+                        "evidence_refs": available[:1],
+                        "confidence": 0.7,
+                    }
+                ]
+            }
         else:
             content = {"error": f"fake gateway does not recognize this system prompt: {system_prompt!r}"}
 
@@ -118,11 +135,16 @@ def _start_fake_model_gateway() -> tuple[ThreadingHTTPServer, threading.Thread]:
     return server, thread
 
 
-def _spawn_worker(address: str, task_queue: str, modelgw_addr: str) -> subprocess.Popen:
+def _spawn_worker(address: str, task_queue: str, modelgw_addr: str, controlplane_addr: str = "") -> subprocess.Popen:
     env = os.environ.copy()
     env["AEON_TEMPORAL_ADDRESS"] = address
     env["AEON_TASK_QUEUE"] = task_queue
     env["AEON_MODELGW_ADDR"] = modelgw_addr
+    # MEM-003: where write_memory_candidates_activity posts. Left unset for the runs that do not
+    # reflect, so the activity's "no memory store configured" branch is the one that reports it rather
+    # than the test pretending a store exists.
+    if controlplane_addr:
+        env["AEON_CONTROLPLANE_ADDR"] = controlplane_addr
     env["PYTHONPATH"] = str(REPO_PYTHON_DIR) + os.pathsep + env.get("PYTHONPATH", "")
     return subprocess.Popen(
         [sys.executable, "-m", "aeon_worker"], cwd=str(REPO_PYTHON_DIR), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
@@ -183,3 +205,100 @@ async def test_deep_research_workflow_produces_a_verified_report_end_to_end():
     finally:
         gateway_server.shutdown()
         gateway_thread.join(timeout=5)
+
+
+CONTROLPLANE_ADDR = os.environ.get("AEON_TEST_CONTROLPLANE_ADDR", "")
+
+
+@pytest.mark.asyncio
+async def test_reflection_writes_real_candidates_from_a_real_run():
+    """MEM-003's acceptance test: a finished run proposes memory candidates and they are PERSISTED.
+
+    What this closes, in the backlog's own words: `aeon_memory/reflection.py` was a pure module tested
+    with a fake `decide`, and nothing called it from a real run. The logic was real and the integration
+    was not — the same state DR-001..004 were in before DX-001.
+
+    Real throughout: a real Temporal server, a real worker OS process, a real HTTP round trip to the
+    model gateway for the reflection call, and a REAL control plane over Postgres receiving the write.
+    The one thing faked is the model itself.
+
+    THE ASSERTION THAT MATTERS IS NOT THE COUNT. It is that what lands in the store is a CANDIDATE:
+    MemoryStore.WriteCandidate forces status=CANDIDATE regardless of what the caller sends, so a model
+    that proposed an already-ACTIVE memory still writes into the quarantine pipeline. Checking the count
+    alone would pass against a store that accepted anything.
+    """
+    if not CONTROLPLANE_ADDR:
+        pytest.skip("AEON_TEST_CONTROLPLANE_ADDR not set — needs a real control plane over Postgres")
+
+    task_queue = f"aeon-reflection-test-{uuid.uuid4().hex[:8]}"
+    gateway_server, _ = _start_fake_model_gateway()
+    try:
+        modelgw_addr = f"127.0.0.1:{gateway_server.server_address[1]}"
+        async with await WorkflowEnvironment.start_local() as env:
+            address = env.client.service_client.config.target_host
+            worker = _spawn_worker(address, task_queue, modelgw_addr, CONTROLPLANE_ADDR)
+            try:
+                time.sleep(0.5)
+                _assert_still_running(worker)
+
+                report = await start_deep_research_run(
+                    "what is the state of the art in agent harnesses?",
+                    candidates=[{"provider": "fake", "model": "fake-model", "priority": 0}],
+                    model="fake-model",
+                    temporal_address=address,
+                    task_queue=task_queue,
+                    reflect=True,
+                )
+            finally:
+                # terminate then KILL, because a graceful stop is not guaranteed to be quick any more:
+                # the Argus SDK flushes and RETRIES its exporters on shutdown, and in this test there is
+                # no collector to accept them. A test that fails because a subprocess took eleven
+                # seconds to die reports nothing about the feature it is named after.
+                worker.terminate()
+                try:
+                    worker.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    worker.kill()
+                    worker.wait(timeout=10)
+
+        assert report.reflection_note == "", f"reflection did not run: {report.reflection_note}"
+        assert report.memory_candidates_written == 1, (
+            f"wrote {report.memory_candidates_written} candidates, want 1 — and a note of "
+            f"{report.reflection_note!r}"
+        )
+
+        # Read back BY THE DETERMINISTIC ID, through the governed surface rather than the database.
+        #
+        # Computing the id here rather than searching for the record is what makes this test also check
+        # the idempotency property: if the activity ever went back to a random uuid, this lookup 404s.
+        # And it is the only thing that makes a RETRY safe — MemoryStore.Create has no ON CONFLICT, so a
+        # random id would let a retried write create a second, indistinguishable candidate.
+        import urllib.request
+
+        from aeon_worker.activities.memory_activities import ReflectedCandidate, candidate_memory_id
+
+        expected_id = candidate_memory_id(
+            report.run_id,
+            ReflectedCandidate(
+                type="PROCEDURAL",
+                scope="project",
+                content="Searching per-subtask before synthesising produced a verified report.",
+            ),
+        )
+        with urllib.request.urlopen(f"http://{CONTROLPLANE_ADDR}/memory/{expected_id}?tenant_id=default", timeout=20) as resp:
+            record = json.loads(resp.read())
+
+        assert record["status"] == "CANDIDATE", (
+            f"status = {record['status']!r}. WriteCandidate is supposed to force CANDIDATE regardless of "
+            "what the caller sends — anything else means a model's proposal reached active memory"
+        )
+        assert record["type"] == "PROCEDURAL"
+        assert report.run_id in record["source_run_ids"], "the candidate is not attributed to this run"
+        # Grounded in a claim the run actually produced AND the verifier actually accepted.
+        assert record["evidence_refs"], "the candidate cites no evidence, so nothing ties it to this run"
+        assert set(record["evidence_refs"]) <= set(report.cited_claim_ids), (
+            f"candidate cites {record['evidence_refs']} and the report cited {report.cited_claim_ids} — a "
+            "memory grounded in a claim the Citation Verifier did not accept"
+        )
+    finally:
+        gateway_server.shutdown()

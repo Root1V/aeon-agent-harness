@@ -31,6 +31,14 @@ with workflow.unsafe.imports_passed_through():
     from aeon_profiles.deep_research.reporter import ReportDraft, select_allowed_claims
     from aeon_profiles.deep_research.researcher import ResearchResult, ToolCallRecord
     from aeon_profiles.deep_research.sufficiency_gate import evaluate_sufficiency
+    from aeon_worker.activities.memory_activities import (
+        ReflectInput,
+        ReflectOutput,
+        WriteCandidatesInput,
+        WriteCandidatesOutput,
+        reflect_activity,
+        write_memory_candidates_activity,
+    )
     from aeon_worker.activities.deep_research_activities import (
         AllowedClaim,
         BuildReportInput,
@@ -59,6 +67,11 @@ class DeepResearchWorkflowInput:
     # apply policy to. Empty keeps the previous behaviour, which is the ledger-only path.
     agent_manifest_ref: str = ""
     allowed_tools: list[str] = field(default_factory=list)
+    # MEM-003: whether to reflect on the finished run. OFF by default, and that is deliberate — it costs
+    # an extra model call per run, and a caller that has not thought about memory should not silently
+    # start paying for one.
+    reflect: bool = False
+    tenant_id: str = "default"
 
 
 @dataclass
@@ -68,6 +81,11 @@ class DeepResearchWorkflowResult:
     cited_claim_ids: list[str] = field(default_factory=list)
     sufficient: bool = False
     topics_to_replan: list[str] = field(default_factory=list)
+    # MEM-003. Both fields, not just the count: a zero with no note means reflection ran and proposed
+    # nothing, and a zero WITH a note means it could not run. Collapsing them would make a
+    # misconfigured deployment look like a run the model had no lessons from.
+    memory_candidates_written: int = 0
+    reflection_note: str = ""
 
 
 @workflow.defn
@@ -136,13 +154,63 @@ class DeepResearchWorkflow:
 
         draft = ReportDraft(query=request.query, text=report_output.text, cited_claim_ids=report_output.cited_claim_ids)
         verification = verify_and_repair(draft, decision, ledger)
+        sufficient = decision.sufficient and verification.verified
+
+        # MEM-003: reflect on the finished run and persist whatever it proposes as CANDIDATES.
+        #
+        # AFTER the report and verification, never before: reflection reads the run's OUTCOME, and a
+        # candidate proposed from an unverified draft would be a memory grounded in claims the Citation
+        # Verifier had not yet accepted.
+        #
+        # Both steps are best-effort and the workflow says so in its result. The report is the
+        # deliverable and it is finished by the time this runs; failing the run because an optional
+        # post-hoc step did not parse would throw away completed work. What is NOT acceptable is failing
+        # silently, so reflection_note carries why nothing was written.
+        reflection_note = ""
+        candidates_written = 0
+        if request.reflect:
+            reflect_output: ReflectOutput = await workflow.execute_activity(
+                reflect_activity,
+                ReflectInput(
+                    run_id=run_id,
+                    query=request.query,
+                    outcome="success" if sufficient else "failure",
+                    report_text=draft.text,
+                    # ONLY the claim_ids the verifier accepted. The Reflector rejects a candidate citing
+                    # anything the run did not produce, and handing it the full ledger would let a memory
+                    # be grounded in a claim the report itself was not allowed to cite.
+                    evidence_refs=list(verification.cited_claim_ids),
+                    model=request.model,
+                    candidates=candidates,
+                    data_sensitivity=request.data_sensitivity,
+                ),
+                start_to_close_timeout=_ACTIVITY_TIMEOUT,
+                retry_policy=_RETRY_POLICY,
+            )
+            reflection_note = reflect_output.skipped_reason
+            if reflect_output.candidates:
+                write_output: WriteCandidatesOutput = await workflow.execute_activity(
+                    write_memory_candidates_activity,
+                    WriteCandidatesInput(
+                        run_id=run_id,
+                        tenant_id=request.tenant_id,
+                        candidates=reflect_output.candidates,
+                    ),
+                    start_to_close_timeout=_ACTIVITY_TIMEOUT,
+                    retry_policy=_RETRY_POLICY,
+                )
+                candidates_written = write_output.written
+                if write_output.skipped_reason:
+                    reflection_note = write_output.skipped_reason
 
         return DeepResearchWorkflowResult(
             query=request.query,
             report_text=draft.text,
             cited_claim_ids=verification.cited_claim_ids,
-            sufficient=decision.sufficient and verification.verified,
+            sufficient=sufficient,
             topics_to_replan=decision.topics_to_replan,
+            memory_candidates_written=candidates_written,
+            reflection_note=reflection_note,
         )
 
 
