@@ -62,7 +62,7 @@ test-python-integration: ## Run Python tests against a real Tool Gateway + Postg
 		-e AEON_TEST_TEMPO_QUERY_URL="http://tempo:3200" \
 		-e AEON_TOOL_EXECUTION_MODE=local-ledger \
 		python:3.13-slim sh -c \
-		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q tests/integration/test_tool_execution_through_gateway.py tests/integration/test_end_to_end_tracing.py"
+		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q tests/integration/test_tool_execution_through_gateway.py tests/integration/test_end_to_end_tracing.py tests/integration/test_argus_semconv_conformance.py"
 	$(COMPOSE) --profile core --profile obs stop postgres toolgw otel-collector tempo
 
 test-python: ## Run Python unit + integration tests in a throwaway container via uv
