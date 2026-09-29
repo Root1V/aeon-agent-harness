@@ -9,9 +9,19 @@ attributes, not only the keys.
     `argus.hot`. My hand-rolled version set a single string and deliberately did not set `argus.hot`.
   - Their guardrail kinds are hyphenated (`tool-call-budget`, `cost-budget`, `token-budget`,
     `tool-call-loop`). Mine were snake_case inventions.
-  - `GenAISpan` and `Step` already model what Aeon spent three features naming: `Step.outcome()` is
-    INT-011's outcome, `usage(input_tokens=, output_tokens=, cached_input_tokens=)` is MDL-014's
-    three-state counters, and `backend(circuit_state=, fallback=, backend_id=)` is A5 and OBS-005.
+  - `GenAISpan` already models things Aeon spent features naming:
+    `usage(input_tokens=, output_tokens=, cached_input_tokens=)` is MDL-014's three-state counters, and
+    `backend(circuit_state=, fallback=, backend_id=)` is A5 and OBS-005 — with
+    ARGUS_INFERENCE_CIRCUIT_STATE_VALUES = ('closed','open','half-open') as the breaker's canonical
+    vocabulary.
+
+AND ONE CLAIM OF MINE THAT WAS WRONG, caught by the conformance test written afterwards. I said
+`Step.outcome()` is INT-011's outcome. It is not. Their ARGUS_OUTCOME_VALUES is
+('ok','error','timeout','cancelled','degraded') — how an EXECUTION ended. INT-011's is
+result/denied_by_policy/approval_granted/approval_denied/approval_expired — WHY a step completed. Two
+different axes: a denied step is `ok` to them, because refusing correctly is not an error, and the reason
+travels in `argus.guardrail`. Asserting an equivalence that does not hold is how a field ends up holding
+values nothing can aggregate, and I wrote it into two artefacts before checking it.
 
 Hand-rolled attributes would have produced telemetry that looks right and that their alert rules and
 dashboards silently do not match — the most expensive kind of nearly-correct, and the exact failure mode
@@ -30,8 +40,9 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Any, Iterator
+from typing import Any
 
 logger = logging.getLogger("aeon_observability")
 
@@ -143,7 +154,7 @@ def current_traceparent() -> str:
 
 
 @contextmanager
-def tool_span(name: str, *, args: Any = None, call_id: str | None = None) -> Iterator[Any]:
+def tool_span(name: str, *, args: Any = None, call_id: str | None = None) -> Generator[Any, None, None]:
     """An `execute_tool` span, via `argus.tool`.
 
     `args` goes to the SDK, which decides whether to record it: content capture is off unless
@@ -159,7 +170,7 @@ def tool_span(name: str, *, args: Any = None, call_id: str | None = None) -> Ite
 
 
 @contextmanager
-def chat_span(*, provider: str, request_model: str | None = None) -> Iterator[Any]:
+def chat_span(*, provider: str, request_model: str | None = None) -> Generator[Any, None, None]:
     """A `chat` span, via `argus.genai` with the operation literal their semconv defines."""
     if _argus is None:
         yield _NoopSpan()
@@ -169,7 +180,7 @@ def chat_span(*, provider: str, request_model: str | None = None) -> Iterator[An
 
 
 @contextmanager
-def run_span(name: str, *, run_id: str | None = None) -> Iterator[Any]:
+def run_span(name: str, *, run_id: str | None = None) -> Generator[Any, None, None]:
     """A run-scoped span, via `argus.propagate.run`.
 
     Their helper puts the run id in BAGGAGE as well as on the span, which is what carries it across the
@@ -183,7 +194,7 @@ def run_span(name: str, *, run_id: str | None = None) -> Iterator[Any]:
 
 
 @contextmanager
-def step_span(name: str, **fields: Any) -> Iterator[Any]:
+def step_span(name: str, **fields: Any) -> Generator[Any, None, None]:
     """An Aeon durable step, via `argus.step`.
 
     Used where INT-011's outcome vocabulary belongs: the returned `Step` has `.outcome(value)`, which is
