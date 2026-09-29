@@ -15,8 +15,10 @@ import logging
 import os
 
 from temporalio.client import Client
+from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.worker import Worker
 
+from aeon_worker.activities.approval_activities import record_approval_wait_activity
 from aeon_worker.activities.deep_research_activities import build_report_activity, plan_research_activity, research_subtask_activity
 from aeon_worker.activities.framework_adapter_activities import (
     run_claude_agent_interop_activity,
@@ -46,7 +48,18 @@ async def main() -> None:
     init_tracing(os.environ.get("AEON_SERVICE_NAME", "aeon-worker"))
 
     logger.info("connecting to Temporal at %s (namespace=%s, task_queue=%s)", address, namespace, task_queue)
-    client = await Client.connect(address, namespace=namespace)
+    # OBS-010: Temporal's own OTel interceptor, so a run is ONE trace across the Temporal hop.
+    #
+    # Without it every Activity span is a ROOT. The spans were all there — execute_tool, chat, the new
+    # approval.wait — and each one was its own trace, which is the same defect OBS-006b fixed on the HTTP
+    # hop and which looks identical to success in any test that queries spans one at a time. Temporal
+    # carries the context in workflow and activity HEADERS, which is why this needs their interceptor and
+    # not a traceparent smuggled through the request payload: headers survive signals, retries and
+    # continue-as-new, and a payload field would have to be threaded through every workflow by hand.
+    #
+    # It adds NO commands to a history — measured by replaying a history recorded without it
+    # (python/tests/fixtures/approval-history-pre-obs010.json), which still replays clean.
+    client = await Client.connect(address, namespace=namespace, interceptors=[TracingInterceptor()])
 
     worker = Worker(
         client,
@@ -69,6 +82,11 @@ async def main() -> None:
             # MEM-003: reflection and its governed write path.
             reflect_activity,
             write_memory_candidates_activity,
+            # OBS-010: the record of a run waiting for a person. Registered here and not only in the
+            # tests because an unregistered Activity does not fail loudly on this path — the workflow
+            # swallows the failure by design, so the run would work and the wait would stay invisible,
+            # which is the exact defect OBS-010 exists to remove.
+            record_approval_wait_activity,
         ],
     )
     logger.info("worker ready, polling task_queue=%s", task_queue)

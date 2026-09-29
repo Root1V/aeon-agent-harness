@@ -27,6 +27,7 @@ import os
 import sys
 
 from temporalio.client import Client
+from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.worker import Replayer
 
 from aeon_worker.registry import WORKFLOWS
@@ -70,7 +71,10 @@ async def replay_run(client: Client, run_id: str) -> ReplayVerdict:
     if events == 0:
         raise EmptyHistory(f"run {run_id} has no history events")
 
-    replayer = Replayer(workflows=WORKFLOWS)
+    # The same interceptor list the worker runs with (aeon_worker/__main__.py). A replayer configured
+    # differently from the worker is not replaying what the worker did — and the difference would only
+    # show up as a verdict that disagrees with production, which is the one thing this command must not do.
+    replayer = Replayer(workflows=WORKFLOWS, interceptors=[TracingInterceptor()])
     try:
         await replayer.replay_workflow(history)
     except Exception as exc:  # noqa: BLE001 - the replayer surfaces several unrelated failure types

@@ -55,6 +55,9 @@ test-python-integration: ## Run Python tests against a real Tool Gateway + Postg
 	# trace contains spans from both languages, which cannot be checked without a real collector and a real
 	# Tempo to read back from. Without these variables those tests self-skip, and a self-skipping test in the
 	# only target that would run it is a test nobody runs.
+	# OBS-010's test needs the same two variables and no gateway: it runs its own Temporal
+	# (start_local) and its own worker in-process, and reads the approval.wait records back out of
+	# the real Tempo.
 	$(COMPOSE) --profile core --profile obs up -d --build --wait postgres toolgw controlplane otel-collector tempo
 	docker run --rm --network aeon_default -v "$(PWD):/repo" -w /repo/python \
 		-e AEON_TEST_TOOLGW_ADDR="toolgw:9403" \
@@ -63,7 +66,7 @@ test-python-integration: ## Run Python tests against a real Tool Gateway + Postg
 		-e AEON_TEST_TEMPO_QUERY_URL="http://tempo:3200" \
 		-e AEON_TOOL_EXECUTION_MODE=local-ledger \
 		python:3.13-slim sh -c \
-		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q tests/integration/test_tool_execution_through_gateway.py tests/integration/test_end_to_end_tracing.py tests/integration/test_argus_semconv_conformance.py tests/integration/test_deep_research_workflow.py"
+		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q tests/integration/test_tool_execution_through_gateway.py tests/integration/test_end_to_end_tracing.py tests/integration/test_argus_semconv_conformance.py tests/integration/test_approval_wait_is_observable.py tests/integration/test_deep_research_workflow.py"
 	$(COMPOSE) --profile core --profile obs stop postgres toolgw controlplane otel-collector tempo
 
 test-python: ## Run Python unit + integration tests in a throwaway container via uv
