@@ -29,11 +29,40 @@ import (
 // keys on.
 const DefaultNamespace = "aeon-ai"
 
+// DefaultEnvironment is `deployment.environment.name`, and its vocabulary is the OTel standard's —
+// production | staging | test | development — not one of ours and not one of Argus's.
+//
+// WHY IT IS HERE AT ALL: the four Go services set NOTHING for this field, which is worse than setting
+// the wrong value. The Python worker sent `local`, so at least it could be corrected; a service that
+// sends nothing cannot be grouped by environment at all, and "no environment" reads as a gap in the
+// data rather than as a value to fix.
+//
+// AND WHY `development` AND NOT `local`: Argus went to the standard before inventing a vocabulary and
+// found it already closed (their message of 2026-09-30). The four teams were sending `mac-dev`,
+// `local`, `local` and `bare-metal` — four values that all mean the same laptop, so the field had
+// looked like it was distinguishing something for weeks purely by having four values in it. Their own
+// words, which are the useful part: four values are not information, they are four ways of saying the
+// same thing. `local` and `bare-metal` were reasonable answers to a DIFFERENT question — where, or how,
+// does this run — and that question has `host.name`, which was returning a container id until they
+// fixed it. One field was absorbing another's meaning because the other one was broken.
+const DefaultEnvironment = "development"
+
 func namespace() string {
 	if ns := os.Getenv("ARGUS_NAMESPACE"); ns != "" {
 		return ns
 	}
 	return DefaultNamespace
+}
+
+func environment() string {
+	if env := os.Getenv("ARGUS_ENVIRONMENT"); env != "" {
+		return env
+	}
+	// Not validated against the standard's four here. An operator who deliberately sets something else
+	// gets it sent as-is and warned about by the collector that owns the vocabulary — refusing to start,
+	// or silently substituting, would both be worse than emitting a value somebody can see and fix. It
+	// is the same trade Init already makes by never being fatal.
+	return DefaultEnvironment
 }
 
 // Init configures the process-global TracerProvider to batch-export spans over OTLP/HTTP to
@@ -69,6 +98,8 @@ func Init(ctx context.Context, serviceName, role, endpoint string) (trace.Tracer
 		semconv.ServiceName(serviceName),
 		semconv.ServiceNamespace(namespace()),
 		attribute.String("argus.component.role", role),
+		// The fourth, added 2026-09-30: the four Go services sent no environment at all.
+		semconv.DeploymentEnvironmentNameKey.String(environment()),
 	))
 	if err != nil {
 		return nil, nil, fmt.Errorf("tracing: building resource: %w", err)
