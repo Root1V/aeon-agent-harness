@@ -8,6 +8,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
@@ -66,5 +67,11 @@ func initSharedTestTracerProvider(endpoint string) error {
 		sdktrace.WithResource(res),
 	)
 	otel.SetTracerProvider(sharedTestTracerProvider)
+	// AND THE PROPAGATOR, which this setup did not install until OBS-010b. Go's global default is a
+	// NO-OP (the OBS-006b finding), so every test in this binary that goes through
+	// httpserver.ExtractTraceContext was extracting nothing from a perfectly valid traceparent — a
+	// propagation test that cannot propagate. It passed because no test asserted on parentage until
+	// now; the same composite tracing.Init installs in every real binary.
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
 	return nil
 }

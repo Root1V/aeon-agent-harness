@@ -119,7 +119,15 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Coste:** S (el test) / M (si hay que cambiar la derivación, porque es contrato compartido con
   Synaptum y Axonium).
 
-### La traza no cruza de `aeon-runcontroller` al worker (`OBS-010`/`OBS-003b`)
+### ~~La traza no cruza de `aeon-runcontroller` al worker~~ — PROMOVIDA a `roadmap.md` como `OBS-010b` el 2026-09-29
+
+> Cerrada el mismo día que se abrió. Medido: una traza real con **7 spans y 2 servicios**, del
+> `traceparent` entrante al `execute_tool` del worker Python. Y un hallazgo que esta entrada no podía
+> anticipar: el `TextMapPropagator` del interceptor de Temporal **no** usa el global de OpenTelemetry por
+> defecto (lo dice su propia documentación), y el global de Go es un no-op — así que pasarle el global
+> habría sido peor que no pasarle nada. Detalles en `roadmap.md`.
+
+### La traza no cruza de `aeon-runcontroller` al worker (contexto original, para la trazabilidad)
 
 - **Descripción:** `OBS-010` instaló el interceptor OTel de Temporal en el lado **Python**, así que
   los spans de todas las Activities de un run son una sola traza en vez de ocho raíces suelas. El
