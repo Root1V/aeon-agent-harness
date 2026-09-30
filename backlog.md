@@ -93,6 +93,32 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   instancia sin ver datos de otros.
 - **Coste:** XL.
 
+### La deriva de `step_seq` es invisible para Temporal, y no sabemos si es inofensiva (`RUN-004`)
+
+- **Descripción:** nuestra `idempotency_key` es `hash(run_id, node_id, step_seq, args)` y `step_seq`
+  sale de `GraphExecutionState.next_step_seq()`, **un contador posicional que vive en código de
+  workflow**. Synaptum describió el 2026-09-29 un defecto silencioso suyo con exactamente ese
+  ingrediente (identidad de paso posicional → un bucle que emite un paso más pide claves desplazadas →
+  el diario no se consulta y los efectos se repiten sin una queja), y preguntó si nos aplica.
+  **Nuestro primer instinto fue «a nosotros nos sale ruidoso, Temporal levanta un
+  `Nondeterminism error`». Medido, es falso:** un cambio que incrementa `step_seq` **sin** añadir
+  ningún comando replaya limpio —Temporal compara *comandos*, y el contador viaja dentro del *payload
+  de entrada* de la Activity, que no compara—. La clave cambia (`f7d2f48e…` → `518734ef…`) y nada
+  protesta. Lo que **no** conseguimos construir es el caso en que eso repita un efecto: un retry de
+  Temporal **re-entrega el input grabado** en vez de re-derivar la clave, así que la ventana de
+  `RUN-004` (crash entre la escritura y su registro) usa la clave original. O sea: el ingrediente está,
+  la deriva es invisible, y lo que hoy nos salva es una propiedad del runtime y no una decisión de
+  nuestro diseño. No poder construir el caso dañino no es lo mismo que no existir.
+- **Fase objetivo:** F1 (durabilidad), con `RUN-004`.
+- **Criterio de entrada:** ninguno especial. El trabajo es un test que intente construir el caso
+  dañino de verdad —crash después de la escritura, **cambio de código** entre crash y reanudación,
+  reanudar y contar las escrituras— y que, si no se puede construir, quede **afirmando esa
+  imposibilidad** en vez de dejarla como creencia. Si se puede, el arreglo no es un detector de
+  deriva (que puede negarse a reanudar un run legítimo, el propio reparo de Synaptum): es **persistir
+  el identificador derivado y leerlo al reanudar en vez de re-derivarlo**.
+- **Coste:** S (el test) / M (si hay que cambiar la derivación, porque es contrato compartido con
+  Synaptum y Axonium).
+
 ### La traza no cruza de `aeon-runcontroller` al worker (`OBS-010`/`OBS-003b`)
 
 - **Descripción:** `OBS-010` instaló el interceptor OTel de Temporal en el lado **Python**, así que
