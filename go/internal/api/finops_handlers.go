@@ -22,6 +22,11 @@ type FinOpsHandlers struct {
 	Ledger *store.FinOpsLedger
 }
 
+// AttributionTotalView is store.AttributionTotal under the name this page uses. Aliased rather than
+// redeclared: a parallel struct here would be one more place for the nil-key convention to be
+// forgotten, and the nil key is the part of this data that must not be dropped.
+type AttributionTotalView = store.AttributionTotal
+
 // Register mounts the FinOps routes on mux.
 func (h *FinOpsHandlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /finops/costs", h.showCosts)
@@ -33,11 +38,23 @@ func (h *FinOpsHandlers) showCosts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// OBS-003b: read before anything is written, so a failure here is a 500 and not a half-rendered
+	// page with a 200 already on the wire.
+	byRun, err := h.Ledger.TotalsByRun(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	byAgent, err := h.Ledger.TotalsByAgent(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, `<!doctype html>
-<html><head><meta charset="utf-8"><title>Aeon FinOps — cost per model</title></head>
+<html><head><meta charset="utf-8"><title>Aeon FinOps — cost per model, run and agent</title></head>
 <body>
 <h1>Cost per model</h1>
 `)
@@ -71,7 +88,64 @@ func (h *FinOpsHandlers) showCosts(w http.ResponseWriter, r *http.Request) {
 	} else {
 		fmt.Fprintf(w, "<p>Total: $%.4f</p>\n", grandTotalUSD)
 	}
+
+	// OBS-003b: the two attributions the spec's own title for OBS-003 asked for and that had no data
+	// to render until the Python callers started naming themselves.
+	writeAttribution(w, "Cost per run", "run", byRun)
+	writeAttribution(w, "Cost per agent", "agent_manifest_ref", byAgent)
+
 	fmt.Fprint(w, "</body></html>\n")
+}
+
+// writeAttribution renders one attribution table (per run, or per agent).
+//
+// THE UNATTRIBUTED ROW IS PRINTED, and it is printed as a sentence rather than as a table row with an
+// empty first cell. A blank cell is indistinguishable from a rendering bug, and this group is the one
+// thing on the page a reader must not mistake for noise: while it is large, every other number here
+// is a lower bound. Before OBS-003b it was the ONLY group — every call ever recorded landed in it.
+func writeAttribution(w http.ResponseWriter, heading, keyLabel string, totals []AttributionTotalView) {
+	fmt.Fprintf(w, "<h1>%s</h1>\n", html.EscapeString(heading))
+	if len(totals) == 0 {
+		fmt.Fprint(w, "<p>no cost events recorded yet</p>\n")
+		return
+	}
+
+	var unattributed *AttributionTotalView
+	named := make([]AttributionTotalView, 0, len(totals))
+	for i := range totals {
+		if totals[i].Key == nil {
+			unattributed = &totals[i]
+			continue
+		}
+		named = append(named, totals[i])
+	}
+
+	if len(named) == 0 {
+		fmt.Fprintf(w, "<p>no call has named a %s yet</p>\n", html.EscapeString(keyLabel))
+	} else {
+		fmt.Fprintf(w, "<table><tr><th>%s</th><th>calls</th><th>models</th><th>total cost (USD)</th><th>unpriced calls</th><th>prompt tokens</th><th>completion tokens</th></tr>\n",
+			html.EscapeString(keyLabel))
+		for _, t := range named {
+			fmt.Fprintf(w, "<tr><td>%s</td><td>%d</td><td>%d</td><td>%s</td><td>%d</td><td>%d</td><td>%d</td></tr>\n",
+				html.EscapeString(*t.Key), t.CallCount, t.DistinctModels, costCell(t.TotalCostUSD),
+				t.UnpricedCalls, t.TotalPromptTokens, t.TotalCompletionTokens)
+		}
+		fmt.Fprint(w, "</table>\n")
+	}
+
+	if unattributed != nil {
+		fmt.Fprintf(w, "<p>%d call(s) named no %s and are not in the table above — their cost is real and attributed to nobody, so every figure here is a lower bound (%s so far).</p>\n",
+			unattributed.CallCount, html.EscapeString(keyLabel), costPhrase(unattributed.TotalCostUSD))
+	}
+}
+
+// costPhrase words an unattributed group's cost, including the case where none of it was priced —
+// which must not read as "$0.00 unattributed", the same mistake OBS-008 removed one table up.
+func costPhrase(usd *float64) string {
+	if usd == nil {
+		return "none of it priced"
+	}
+	return fmt.Sprintf("$%.4f", *usd)
 }
 
 // costCell renders a group's cost, or an em dash when nothing in it was priced. Rendering 0.0000

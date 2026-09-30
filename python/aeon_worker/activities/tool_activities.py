@@ -14,7 +14,7 @@ from typing import Any
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from aeon_observability import inject_trace_context, tool_span
+from aeon_observability import inject_trace_context, set_run_identity, tool_span
 from aeon_worker.idempotency import EffectsLedger, derive_idempotency_key
 
 DEFAULT_LEDGER_PATH = os.environ.get("AEON_EFFECTS_LEDGER_PATH", "/tmp/aeon_effects_ledger.json")
@@ -185,7 +185,9 @@ async def execute_tool_activity(inp: ExecuteToolInput) -> ExecuteToolOutput:
     # ARGUS_CAPTURE_CONTENT says otherwise and their masking applies — a decision that belongs to the
     # platform operator, and one that writing the arguments into an attribute here would quietly override.
     with tool_span(inp.tool_name, args=inp.tool_args) as span:
-        span.set("aeon.run.id", inp.run_id)
+        # `argus.run.id`, not the `aeon.run.id` this line wrote until OBS-003b — see
+        # aeon_observability.set_run_identity for why one name and one setter.
+        set_run_identity(span, run_id=inp.run_id, agent_manifest_ref=inp.agent_manifest_ref)
         span.set("aeon.node.id", inp.node_id)
         span.set("aeon.step.seq", inp.step_seq)
         # attempt is on the span because Temporal redelivers, and "this ran three times" is invisible in a

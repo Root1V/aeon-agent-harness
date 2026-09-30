@@ -27,6 +27,11 @@ class ModelGatewayChatClient:
     candidates: list[DecideCandidate]
     model: str
     data_sensitivity: str = ""
+    # OBS-003b: an interop run costs money like any other, and the run id was already in this module
+    # for the TOOL side (ToolGatewayCaller has had it all along). The model side did not carry it, so
+    # a LangGraph run's tool calls were attributable and its model calls were not.
+    run_id: str = ""
+    agent_manifest_ref: str = ""
 
     async def chat(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         """Returns the Model Gateway's NormalizedChatResponse-shaped output (choices[0].message.
@@ -34,7 +39,11 @@ class ModelGatewayChatClient:
         from a real provider's chat completion."""
         rendered_context = {"model": self.model, "messages": messages}
         result = await call_model_gateway(
-            DecideInput(candidates=self.candidates, rendered_context=rendered_context, data_sensitivity=self.data_sensitivity)
+            DecideInput(
+                candidates=self.candidates, rendered_context=rendered_context,
+                data_sensitivity=self.data_sensitivity,
+                run_id=self.run_id, agent_manifest_ref=self.agent_manifest_ref,
+            )
         )
         return result.output
 
@@ -72,11 +81,15 @@ async def run_langgraph_graph(
     candidates: list[DecideCandidate],
     model: str,
     data_sensitivity: str = "",
+    agent_manifest_ref: str = "",
 ) -> dict[str, Any]:
     """Builds the graph with Aeon-bound clients injected, invokes it, and returns its final state.
     Meant to be called from inside a single Temporal Activity — never from workflow code, since
     LangGraph's own `ainvoke` loop is not something Temporal can safely replay directly."""
-    model_client = ModelGatewayChatClient(candidates=candidates, model=model, data_sensitivity=data_sensitivity)
+    model_client = ModelGatewayChatClient(
+        candidates=candidates, model=model, data_sensitivity=data_sensitivity,
+        run_id=run_id, agent_manifest_ref=agent_manifest_ref,
+    )
     tool_client = ToolGatewayCaller(run_id=run_id, node_id=node_id)
     graph = build_graph(model_client, tool_client)
     return await graph.ainvoke(initial_state)

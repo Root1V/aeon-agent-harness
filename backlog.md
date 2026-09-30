@@ -118,7 +118,18 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 - **Criterio de entrada:** ese caso de uso existe.
 - **Coste:** M.
 
-### Coste real por run/agente, no sólo por modelo (`OBS-003`)
+### ~~Coste real por run/agente, no sólo por modelo~~ — PROMOVIDA a `roadmap.md` como `OBS-003b` el 2026-09-29
+
+> Cerrada. Lo que esta entrada no podía anticipar: **medido, 1101 filas en el ledger real y todas con
+> `run_id` NULL** — no era que faltara rellenar los campos, era que *nunca se había rellenado ninguno*,
+> así que la mitad del título de `OBS-003` llevaba meses sin un solo dato. Y el criterio de entrada de
+> abajo decía «sólo falta añadirlos a `DecideInput` y threadearlos hasta el body HTTP», que es cierto y
+> es la mitad más pequeña: sin agregación por run ni por agente en el dashboard, los datos habrían
+> llegado a un sitio donde nadie los mira. Tres hallazgos más en `roadmap.md`, incluido que
+> `make test-mdl-015` —el target que el propio test de MDL-015 nombra en su mensaje de skip— **no
+> existía**.
+
+### Coste real por run/agente, no sólo por modelo (contexto original, para la trazabilidad)
 
 - **Descripción:** `decideRequest` (`OBS-003`, ya `DONE`) acepta `run_id`/`agent_manifest_ref`
   opcionales y `FinOpsLedger` los graba cuando llegan, pero ningún llamador real del Model Gateway

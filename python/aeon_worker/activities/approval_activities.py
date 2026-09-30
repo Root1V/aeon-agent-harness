@@ -58,14 +58,7 @@ from dataclasses import dataclass
 
 from temporalio import activity
 
-from aeon_observability import step_span
-
-# Argus's outcome vocabulary, for the four phases of a wait. Imported from their semconv rather than
-# spelled here, so a value that leaves their closed set fails our conformance test instead of shipping.
-try:  # pragma: no cover - the fallback only runs where the SDK is not installed
-    from argus_semconv.attributes import ARGUS_RUN_ID
-except ImportError:  # pragma: no cover
-    ARGUS_RUN_ID = "argus.run.id"
+from aeon_observability import set_run_identity, step_span
 
 WAIT_EVENT = "approval.wait"
 
@@ -101,7 +94,7 @@ async def record_approval_wait_activity(inp: ApprovalWaitInput) -> None:
     fire-and-forget, because a record that may or may not have been written is not a record.
     """
     with step_span(WAIT_EVENT) as step:
-        step.set(**{ARGUS_RUN_ID: inp.run_id})
+        set_run_identity(step, run_id=inp.run_id)
         step.set(**{
             "aeon.approval.id": inp.approval_id,
             "aeon.node.id": inp.node_id,

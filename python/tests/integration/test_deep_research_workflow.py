@@ -36,6 +36,11 @@ def _normalized(content: dict | str) -> dict:
     }
 
 
+# OBS-003b: every /decide body this fake receives, so a test can ask who each model call said it was
+# for. Recorded here and not asserted here — the fake's job is to answer, not to judge.
+DECIDE_REQUESTS: list[dict] = []
+
+
 class _FakeModelGatewayHandler(BaseHTTPRequestHandler):
     """Stands in for a real Model Gateway /decide endpoint. Which shape to return is decided by
     reading the ACTUAL system prompt in the request — the same distinguishing text
@@ -50,6 +55,7 @@ class _FakeModelGatewayHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 — required name by http.server
         length = int(self.headers["Content-Length"])
         body = json.loads(self.rfile.read(length))
+        DECIDE_REQUESTS.append(body)
         rendered_context = body["rendered_context"]
         messages = rendered_context["messages"]
         system_prompt = messages[0]["content"]
@@ -211,6 +217,100 @@ CONTROLPLANE_ADDR = os.environ.get("AEON_TEST_CONTROLPLANE_ADDR", "")
 
 
 @pytest.mark.asyncio
+async def test_every_model_call_in_a_run_says_which_run_and_agent_it_is_for():
+    """OBS-003b: the cost of a run is attributable because every call that spends money names itself.
+
+    WHAT THIS CATCHES, and it is the defect it was written for. `decideRequest` has accepted
+    `run_id`/`agent_manifest_ref` since OBS-003 and the ledger has had nullable columns for both since
+    then — and no Python caller filled either, so `GET /finops/costs` could aggregate per model and the
+    other half of OBS-003's own title had nothing to render. Both ends built, the wire between them
+    never run, and nothing failing.
+
+    ASSERTED PER STAGE, not in aggregate. A Deep Research run makes model calls from three different
+    places (Planner, Researchers, Reporter) and each one threads the identity separately, so "some
+    call carried it" is the assertion that passes while two of the three are still anonymous — which
+    is exactly the state before this change, where only the Researcher had the fields at all (MDL-015
+    added `agent_manifest_ref` there as a policy principal, for an unrelated reason).
+
+    Real throughout except the provider: a real Temporal server, a real worker process, the real
+    workflow and the real activities. The Model Gateway is the local double this module already uses,
+    and it is the right place to look from — it is where the request arrives.
+    """
+    task_queue = f"aeon-cost-attrib-{uuid.uuid4().hex[:8]}"
+    agent_ref = "deep-research-general@0.1.0"
+    DECIDE_REQUESTS.clear()
+    gateway_server, gateway_thread = _start_fake_model_gateway()
+    try:
+        modelgw_addr = f"127.0.0.1:{gateway_server.server_address[1]}"
+        async with await WorkflowEnvironment.start_local() as env:
+            address = env.client.service_client.config.target_host
+            worker = _spawn_worker(address, task_queue, modelgw_addr)
+            try:
+                time.sleep(0.5)
+                _assert_still_running(worker)
+                report = await start_deep_research_run(
+                    "what is the state of the art in agent harnesses?",
+                    candidates=[{"provider": "fake", "model": "fake-model", "priority": 0}],
+                    model="fake-model",
+                    temporal_address=address,
+                    task_queue=task_queue,
+                    agent_manifest_ref=agent_ref,
+                )
+            finally:
+                worker.terminate()
+                try:
+                    worker.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    worker.kill()
+    finally:
+        gateway_server.shutdown()
+        gateway_thread.join(timeout=5)
+
+    assert DECIDE_REQUESTS, "the run made no model calls at all — nothing here would mean anything"
+
+    # Every stage, identified the way the gateway double already identifies them: by the system prompt
+    # each one really sends. Keyed on the same strings the double branches on, so a stage that stops
+    # being recognised here is a stage the double stopped answering too.
+    stages = {
+        "Planner": "Research Planner",
+        "Researcher": "isolated Researcher",
+        "Reporter": "Reporter",
+    }
+    by_stage: dict[str, list[dict]] = {name: [] for name in stages}
+    unclassified: list[str] = []
+    for body in DECIDE_REQUESTS:
+        prompt = body["rendered_context"]["messages"][0]["content"]
+        for name, marker in stages.items():
+            if marker in prompt:
+                by_stage[name].append(body)
+                break
+        else:
+            unclassified.append(prompt[:120])
+
+    assert not unclassified, (
+        f"a model call came from a stage this test does not know about: {unclassified}. It may be "
+        "spending money anonymously, which is the whole point of this assertion"
+    )
+    for name, bodies in by_stage.items():
+        assert bodies, f"the {name} stage made no model call — this test cannot say whether it attributes its cost"
+        for body in bodies:
+            assert body.get("run_id") == report.run_id, (
+                f"a {name} model call sent run_id={body.get('run_id')!r}, want {report.run_id!r}. Its cost "
+                "lands in the ledger with run_id NULL, which is indistinguishable from a call made "
+                "outside any run — so this run's total is a lower bound and nothing says so"
+            )
+            assert body.get("agent_manifest_ref") == agent_ref, (
+                f"a {name} model call sent agent_manifest_ref={body.get('agent_manifest_ref')!r}, want {agent_ref!r}"
+            )
+
+    print(
+        "\nOBS-003b: "
+        + ", ".join(f"{name}={len(bodies)}" for name, bodies in by_stage.items())
+        + f" model call(s), all attributed to run {report.run_id}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_reflection_writes_real_candidates_from_a_real_run():
     """MEM-003's acceptance test: a finished run proposes memory candidates and they are PERSISTED.
 
@@ -231,6 +331,7 @@ async def test_reflection_writes_real_candidates_from_a_real_run():
         pytest.skip("AEON_TEST_CONTROLPLANE_ADDR not set — needs a real control plane over Postgres")
 
     task_queue = f"aeon-reflection-test-{uuid.uuid4().hex[:8]}"
+    DECIDE_REQUESTS.clear()  # OBS-003b, asserted at the end
     gateway_server, _ = _start_fake_model_gateway()
     try:
         modelgw_addr = f"127.0.0.1:{gateway_server.server_address[1]}"
@@ -260,6 +361,22 @@ async def test_reflection_writes_real_candidates_from_a_real_run():
                 except subprocess.TimeoutExpired:
                     worker.kill()
                     worker.wait(timeout=10)
+
+        # OBS-003b, asserted here because this is the only test with a real control plane and therefore
+        # the only one where the reflection call actually happens. Reflection is an EXTRA model call per
+        # run — the `reflect` flag's own note says a caller who has not thought about memory should not
+        # silently start paying for one — so it is the call most worth being able to attribute, and the
+        # one whose cost a caller is least likely to be expecting.
+        reflection_calls = [
+            b for b in DECIDE_REQUESTS
+            if "Reflection step for an agent harness" in b["rendered_context"]["messages"][0]["content"]
+        ]
+        assert reflection_calls, "no reflection model call was made, so nothing here is about reflection"
+        for body in reflection_calls:
+            assert body.get("run_id") == report.run_id, (
+                f"the reflection call sent run_id={body.get('run_id')!r}, want {report.run_id!r} — the one "
+                "model call a caller did not ask for is the one that must not be anonymous in the ledger"
+            )
 
         assert report.reflection_note == "", f"reflection did not run: {report.reflection_note}"
         assert report.memory_candidates_written == 1, (

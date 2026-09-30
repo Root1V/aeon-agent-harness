@@ -46,6 +46,7 @@ class ReflectInput:
     model: str
     candidates: list[DecideCandidate]
     data_sensitivity: str = ""
+    agent_manifest_ref: str = ""  # OBS-003b
 
 
 @dataclass
@@ -117,6 +118,12 @@ async def reflect_activity(inp: ReflectInput) -> ReflectOutput:
                 candidates=inp.candidates,
                 rendered_context=rendered_context,
                 data_sensitivity=inp.data_sensitivity,
+                # OBS-003b: reflection is an EXTRA model call per run (see the `reflect` flag's note in
+                # DeepResearchWorkflowInput — a caller who has not thought about memory should not
+                # silently start paying for one). Attributing it to the run is what makes that cost
+                # visible to whoever turned the flag on, instead of it landing in the unattributed pile.
+                run_id=inp.run_id,
+                agent_manifest_ref=inp.agent_manifest_ref,
             )
         )
         return result.output

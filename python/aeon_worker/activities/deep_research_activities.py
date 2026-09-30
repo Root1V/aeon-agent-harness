@@ -26,6 +26,11 @@ class PlanResearchInput:
     model: str
     candidates: list[DecideCandidate]
     data_sensitivity: str = ""
+    # OBS-003b. The Researcher already carried both (MDL-015 needed agent_manifest_ref as a policy
+    # principal); the Planner and the Reporter carried neither, so two of the three model calls in
+    # every Deep Research run were unattributable — and the Planner is the one that runs first.
+    run_id: str = ""
+    agent_manifest_ref: str = ""
 
 
 @dataclass
@@ -43,9 +48,30 @@ class PlanResearchOutput:
     subtasks: list[PlanResearchSubtask]
 
 
-async def _decide_via_gateway(candidates: list[DecideCandidate], data_sensitivity: str, rendered_context: dict[str, Any]) -> dict[str, Any]:
+async def _decide_via_gateway(
+    candidates: list[DecideCandidate],
+    data_sensitivity: str,
+    rendered_context: dict[str, Any],
+    *,
+    run_id: str = "",
+    agent_manifest_ref: str = "",
+) -> dict[str, Any]:
+    """OBS-003b: every stage's model call now says which run and which agent it is for.
+
+    KEYWORD-ONLY, AND THAT IS THE POINT. The three stages call this with different amounts of context
+    and the two identity arguments are easy to drop silently at one of them — which is how the whole
+    feature came to be missing in the first place: both ends existed and only the wire was absent, and
+    nothing failed. Named arguments make a dropped one visible at the call site instead of shifting a
+    positional and attributing every Reporter call to the empty run.
+    """
     result = await call_model_gateway(
-        DecideInput(candidates=candidates, rendered_context=rendered_context, data_sensitivity=data_sensitivity)
+        DecideInput(
+            candidates=candidates,
+            rendered_context=rendered_context,
+            data_sensitivity=data_sensitivity,
+            run_id=run_id,
+            agent_manifest_ref=agent_manifest_ref,
+        )
     )
     return result.output
 
@@ -53,7 +79,10 @@ async def _decide_via_gateway(candidates: list[DecideCandidate], data_sensitivit
 @activity.defn
 async def plan_research_activity(inp: PlanResearchInput) -> PlanResearchOutput:
     async def decide(rendered_context: dict[str, Any]) -> dict[str, Any]:
-        return await _decide_via_gateway(inp.candidates, inp.data_sensitivity, rendered_context)
+        return await _decide_via_gateway(
+            inp.candidates, inp.data_sensitivity, rendered_context,
+            run_id=inp.run_id, agent_manifest_ref=inp.agent_manifest_ref,
+        )
 
     plan = await Planner(model=inp.model).plan(inp.query, decide)
     return PlanResearchOutput(
@@ -108,7 +137,10 @@ class ResearchSubtaskOutput:
 @activity.defn
 async def research_subtask_activity(inp: ResearchSubtaskInput) -> ResearchSubtaskOutput:
     async def decide(rendered_context: dict[str, Any]) -> dict[str, Any]:
-        return await _decide_via_gateway(inp.candidates, inp.data_sensitivity, rendered_context)
+        return await _decide_via_gateway(
+            inp.candidates, inp.data_sensitivity, rendered_context,
+            run_id=inp.run_id, agent_manifest_ref=inp.agent_manifest_ref,
+        )
 
     step_seq = 0
 
@@ -159,6 +191,9 @@ class BuildReportInput:
     candidates: list[DecideCandidate]
     allowed_claims: list[AllowedClaim]
     data_sensitivity: str = ""
+    # OBS-003b — see PlanResearchInput.
+    run_id: str = ""
+    agent_manifest_ref: str = ""
 
 
 @dataclass
@@ -170,7 +205,10 @@ class BuildReportOutput:
 @activity.defn
 async def build_report_activity(inp: BuildReportInput) -> BuildReportOutput:
     async def decide(rendered_context: dict[str, Any]) -> dict[str, Any]:
-        return await _decide_via_gateway(inp.candidates, inp.data_sensitivity, rendered_context)
+        return await _decide_via_gateway(
+            inp.candidates, inp.data_sensitivity, rendered_context,
+            run_id=inp.run_id, agent_manifest_ref=inp.agent_manifest_ref,
+        )
 
     allowed_claims = [{"claim_id": c.claim_id, "claim": c.claim, "quote": c.quote, "source_id": c.source_id} for c in inp.allowed_claims]
     draft = await Reporter(model=inp.model).report(inp.query, allowed_claims, decide)

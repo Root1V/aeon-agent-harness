@@ -16,7 +16,7 @@ from typing import Any
 
 from temporalio import activity
 
-from aeon_observability import chat_span, inject_trace_context
+from aeon_observability import chat_span, inject_trace_context, set_run_identity
 
 DEFAULT_MODELGW_ADDR = os.environ.get("AEON_MODELGW_ADDR", "localhost:9402")
 
@@ -39,6 +39,18 @@ class DecideInput:
     candidates: list[DecideCandidate]
     rendered_context: dict[str, Any]
     data_sensitivity: str = ""
+    # OBS-003b: who this call is FOR. The Model Gateway has accepted both since OBS-003 and
+    # `FinOpsLedger` has recorded them since then, and no Python caller ever filled either — so the
+    # ledger could aggregate "cost per model" and the other half of OBS-003's own title, cost per run
+    # and per agent, had no data to show. Not the fields' fault and not the ledger's: the two ends
+    # were built and the wire between them was never run.
+    #
+    # EMPTY MEANS "THE CALLER DID NOT SAY", and it survives as SQL NULL all the way down rather than
+    # becoming an empty string. A call genuinely made outside any run — a bare `/decide` from a
+    # script, an eval — is a real case, and it must stay distinguishable from a run that forgot to
+    # identify itself, because the first is fine and the second is a bug in whoever called.
+    run_id: str = ""
+    agent_manifest_ref: str = ""
 
 
 @dataclass
@@ -54,13 +66,20 @@ async def call_model_gateway(inp: DecideInput) -> DecideOutput:
     deep_research_activities' per-stage Activities) without nesting a Temporal activity call inside
     an activity, which is not a thing Temporal supports. decide_activity below is the
     workflow-callable wrapper around this same logic."""
-    body = json.dumps(
-        {
-            "candidates": [{"provider": c.provider, "model": c.model, "priority": c.priority} for c in inp.candidates],
-            "rendered_context": inp.rendered_context,
-            "data_sensitivity": inp.data_sensitivity,
-        }
-    ).encode("utf-8")
+    payload: dict[str, Any] = {
+        "candidates": [{"provider": c.provider, "model": c.model, "priority": c.priority} for c in inp.candidates],
+        "rendered_context": inp.rendered_context,
+        "data_sensitivity": inp.data_sensitivity,
+    }
+    # OMITTED WHEN EMPTY, not sent as "". The gateway's decideRequest treats a present-but-empty
+    # string the same as absent today, so sending it would work — and the day it stops working the
+    # failure would be a ledger full of rows attributed to the run whose id is the empty string.
+    # Absent is what "we do not know" looks like on the wire.
+    if inp.run_id:
+        payload["run_id"] = inp.run_id
+    if inp.agent_manifest_ref:
+        payload["agent_manifest_ref"] = inp.agent_manifest_ref
+    body = json.dumps(payload).encode("utf-8")
 
     url = f"http://{DEFAULT_MODELGW_ADDR}/decide"
     # OTel GenAI semantic conventions, the same ones the Go gateways use (OBS-001): the operation is named
@@ -76,6 +95,12 @@ async def call_model_gateway(inp: DecideInput) -> DecideOutput:
     ) as span:
         if inp.data_sensitivity:
             span.set("aeon.data_sensitivity", inp.data_sensitivity)
+        # On the span as well as in the body, because the two answer different questions with the same
+        # fact: the ledger answers "what did this run cost" after the fact, the trace answers "which
+        # run is this call part of" while it is happening.
+        # Through the seam, which owns both the attribute names and the fact that Argus's two span
+        # types disagree about how `set` is called — see aeon_observability.set_run_identity.
+        set_run_identity(span, run_id=inp.run_id, agent_manifest_ref=inp.agent_manifest_ref)
 
         # THE LINE THAT MAKES ONE TRACE. Without it the gateway starts a root span and this run's spans end
         # up scattered across unrelated traces — each present, none connected.
