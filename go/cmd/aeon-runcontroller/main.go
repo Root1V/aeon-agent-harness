@@ -16,6 +16,7 @@ import (
 	"os"
 
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/interceptor"
 
 	"github.com/aeon-ai/aeon/go/internal/api"
 	"github.com/aeon-ai/aeon/go/internal/checkpoint"
@@ -52,7 +53,14 @@ func main() {
 	}
 	taskQueue := os.Getenv("AEON_TASK_QUEUE") // defaults to runcontroller.DefaultTaskQueue when empty
 
-	temporalClient, err := client.Dial(client.Options{HostPort: address, Namespace: namespace})
+	// OBS-010b: the interceptor that carries this process's trace context into the workflow, so a run
+	// started over HTTP is ONE trace from the request down to the worker's Activities. Without it the
+	// spans all existed and none of them were connected — see tracing.TemporalInterceptor.
+	temporalClient, err := client.Dial(client.Options{
+		HostPort:     address,
+		Namespace:    namespace,
+		Interceptors: []interceptor.ClientInterceptor{tracing.TemporalInterceptor()},
+	})
 	if err != nil {
 		log.Fatalf("aeon-runcontroller: connecting to Temporal at %s: %v", address, err)
 	}

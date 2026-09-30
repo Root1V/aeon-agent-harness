@@ -3,9 +3,11 @@ module github.com/aeon-ai/aeon/go
 go 1.25.4
 
 require (
+	github.com/Root1V/axonium-sdk/go v0.4.0
 	github.com/a2aproject/a2a-go v0.3.15
 	github.com/cedar-policy/cedar-go v1.8.0
 	github.com/google/uuid v1.6.0
+	github.com/gowebpki/jcs v1.0.2
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/moby/moby/api v1.55.0
 	github.com/moby/moby/client v0.5.1
@@ -17,12 +19,12 @@ require (
 	go.opentelemetry.io/otel/trace v1.46.0
 	go.temporal.io/api v1.63.5
 	go.temporal.io/sdk v1.48.0
+	go.temporal.io/sdk/contrib/opentelemetry v0.8.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/Root1V/axonium-sdk/go v0.4.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
@@ -37,7 +39,6 @@ require (
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/mock v1.6.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
-	github.com/gowebpki/jcs v1.0.2 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware/v2 v2.3.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
