@@ -93,6 +93,24 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   instancia sin ver datos de otros.
 - **Coste:** XL.
 
+### La traza no cruza de `aeon-runcontroller` al worker (`OBS-010`/`OBS-003b`)
+
+- **Descripción:** `OBS-010` instaló el interceptor OTel de Temporal en el lado **Python**, así que
+  los spans de todas las Activities de un run son una sola traza en vez de ocho raíces suelas. El
+  salto que falta es el primero: `go/cmd/aeon-runcontroller` arranca el workflow con
+  `client.Dial(client.Options{HostPort, Namespace})` — **sin `Interceptors` ni
+  `ContextPropagators`** —, así que el contexto de la petición HTTP que arranca el run no entra en la
+  historia del workflow y la traza del worker empieza en el worker. Verificado leyendo el `Dial`, no
+  supuesto. Argus lo detectó desde su almacén el 2026-09-30 sin que se lo dijéramos: «lo que todavía
+  **no** veo es una traza que cruce del `runcontroller` al `worker` pasando por la espera». El SDK Go
+  de Temporal trae `contrib/opentelemetry` para esto, igual que el de Python.
+- **Fase objetivo:** F4 (observabilidad), junto a lo que quede de `OBS-002`.
+- **Criterio de entrada:** ninguno especial — es la mitad Go del mismo cambio, y el lado Python ya
+  está. Lo que hay que medir al hacerlo es lo que se midió en el lado Python: que **no añade comandos
+  a una historia** (replay de una historia anterior al cambio) y que la traza resultante contiene de
+  verdad los dos servicios, no solo el mismo trace id.
+- **Coste:** S.
+
 ### Agent Console: context inspector y evidence graph (`OBS-002`)
 
 - **Descripción:** `OBS-002` (ya `DONE`) sólo entrega el trace explorer — la única de las tres
