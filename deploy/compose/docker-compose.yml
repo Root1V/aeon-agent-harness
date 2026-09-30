@@ -342,7 +342,12 @@ services:
       # says it; repeating it is the same redundancy their check caught in our test client.
       ARGUS_NAMESPACE: ${ARGUS_NAMESPACE:-aeon-ai}
       ARGUS_SERVICE: worker
-      ARGUS_ENVIRONMENT: ${ARGUS_ENVIRONMENT:-local}
+      # `development`, from the OTel STANDARD's closed set (production|staging|test|development), and not
+      # the `local` this said until 2026-09-30. Argus looked the vocabulary up instead of inventing one and
+      # found the four teams sending `mac-dev`, `local`, `local` and `bare-metal` — four values for the same
+      # laptop, so the field had looked like it distinguished something purely by having four values in it.
+      # "Where does this run" is `host.name`, which the agent sets.
+      ARGUS_ENVIRONMENT: ${ARGUS_ENVIRONMENT:-development}
       ARGUS_ROLE: worker
       # ARGUS'S CONVENTION IS LOCALHOST: an application exports to a per-machine agent on localhost and never
       # learns the central plane's address. This compose stack has no per-machine agent, so the collector's
