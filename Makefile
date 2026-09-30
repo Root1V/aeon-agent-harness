@@ -2,7 +2,7 @@
 COMPOSE := docker compose -f deploy/compose/docker-compose.yml
 PROFILE ?= full
 
-.PHONY: dev down logs ps build test test-go test-go-integration test-python test-python-integration lint roadmap-check clean
+.PHONY: dev down logs ps build test test-go test-go-integration test-python test-python-integration test-mdl-015 lint roadmap-check clean
 
 dev: ## Start the full reference stack (Temporal, Postgres, MinIO, OTel, Tempo, Grafana, gateways, worker)
 	$(COMPOSE) --profile $(PROFILE) up -d --build
@@ -81,6 +81,30 @@ test-python: ## Run Python unit + integration tests in a throwaway container via
 	# exactly like a working deployment. These tests want that ledger, and now they say so.
 	docker run --rm -v "$(PWD):/repo" -w /repo/python -e AEON_TOOL_EXECUTION_MODE=local-ledger python:3.13-slim sh -c \
 		"apt-get update -qq && apt-get install -y -qq --no-install-recommends nodejs npm >/dev/null && npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 && pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q"
+
+test-mdl-015: ## Run the real-platform acceptance tests (real inference, real money): MDL-015 + OBS-003b
+	# THIS TARGET DID NOT EXIST, and the test that needs it has been naming it since MDL-015:
+	# test_deep_research_against_real_prometheus's own skip message said "see make test-mdl-015".
+	# So the only instruction for how to run MDL-015's acceptance test pointed at nothing, and the
+	# test self-skipped in every target that does exist — which means the acceptance test for a DONE
+	# feature had no runner at all. Found while looking for somewhere to verify OBS-003b's real-money
+	# half, which needs exactly this: a real gateway, real inference and a real ledger.
+	#
+	# IT SPENDS REAL MONEY (fractions of a cent) on the real Prometheus deployment, which is why it
+	# is its own target and not part of `make test`. Credentials come from .env, which is gitignored
+	# and never committed; see .env.example for the names.
+	#
+	# --build for the same reason every other integration target says so: without it this runs the
+	# modelgw image that happened to be lying around, and a gateway predating OBS-003b renders no
+	# per-run section — the test would report a missing attribution that is only a stale image.
+	$(COMPOSE) --profile core --profile obs up -d --build --wait postgres modelgw toolgw otel-collector
+	docker run --rm --network aeon_default -v "$(PWD):/repo" -w /repo/python \
+		-e AEON_TEST_MODELGW_ADDR="modelgw:9402" \
+		-e AEON_TEST_TOOLGW_ADDR="toolgw:9403" \
+		-e AEON_TOOL_EXECUTION_MODE=local-ledger \
+		python:3.13-slim sh -c \
+		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q -s tests/integration/test_deep_research_against_real_prometheus.py"
+	$(COMPOSE) --profile core --profile obs stop postgres modelgw toolgw otel-collector
 
 eval-run: ## Run an EvalSuite offline (EVAL-002): make eval-run SUITE=deep_research_core [TRIALS=3]
 	# `aeon eval run` (go/cmd/aeon) shells out to this same aeon_evalops.cli entrypoint when a local

@@ -53,6 +53,17 @@ logger = logging.getLogger("aeon_observability")
 ARGUS_HOT = "argus.hot"
 ARGUS_GUARDRAIL = "argus.guardrail"
 
+# THE RUN ID GOES IN ARGUS'S FIELD, not in one of ours, and this constant exists because we had two.
+# `tool_activities` wrote `aeon.run.id` and `approval_activities` wrote `argus.run.id` — the same fact
+# under two names, so a query for "everything in run X" against their store returned the approval
+# records and not the tool calls. Nothing failed; the answer was just quietly half. Found while
+# threading the run id through the cost path (OBS-003b), which needed the same fact for the ledger.
+ARGUS_RUN_ID = "argus.run.id"
+
+# And the agent, which has no equivalent on their side: `argus.app`/`argus.feature` are deployment-wide,
+# and this is per-call — the agent manifest a single decision was made on behalf of. Ours, so `aeon.`.
+AEON_AGENT_MANIFEST_REF = "aeon.agent.manifest_ref"
+
 # Guardrail kinds. The first four are THEIRS, verbatim from argus_semconv.guardrails, so a breach Aeon
 # reports lands in the same bucket as one their own Budget model would report. The rest are Aeon's, in
 # their hyphenated style, for refusals their model has no concept of — a Cedar policy denial is not a
@@ -207,6 +218,41 @@ def step_span(name: str, **fields: Any) -> Generator[Any, None, None]:
         return
     with _argus.step(name, **fields) as step:
         yield step
+
+
+def set_run_identity(span: Any, run_id: str = "", agent_manifest_ref: str = "") -> None:
+    """Put the run and the agent on a span. One function because there were two ways to get it wrong.
+
+    ONE NAME FOR THE RUN ID. `tool_activities` wrote `aeon.run.id` and `approval_activities` wrote
+    Argus's `argus.run.id`, so a query for "everything in run X" against their store came back with
+    half the spans and no sign that it had. Theirs wins: it is the field their store indexes.
+
+    AND ONE CALLING CONVENTION, which is the part that actually cost time. Their two span types do not
+    agree: `GenAISpan.set(key, value)` takes two positional arguments and `Step.set(**fields)` takes
+    keywords, so the form that works on one raises TypeError on the other. Both mistakes were made
+    while writing OBS-003b — and the second surfaced as `test_crash_resume` timing out waiting for a
+    worker to crash itself, with nothing pointing at the attribute set that caused it. A call site
+    should not have to know which kind of span it is holding.
+
+    EMPTY IS SKIPPED, not written as "". An absent run id means "this call named no run", which is a
+    real and legitimate state (a script, an eval), and writing an empty string would make it a run
+    whose id happens to be empty.
+    """
+    if span is None:
+        return
+    try:
+        for key, value in ((ARGUS_RUN_ID, run_id), (AEON_AGENT_MANIFEST_REF, agent_manifest_ref)):
+            if not value:
+                continue
+            try:
+                span.set(key, value)  # GenAISpan
+            except TypeError:
+                span.set(**{key: value})  # Step
+    except Exception as exc:  # noqa: BLE001
+        # Recording who a call was for must never be the reason the call fails. This is the guard the
+        # raw `span.set` at each call site did not have, which is how a TypeError here became a failed
+        # Activity, a Temporal retry and a failed run.
+        logger.debug("aeon_observability: could not set run identity (%s)", exc)
 
 
 def mark_guardrail(span: Any, kind: str, reason: str) -> None:

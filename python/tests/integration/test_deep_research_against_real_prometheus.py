@@ -103,6 +103,20 @@ def _drain(proc: subprocess.Popen) -> str:
     return (out or b"").decode(errors="replace")[-4000:]
 
 
+def _fetch_finops_page(modelgw_addr: str) -> str | None:
+    """The real FinOps dashboard, or None when this gateway has no ledger configured (404)."""
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"http://{modelgw_addr}/finops/costs", timeout=30) as resp:
+            return resp.read().decode()
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+
+
 def _assert_still_running(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         output = proc.stdout.read().decode(errors="replace") if proc.stdout else ""
@@ -196,6 +210,34 @@ async def test_deep_research_against_real_prometheus():
                 f"\nMDL-015: model={model} claims={len(report.cited_claim_ids)} "
                 f"sufficient={report.sufficient} report_chars={len(report.report_text)}"
             )
+
+            # OBS-003b: THE MONEY THIS RUN SPENT, attributed to this run, read back the way a human
+            # reads it.
+            #
+            # Asserted through the real dashboard rather than by querying Postgres, and that is the
+            # point: the chain being checked is Python naming the run -> the gateway recording it ->
+            # the aggregation attributing it, and a SQL query would skip the last link — the one that
+            # had no data to render at all until this change. Real inference, so these are real
+            # fractions of a cent, not a fixture.
+            #
+            # Skipped rather than failed when the ledger is not configured: this binary's Postgres is
+            # optional by design (see go/cmd/aeon-modelgw's main), and a gateway running without one
+            # records nothing for anybody. That is a deployment choice, not a defect in attribution.
+            page = _fetch_finops_page(modelgw_addr)
+            if page is None:
+                print("OBS-003b: this gateway has no cost ledger configured — attribution not checked")
+            else:
+                assert "Cost per run" in page, (
+                    "the dashboard has no per-run section, so this gateway predates OBS-003b"
+                )
+                assert report.run_id in page, (
+                    f"run {report.run_id} spent real money on real inference and does not appear in the "
+                    "per-run costs. Its rows are in the ledger with run_id NULL, which is "
+                    "indistinguishable from a call made outside any run"
+                )
+                assert "deep-research-general@0.1.0" in page, (
+                    "the agent manifest this run declared does not appear in the per-agent costs"
+                )
         finally:
             worker.terminate()
             try:

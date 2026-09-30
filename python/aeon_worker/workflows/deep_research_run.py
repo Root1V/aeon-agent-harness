@@ -97,7 +97,12 @@ class DeepResearchWorkflow:
 
         plan_output: PlanResearchOutput = await workflow.execute_activity(
             plan_research_activity,
-            PlanResearchInput(query=request.query, model=request.model, candidates=candidates, data_sensitivity=request.data_sensitivity),
+            PlanResearchInput(
+                query=request.query, model=request.model, candidates=candidates,
+                data_sensitivity=request.data_sensitivity,
+                # OBS-003b: the run's own id and the agent it runs as, so its cost lands attributed.
+                run_id=run_id, agent_manifest_ref=request.agent_manifest_ref,
+            ),
             start_to_close_timeout=_ACTIVITY_TIMEOUT,
             retry_policy=_RETRY_POLICY,
         )
@@ -143,6 +148,8 @@ class DeepResearchWorkflow:
                 model=request.model,
                 candidates=candidates,
                 data_sensitivity=request.data_sensitivity,
+                run_id=run_id,  # OBS-003b
+                agent_manifest_ref=request.agent_manifest_ref,
                 allowed_claims=[
                     AllowedClaim(claim_id=c["claim_id"], claim=c["claim"], quote=c["quote"], source_id=c["source_id"])
                     for c in allowed_claims
@@ -183,6 +190,7 @@ class DeepResearchWorkflow:
                     model=request.model,
                     candidates=candidates,
                     data_sensitivity=request.data_sensitivity,
+                    agent_manifest_ref=request.agent_manifest_ref,  # OBS-003b
                 ),
                 start_to_close_timeout=_ACTIVITY_TIMEOUT,
                 retry_policy=_RETRY_POLICY,

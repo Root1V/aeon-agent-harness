@@ -82,6 +82,7 @@ async def run_crewai_interop_activity(inp: CrewAIInteropInput) -> CrewAIInteropO
         candidates=inp.candidates,
         model=inp.model,
         data_sensitivity=inp.data_sensitivity,
+        run_id=inp.run_id,  # OBS-003b
     )
 
     tool_output = await execute_tool(

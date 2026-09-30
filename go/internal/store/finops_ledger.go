@@ -144,6 +144,76 @@ func (l *FinOpsLedger) TotalsByModel(ctx context.Context) ([]ModelTotal, error) 
 	return out, rows.Err()
 }
 
+// AttributionTotal is one row of TotalsByRun/TotalsByAgent: what a single run, or a single agent
+// manifest, actually cost.
+//
+// THE OTHER HALF OF OBS-003'S OWN TITLE. TotalsByModel answers "which model costs us most", which is
+// a purchasing question. This answers "what did this run cost" and "what does this agent cost us",
+// which is the question anyone running agents actually asks — and it had no data until OBS-003b, not
+// because the columns were missing but because no caller ever filled them.
+type AttributionTotal struct {
+	// Key is the run id, or the agent manifest ref, and nil for the group of calls that named
+	// NEITHER.
+	//
+	// NIL IS A REPORTED GROUP, NOT A FILTERED-OUT ONE, and that is the whole reason this type does not
+	// use a plain string. A call made outside any run is legitimate — a script hitting /decide, an
+	// eval — so those rows exist and their cost is real. Dropping them would make this page's total
+	// silently smaller than TotalsByModel's over the same ledger, with nothing on either page saying
+	// why, and the reader would conclude the cheaper number is the true one.
+	Key           *string  `json:"key"`
+	CallCount     int64    `json:"call_count"`
+	TotalCostUSD  *float64 `json:"total_cost_usd"`
+	UnpricedCalls int64    `json:"unpriced_calls"`
+	// DistinctModels is how many (provider, model) pairs this run or agent used. A run that fell back
+	// to a second provider mid-flight is a different thing from one that used a single model, and
+	// without this the cost is a number with no shape.
+	DistinctModels        int64 `json:"distinct_models"`
+	TotalPromptTokens     int64 `json:"total_prompt_tokens"`
+	TotalCompletionTokens int64 `json:"total_completion_tokens"`
+}
+
+// totalsByAttribution runs the shared aggregation over one nullable column. column is a fixed
+// identifier chosen by the two callers below, never anything a request supplies.
+func (l *FinOpsLedger) totalsByAttribution(ctx context.Context, column string) ([]AttributionTotal, error) {
+	rows, err := l.pool.Query(ctx,
+		`SELECT `+column+`, count(*), sum(cost_usd), count(*) FILTER (WHERE cost_usd IS NULL),
+		        count(DISTINCT (provider, model)),
+		        coalesce(sum(prompt_tokens), 0), coalesce(sum(completion_tokens), 0)
+		 FROM model_gateway_costs
+		 GROUP BY `+column+`
+		 -- NULLS LAST on the GROUP key as well as the sum: the unattributed group is reported, and it
+		 -- belongs at the bottom rather than sorted in among named runs as if it were one of them.
+		 ORDER BY sum(cost_usd) DESC NULLS LAST, `+column+` NULLS LAST`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: aggregating model gateway costs by %s: %w", column, err)
+	}
+	defer rows.Close()
+
+	var out []AttributionTotal
+	for rows.Next() {
+		var t AttributionTotal
+		if err := rows.Scan(&t.Key, &t.CallCount, &t.TotalCostUSD, &t.UnpricedCalls, &t.DistinctModels,
+			&t.TotalPromptTokens, &t.TotalCompletionTokens); err != nil {
+			return nil, fmt.Errorf("store: scanning cost total by %s: %w", column, err)
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// TotalsByRun is the cost of each run (OBS-003b). The nil-key row is the calls that named no run.
+func (l *FinOpsLedger) TotalsByRun(ctx context.Context) ([]AttributionTotal, error) {
+	return l.totalsByAttribution(ctx, "run_id")
+}
+
+// TotalsByAgent is the cost of each agent manifest (OBS-003b). The nil-key row is the calls that
+// named no agent — which is NOT the same set as TotalsByRun's: a run can identify itself and still
+// not say which agent it runs as, and before OBS-003b every Deep Research run did exactly that.
+func (l *FinOpsLedger) TotalsByAgent(ctx context.Context) ([]AttributionTotal, error) {
+	return l.totalsByAttribution(ctx, "agent_manifest_ref")
+}
+
 // LedgerRow is one recorded cost event, read back for reconciliation (OBS-007).
 type LedgerRow struct {
 	Provider string

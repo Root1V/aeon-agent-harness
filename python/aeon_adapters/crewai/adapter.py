@@ -39,6 +39,8 @@ class AeonLLM(BaseLLM):
 
     candidates: list[DecideCandidate]
     data_sensitivity: str = ""
+    run_id: str = ""  # OBS-003b
+    agent_manifest_ref: str = ""
 
     def call(
         self,
@@ -55,7 +57,11 @@ class AeonLLM(BaseLLM):
         rendered_context = {"model": self.model, "messages": list(messages)}
         result = asyncio.run(
             call_model_gateway(
-                DecideInput(candidates=self.candidates, rendered_context=rendered_context, data_sensitivity=self.data_sensitivity)
+                DecideInput(
+                    candidates=self.candidates, rendered_context=rendered_context,
+                    data_sensitivity=self.data_sensitivity,
+                    run_id=self.run_id, agent_manifest_ref=self.agent_manifest_ref,
+                )
             )
         )
         return result.output["choices"][0]["message"]["content"]
@@ -72,12 +78,17 @@ async def run_crewai_crew(
     candidates: list[DecideCandidate],
     model: str,
     data_sensitivity: str = "",
+    run_id: str = "",  # OBS-003b
+    agent_manifest_ref: str = "",
 ) -> dict[str, Any]:
     """Builds the crew with the Aeon-bound LLM injected, runs it (via a worker thread — see module
     docstring), and returns its output. Meant to be called from inside a single Temporal Activity —
     never from workflow code, since CrewAI's own kickoff loop is not something Temporal can safely
     replay directly."""
-    llm = AeonLLM(model=model, candidates=candidates, data_sensitivity=data_sensitivity)
+    llm = AeonLLM(
+        model=model, candidates=candidates, data_sensitivity=data_sensitivity,
+        run_id=run_id, agent_manifest_ref=agent_manifest_ref,
+    )
     crew = build_crew(llm)
 
     def _kickoff() -> Any:
