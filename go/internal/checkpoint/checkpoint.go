@@ -262,6 +262,11 @@ func (o Outcome) Denied() bool {
 type outcomeEnvelope struct {
 	Outcome Outcome `json:"outcome"`
 	Reason  string  `json:"reason,omitempty"`
+	// DecidedBy is WHO decided, for the outcomes a principal decides rather than a run reaching an end
+	// (SEC-005). Omitted and not emptied: a record written before SEC-005 has no actor, and an empty
+	// string here would read as a decision taken by a principal whose name happens to be blank. See
+	// ApprovalActor for the three-state read.
+	DecidedBy string `json:"decided_by,omitempty"`
 	// Result is the ordinary payload, kept nested so an outcome can never be mistaken for it. A loop
 	// reading `result` on a denied step finds nothing rather than finding something that looks usable.
 	Result json.RawMessage `json:"result,omitempty"`
@@ -269,7 +274,17 @@ type outcomeEnvelope struct {
 
 // OutcomePayload builds the payload for a completed record with an explicit outcome.
 func OutcomePayload(outcome Outcome, reason string, result json.RawMessage) (json.RawMessage, error) {
-	raw, err := json.Marshal(outcomeEnvelope{Outcome: outcome, Reason: reason, Result: result})
+	return OutcomePayloadDecidedBy(outcome, reason, "", result)
+}
+
+// OutcomePayloadDecidedBy is OutcomePayload plus the principal who decided (SEC-005).
+//
+// A SEPARATE CONSTRUCTOR rather than a fifth argument on the existing one, because most outcomes have
+// no decider: a step that ran and returned was not decided by anybody, and giving every call site an
+// actor argument invites passing something plausible there — the agent, the service, the run — which
+// would put four kinds of thing in a field whose only question is "which person or process said yes".
+func OutcomePayloadDecidedBy(outcome Outcome, reason, decidedBy string, result json.RawMessage) (json.RawMessage, error) {
+	raw, err := json.Marshal(outcomeEnvelope{Outcome: outcome, Reason: reason, DecidedBy: decidedBy, Result: result})
 	if err != nil {
 		return nil, fmt.Errorf("checkpoint: encoding outcome: %w", err)
 	}
@@ -297,6 +312,25 @@ func (s *RunState) StepOutcome(stepID string) (Outcome, string, bool) {
 		return OutcomeResult, "", true
 	}
 	return env.Outcome, env.Reason, true
+}
+
+// ApprovalActor returns who decided a step's outcome, and whether anybody is recorded at all.
+//
+// THREE STATES, like every other read in this file: a named decider, a record that names none, and no
+// record. The middle one is not a gap to be filled with a guess — it is every approval taken before
+// SEC-005, and reporting those as decided by "unknown" would invent a principal; reporting them as
+// decided by nobody would claim the step was never approved. The caller gets the distinction and
+// decides what to say about it.
+func (s *RunState) ApprovalActor(stepID string) (string, bool) {
+	rec, ok := s.Completed(stepID)
+	if !ok || len(rec.Payload) == 0 {
+		return "", false
+	}
+	var env outcomeEnvelope
+	if err := json.Unmarshal(rec.Payload, &env); err != nil {
+		return "", false
+	}
+	return env.DecidedBy, env.DecidedBy != ""
 }
 
 // ApprovalStep is the journal step_id an approval decision is recorded under (INT-011).

@@ -69,10 +69,7 @@ func newOpenAICompatibleTestServer(t *testing.T, providerFails bool) *httptest.S
 func postChatCompletion(t *testing.T, srv *httptest.Server, body map[string]any) (status int, parsed map[string]any) {
 	t.Helper()
 	raw, _ := json.Marshal(body)
-	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("POST /v1/chat/completions: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/v1/chat/completions", raw)
 	defer resp.Body.Close()
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		t.Fatalf("decode response: %v", err)

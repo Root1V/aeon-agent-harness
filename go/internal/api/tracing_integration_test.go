@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/url"
 	"os"
 	"testing"
@@ -55,12 +54,7 @@ func waitForTempoSpan(t *testing.T, tempoURL, traceQL string, timeout time.Durat
 	var lastErr error
 	var lastBody tempoSearch
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(reqURL)
-		if err != nil {
-			lastErr = err
-			time.Sleep(1 * time.Second)
-			continue
-		}
+		resp := getAuthed(t, reqURL)
 		var parsed tempoSearch
 		decodeErr := json.NewDecoder(resp.Body).Decode(&parsed)
 		resp.Body.Close()

@@ -402,7 +402,15 @@ async def test_reflection_writes_real_candidates_from_a_real_run():
                 content="Searching per-subtask before synthesising produced a verified report.",
             ),
         )
-        with urllib.request.urlopen(f"http://{CONTROLPLANE_ADDR}/memory/{expected_id}?tenant_id=default", timeout=20) as resp:
+        # SEC-005: the control plane authenticates now, so the test's own read-back has to be somebody
+        # too. The worker's write already went through authenticated (it uses
+        # aeon_worker.outbound.service_headers) — this is the reader, and it got a 401 the first time
+        # the target ran, which is the guard working on the one caller nobody had thought about.
+        read_back = urllib.request.Request(
+            f"http://{CONTROLPLANE_ADDR}/memory/{expected_id}?tenant_id=default",
+            headers={"Authorization": "Bearer " + os.environ.get("AEON_CALLER_TOKEN", "dev-test-token-not-a-secret")},
+        )
+        with urllib.request.urlopen(read_back, timeout=20) as resp:
             record = json.loads(resp.read())
 
         assert record["status"] == "CANDIDATE", (

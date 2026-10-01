@@ -21,6 +21,15 @@ x-common-env: &common-env
   # the agent binds to 127.0.0.1 — measured, localhost from a container returns 000. See .env.example.
   AEON_OTEL_ENDPOINT: ${AEON_OTEL_ENDPOINT:-otel-collector:4318}
 
+  # SEC-005: the caller bundle every Go service verifies bearer tokens against. REQUIRED — a service
+  # without it refuses to start rather than serving unauthenticated, which is the whole point (see
+  # go/internal/auth.MustLoadFromEnv). The bundle holds only SHA-256 hashes; the tokens themselves are
+  # the callers' own secrets.
+  #
+  # The default points at the DEVELOPMENT bundle, whose tokens are public because they are committed.
+  # Override both this and AEON_CALLER_TOKEN for anything reachable by anyone else.
+  AEON_CALLERS_PATH: ${AEON_CALLERS_PATH:-/examples/deep-research/callers.yaml}
+
 services:
   # ---- Durable execution -----------------------------------------------------------------
   temporal:
@@ -196,6 +205,9 @@ services:
     env_file:
       - path: ../../.env
         required: false
+    volumes:
+      # SEC-005: the caller bundle (AEON_CALLERS_PATH). Read-only, like the policy bundle beside it.
+      - ../../examples:/examples:ro
     ports:
       - "9401:9401"
 
@@ -349,6 +361,14 @@ services:
       # "Where does this run" is `host.name`, which the agent sets.
       ARGUS_ENVIRONMENT: ${ARGUS_ENVIRONMENT:-development}
       ARGUS_ROLE: worker
+      # SEC-005: the worker is a CALLER, not a verifier — it carries its own credential and never sees
+      # the bundle of everyone's hashes. The default is the development token, which is public because
+      # it is committed in examples/deep-research/callers.yaml. Override it anywhere that matters.
+      #
+      # Its caller entry has mayApprove: false, deliberately. The worker is the process that gets
+      # blocked on an approval, and a credential that could both run the tool and approve it would make
+      # the gate a formality.
+      AEON_CALLER_TOKEN: ${AEON_CALLER_TOKEN:-dev-worker-token-not-a-secret}
       # ARGUS'S CONVENTION IS LOCALHOST: an application exports to a per-machine agent on localhost and never
       # learns the central plane's address. This compose stack has no per-machine agent, so the collector's
       # service name is what exists here. Pointing at a real Argus agent is these two variables and nothing
@@ -390,6 +410,9 @@ services:
       # OBS-002: Agent Console's trace panel. Optional — under --profile core alone (no Tempo
       # running), the console still serves run status; the trace panel just reports a query error.
       AEON_TEMPO_QUERY_URL: http://tempo:3200
+    volumes:
+      # SEC-005: the caller bundle (AEON_CALLERS_PATH). Read-only, like the policy bundle beside it.
+      - ../../examples:/examples:ro
     ports:
       - "9404:9404"
 

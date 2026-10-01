@@ -86,10 +86,7 @@ func TestFinOpsDashboardShowsRealCostPerModel(t *testing.T) {
 		t.Fatalf("cost_model = %v, want compute_based", body["cost_model"])
 	}
 
-	resp, err := http.Get(srv.URL + "/finops/costs")
-	if err != nil {
-		t.Fatalf("GET /finops/costs: %v", err)
-	}
+	resp := getAuthed(t, srv.URL+"/finops/costs")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)

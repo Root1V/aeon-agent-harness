@@ -39,6 +39,20 @@ def _require_stack() -> None:
         pytest.skip(f"{', '.join(missing)} not set — needs the real obs stack (see make test-python-integration)")
 
 
+def _gateway_headers() -> dict[str, str]:
+    """SEC-005: the Tool Gateway authenticates now, so this test has to be somebody.
+
+    It presents the development bundle's `integration-test` caller, which is declared with
+    `mayActAs: [deep-research-general@0.1.0]` — the agent both tests below claim. A test that sent no
+    credential would get a 401 where it asserts a 403, and the denial it is about (Cedar refusing
+    shell.exec) would never be reached: the assertion would still read as "the call was refused".
+    """
+    from aeon_observability import inject_trace_context
+
+    token = os.environ.get("AEON_CALLER_TOKEN", "dev-test-token-not-a-secret")
+    return inject_trace_context({"Content-Type": "application/json", "Authorization": "Bearer " + token})
+
+
 def _tempo_trace(trace_id: str) -> dict | None:
     """Fetch a whole trace by id, or None while Tempo has not ingested it yet."""
     try:
@@ -68,7 +82,7 @@ def _spans_of(trace: dict) -> list[tuple[str, str, str]]:
 
 def test_run_produces_one_trace_across_both_languages():
     _require_stack()
-    from aeon_observability import current_traceparent, init_tracing, inject_trace_context, run_span, shutdown
+    from aeon_observability import current_traceparent, flush, init_tracing, run_span
 
     # The SDK decides its protocol from the installed exporters, and this image has both — so it must be
     # pinned, or it speaks gRPC at an HTTP port and every export fails in a retry loop. Found by running it.
@@ -93,7 +107,7 @@ def test_run_produces_one_trace_across_both_languages():
         }).encode()
         request = urllib.request.Request(
             f"http://{TOOLGW_ADDR}/execute", data=body, method="POST",
-            headers=inject_trace_context({"Content-Type": "application/json"}),
+            headers=_gateway_headers(),
         )
         try:
             with urllib.request.urlopen(request, timeout=30):
@@ -101,7 +115,7 @@ def test_run_produces_one_trace_across_both_languages():
         except urllib.error.HTTPError as exc:
             assert exc.code == 403, f"expected a policy denial, got {exc.code}"
 
-    shutdown()
+    flush()
 
     # Poll for the WHOLE trace, not for individual spans. The distinction is the point of this test.
     deadline = time.time() + 60
@@ -118,7 +132,11 @@ def test_run_produces_one_trace_across_both_languages():
     names = {n for _, n, _ in spans}
 
     assert "aeon-test-client" in services, f"the Python span is missing from the trace: {spans}"
-    assert "aeon-toolgw" in services, (
+    # `toolgw` and not `aeon-toolgw`: the component name dropped the `aeon-` prefix when Argus put us in
+    # their registry (2026-09-29) — with service.namespace=aeon-ai present, the prefix repeated what the
+    # namespace already says. This assertion still named the old one, and nothing noticed until the whole
+    # integration target ran: it is the only place that runs this file, and it had not run since.
+    assert "toolgw" in services, (
         f"the Go span is not in the SAME trace as the Python one — this is the exact failure the feature "
         f"fixes, and it looks like success to any test that queries the two spans separately: {spans}"
     )
@@ -142,7 +160,7 @@ def test_a_policy_denial_is_recorded_as_denied_and_does_not_page():
     an integration that is only a constant in a header file is an intention.
     """
     _require_stack()
-    from aeon_observability import current_traceparent, init_tracing, inject_trace_context, run_span, shutdown
+    from aeon_observability import current_traceparent, flush, init_tracing, run_span
 
     # The SDK decides its protocol from the installed exporters, and this image has both — so it must be
     # pinned, or it speaks gRPC at an HTTP port and every export fails in a retry loop. Found by running it.
@@ -158,14 +176,14 @@ def test_a_policy_denial_is_recorded_as_denied_and_does_not_page():
         }).encode()
         request = urllib.request.Request(
             f"http://{TOOLGW_ADDR}/execute", data=body, method="POST",
-            headers=inject_trace_context({"Content-Type": "application/json"}),
+            headers=_gateway_headers(),
         )
         try:
             urllib.request.urlopen(request, timeout=30).close()
         except urllib.error.HTTPError:
             pass
 
-    shutdown()
+    flush()
 
     deadline = time.time() + 60
     guardrail, outcome = None, None

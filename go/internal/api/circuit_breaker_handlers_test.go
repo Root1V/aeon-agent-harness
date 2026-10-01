@@ -101,10 +101,7 @@ func TestCircuitBreakerQuarantinesVersion(t *testing.T) {
 
 	postOutcome := func(success bool) (int, map[string]any) {
 		body, _ := json.Marshal(recordOutcomeRequest{Success: success})
-		resp, err := http.Post(srv.URL+"/agents/"+name+"/"+version+"/outcomes", "application/json", bytes.NewReader(body))
-		if err != nil {
-			t.Fatalf("POST outcomes: %v", err)
-		}
+		resp := postJSONAuthed(t, srv.URL+"/agents/"+name+"/"+version+"/outcomes", body)
 		defer resp.Body.Close()
 		var parsed map[string]any
 		_ = json.NewDecoder(resp.Body).Decode(&parsed)
@@ -199,10 +196,7 @@ func postStartRun(t *testing.T, srv *httptest.Server, runID, agentManifestRef st
 		Graph:            map[string]any{"nodes": []any{}},
 		AgentManifestRef: agentManifestRef,
 	})
-	resp, err := http.Post(srv.URL+"/runs", "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		t.Fatalf("POST /runs: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/runs", reqBody)
 	defer resp.Body.Close()
 	var parsed map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&parsed)
@@ -225,10 +219,7 @@ func TestQuarantineHandlerIsAKillSwitchRegardlessOfBreakerState(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	body, _ := json.Marshal(quarantineRequest{Reason: "operator-triggered kill switch, suspected data exfiltration"})
-	resp, err := http.Post(srv.URL+"/agents/"+name+"/"+version+"/quarantine", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST quarantine: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/agents/"+name+"/"+version+"/quarantine", body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -268,10 +259,7 @@ func TestQuarantineRejectsNonReleasedVersion(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	body, _ := json.Marshal(quarantineRequest{Reason: "should not apply to a Draft"})
-	resp, err := http.Post(srv.URL+"/agents/"+name+"/"+version+"/quarantine", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST quarantine: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/agents/"+name+"/"+version+"/quarantine", body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 for a non-Released version", resp.StatusCode)

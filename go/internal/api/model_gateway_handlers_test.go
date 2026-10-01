@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,10 +40,7 @@ func newModelGatewayTestServer(t *testing.T, fail bool) *httptest.Server {
 func postDecide(t *testing.T, srv *httptest.Server, body decideRequest) (status int, parsed map[string]any) {
 	t.Helper()
 	raw, _ := json.Marshal(body)
-	resp, err := http.Post(srv.URL+"/decide", "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("POST /decide: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/decide", raw)
 	defer resp.Body.Close()
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		t.Fatalf("decode response: %v", err)

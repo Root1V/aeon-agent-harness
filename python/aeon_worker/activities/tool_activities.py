@@ -14,7 +14,8 @@ from typing import Any
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from aeon_observability import inject_trace_context, set_run_identity, tool_span
+from aeon_worker.outbound import service_headers
+from aeon_observability import set_run_identity, tool_span
 from aeon_worker.idempotency import EffectsLedger, derive_idempotency_key
 
 DEFAULT_LEDGER_PATH = os.environ.get("AEON_EFFECTS_LEDGER_PATH", "/tmp/aeon_effects_ledger.json")
@@ -139,7 +140,7 @@ async def _execute_through_gateway(inp: ExecuteToolInput, key: str) -> ExecuteTo
         data=payload,
         # Trace context injected here, so the gateway's execute_tool span becomes a CHILD of this one
         # instead of the root of its own trace.
-        headers=inject_trace_context({"Content-Type": "application/json"}),
+        headers=service_headers(),
     )
 
     try:

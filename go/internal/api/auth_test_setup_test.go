@@ -1,0 +1,89 @@
+package api
+
+import (
+	"bytes"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/aeon-ai/aeon/go/internal/auth"
+)
+
+// testCallerToken is the credential every test in this package presents. Its hash is built here, not
+// read from a file, so these tests do not depend on the development bundle's contents.
+const testCallerToken = "test-caller-token-for-this-package"
+
+// authedServer wraps mux the way httpserver.New does and serves it, with one caller allowed to act as
+// the agents named.
+//
+// WHY EACH TEST NAMES ITS OWN `actsAs` RATHER THAN SHARING A PERMISSIVE CALLER. After SEC-005 a caller
+// may only present an agent its entry lists, so a test whose subject is POLICY — "Cedar denies this
+// agent this tool" — has to be able to claim that agent, or the refusal it asserts comes from
+// authentication instead and the test passes while proving something else. The caller is therefore as
+// permissive as that test's own subject requires and no more; the restrictive properties are asserted
+// in TestTheDeploymentRefusesCallersItCannotIdentify, against the real committed bundle.
+func authedServer(t *testing.T, mux *http.ServeMux, actsAs ...string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(authWrap(t, mux, actsAs...))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// authWrap is authedServer's middleware half, for tests that build their own httptest.Server.
+func authWrap(t *testing.T, mux *http.ServeMux, actsAs ...string) http.Handler {
+	t.Helper()
+	a, err := auth.Load(auth.CallerBundleDoc{Kind: "CallerBundle", Callers: []auth.Caller{{
+		ID:          "test-caller",
+		Kind:        auth.KindService,
+		TokenSHA256: auth.HashToken(testCallerToken),
+		MayActAs:    actsAs,
+		MayApprove:  true,
+	}}})
+	if err != nil {
+		t.Fatalf("building the test authenticator: %v", err)
+	}
+	return auth.Require(a)(mux)
+}
+
+// authorize puts this package's test credential on a request. Called by every POST/GET helper here, so
+// a new helper that forgets it fails loudly with a 401 rather than quietly skipping the guard.
+func authorize(req *http.Request) *http.Request {
+	req.Header.Set("Authorization", "Bearer "+testCallerToken)
+	return req
+}
+
+// postJSONAuthed is the shared shape of this package's POST helpers: a JSON body with the credential.
+func postJSONAuthed(t *testing.T, url string, body []byte) *http.Response {
+	t.Helper()
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(http.MethodPost, url, reader)
+	if err != nil {
+		t.Fatalf("building POST %s: %v", url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(authorize(req))
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	return resp
+}
+
+// getAuthed is the GET half. Added after the POST half, because the first version of this harness
+// authorized only POSTs and the GETs came back 401 — which read as "the journal endpoint is broken"
+// rather than "this helper forgot the credential".
+func getAuthed(t *testing.T, url string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("building GET %s: %v", url, err)
+	}
+	resp, err := http.DefaultClient.Do(authorize(req))
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	return resp
+}

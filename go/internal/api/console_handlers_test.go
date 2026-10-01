@@ -43,10 +43,7 @@ func TestAgentConsoleShowsARunEndToEnd(t *testing.T) {
 	}
 	waitForTempoSpan(t, tempoURL, `{ name = "invoke_agent" && span.gen_ai.agent.name = "`+runID+`" }`, 30*time.Second)
 
-	resp, err := http.Get(srv.URL + "/console/runs/" + runID)
-	if err != nil {
-		t.Fatalf("GET /console/runs/%s: %v", runID, err)
-	}
+	resp := getAuthed(t, srv.URL+"/console/runs/"+runID)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
@@ -81,10 +78,7 @@ func TestAgentConsoleReturns404ForAnUnknownRun(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	resp, err := http.Get(srv.URL + "/console/runs/" + newRunID("does-not-exist"))
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
+	resp := getAuthed(t, srv.URL+"/console/runs/"+newRunID("does-not-exist"))
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)

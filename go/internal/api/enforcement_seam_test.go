@@ -68,7 +68,7 @@ func newEnforcementSeamServer(t *testing.T, checkpointer bool) *httptest.Server 
 		(&CheckpointHandlers{Checkpointer: s.Checkpointer()}).Register(mux)
 	}
 	handlers.Register(mux)
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux, "deep-research-general@0.1.0"))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -89,10 +89,7 @@ func askSeam(t *testing.T, srv *httptest.Server, path, agent, tool string, extra
 		body[k] = v
 	}
 	raw, _ := json.Marshal(body)
-	resp, err := http.Post(srv.URL+path, "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("POST %s: %v", path, err)
-	}
+	resp := postJSONAuthed(t, srv.URL+path, raw)
 	defer resp.Body.Close()
 	var parsed seamResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {

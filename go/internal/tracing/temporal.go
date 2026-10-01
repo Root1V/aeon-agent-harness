@@ -53,9 +53,21 @@ func TemporalPropagator() propagation.TextMapPropagator {
 	return opentelemetry.DefaultTextMapPropagator
 }
 
-// Propagator is what the HTTP hop uses: the process-global one, which Init registers. Read from the
-// global rather than restated, so the test that compares the two hops compares what is installed and
-// not what this file believes is installed.
+// HTTPPropagator is the composite Init registers as the process-global one for the HTTP hop.
+//
+// A VALUE, NOT A READ OF THE GLOBAL, and that distinction cost a bug in this feature's own test. The
+// first version compared `otel.GetTextMapPropagator()` with Temporal's, which made the test depend on
+// whether some EARLIER test in the binary had installed a propagator: it passed under the integration
+// target and failed run on its own, because Go's global default is a no-op. A test whose verdict
+// depends on its neighbours is worse than no test — it had already gone green once.
+//
+// Init installs exactly this, so the two cannot drift apart silently.
+func HTTPPropagator() propagation.TextMapPropagator {
+	return propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{})
+}
+
+// Propagator is the process-global propagator, for diagnostics and for asserting that Init ran. It is
+// a no-op until something registers one, which is the whole of the OBS-006b finding.
 func Propagator() propagation.TextMapPropagator {
 	return otel.GetTextMapPropagator()
 }

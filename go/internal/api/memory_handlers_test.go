@@ -145,10 +145,7 @@ func TestMemoryHandlersFullPipelineOverHTTP(t *testing.T) {
 		t.Fatalf("promote: status = %d, body = %v", status, promoted)
 	}
 
-	resp, err := http.Get(srv.URL + "/memory/active?scope=user&tenant_id=tenant-http-test")
-	if err != nil {
-		t.Fatalf("GET /memory/active: %v", err)
-	}
+	resp := getAuthed(t, srv.URL+"/memory/active?scope=user&tenant_id=tenant-http-test")
 	defer resp.Body.Close()
 	var active []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&active); err != nil {
@@ -167,10 +164,7 @@ func TestMemoryHandlersFullPipelineOverHTTP(t *testing.T) {
 
 func TestMemoryHandlersGetUnknownIs404(t *testing.T) {
 	srv := newMemoryTestServer(t)
-	resp, err := http.Get(srv.URL + "/memory/00000000-0000-0000-0000-000000000000?tenant_id=whatever")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
+	resp := getAuthed(t, srv.URL+"/memory/00000000-0000-0000-0000-000000000000?tenant_id=whatever")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
@@ -179,10 +173,7 @@ func TestMemoryHandlersGetUnknownIs404(t *testing.T) {
 
 func TestMemoryHandlersGetRequiresTenantID(t *testing.T) {
 	srv := newMemoryTestServer(t)
-	resp, err := http.Get(srv.URL + "/memory/00000000-0000-0000-0000-000000000000")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
+	resp := getAuthed(t, srv.URL+"/memory/00000000-0000-0000-0000-000000000000")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
@@ -191,10 +182,7 @@ func TestMemoryHandlersGetRequiresTenantID(t *testing.T) {
 
 func TestMemoryHandlersListActiveRequiresScope(t *testing.T) {
 	srv := newMemoryTestServer(t)
-	resp, err := http.Get(srv.URL + "/memory/active")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
+	resp := getAuthed(t, srv.URL+"/memory/active")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", resp.StatusCode)
@@ -214,10 +202,7 @@ func TestMemoryHandlersGetIsIsolatedByTenant(t *testing.T) {
 	}
 	memoryID := created["memory_id"].(string)
 
-	resp, err := http.Get(srv.URL + "/memory/" + memoryID + "?tenant_id=tenant-B")
-	if err != nil {
-		t.Fatalf("GET: %v", err)
-	}
+	resp := getAuthed(t, srv.URL+"/memory/"+memoryID+"?tenant_id=tenant-B")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("cross-tenant GET: status = %d, want 404 (must not leak that the record exists)", resp.StatusCode)

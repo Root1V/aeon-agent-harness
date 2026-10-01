@@ -277,8 +277,34 @@ def mark_guardrail(span: Any, kind: str, reason: str) -> None:
         logger.debug("aeon_observability: could not mark guardrail (%s)", exc)
 
 
+def flush() -> None:
+    """Push buffered spans out WITHOUT closing anything. For a test that wants to read spans back.
+
+    THIS EXISTS BECAUSE `shutdown()` IS TERMINAL AND A TEST BINARY IS ONE PROCESS. `test_end_to_end
+    _tracing` called shutdown() to force an export before querying Tempo, and once SEC-005's target ran
+    both files together, every later test in the same process emitted into a closed provider:
+    `test_approval_wait_is_observable` found zero `approval.wait` records and failed asserting the
+    feature it had passed on its own an hour earlier. The Go side of this repo already carries the same
+    lesson in `ensureTestTracing`'s comment — "shutting down a TracerProvider is terminal" — and the
+    Python side learned it again from the other direction.
+
+    A test that passes alone and fails in the suite is the worse half of the pair: the version that
+    passed is the one that gets believed.
+    """
+    if _handle is None:
+        return
+    for attr in ("force_flush", "flush"):
+        fn = getattr(_handle, attr, None)
+        if callable(fn):
+            try:
+                fn()
+                return
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("aeon_observability: %s failed (%s)", attr, exc)
+
+
 def shutdown() -> None:
-    """Flush buffered telemetry. For worker shutdown and for tests that read spans back."""
+    """Flush AND close. For worker shutdown — never from a test that has neighbours (see flush)."""
     if _handle is None:
         return
     for attr in ("shutdown", "flush", "force_flush"):

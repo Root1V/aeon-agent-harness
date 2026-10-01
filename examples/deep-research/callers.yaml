@@ -1,0 +1,48 @@
+# SEC-005 caller bundle for LOCAL DEVELOPMENT. The tokens below are PUBLIC: they are in a committed
+# file, so anyone with the repository has them. That is deliberate and it is the only reason this file
+# can exist — `make dev` has to come up without a secret-provisioning step.
+#
+# DO NOT USE THIS FILE OUTSIDE A LAPTOP. For anything reachable by anyone else, generate real tokens
+# and write their hashes into your own bundle:
+#
+#   token=$(openssl rand -hex 32)          # keep this where you keep secrets
+#   printf '%s' "$token" | shasum -a 256   # put THIS in tokenSHA256
+#
+# The bundle never carries a token, only its SHA-256. A config-as-code file is committed, diffed and
+# pasted into issues, and a secret in one of those is a secret in all three.
+apiVersion: harness.ai/v1
+kind: CallerBundle
+callers:
+  # The Python worker. It may act as the Deep Research agent and it may NOT approve.
+  #
+  # THAT SECOND HALF IS THE POINT OF THE WHOLE FEATURE. The worker is the process that gets blocked on
+  # an approval; a credential that could both run the tool and approve it would make the gate a
+  # formality with an audit entry. `mayApprove` is never implied by `mayActAs` (go/internal/auth).
+  - id: worker
+    kind: service
+    # sha256 of "dev-worker-token-not-a-secret"
+    tokenSHA256: "8eabe1a460429843e6fafe922cfd327079ef693777d4c4a76c0b9638e8676125"
+    mayActAs:
+      - deep-research-general@0.1.0
+    mayApprove: false
+
+  # A person. May approve, and deliberately may NOT act as any agent: an operator deciding an approval
+  # has no reason to be able to execute tools in an agent's name, and the two permissions being
+  # separable in both directions is what makes the audit line mean something.
+  - id: operator
+    kind: human
+    # sha256 of "dev-operator-token-not-a-secret"
+    tokenSHA256: "700183179880062613e852ea7838fa721cc9300a033b9a0fbfc12bbec846d05f"
+    mayActAs: []
+    mayApprove: true
+
+  # The integration tests' own identity, so a test exercises the real guard with a real token instead
+  # of a path that skips it. Listed here rather than invented per-test: a test that builds its own
+  # permissive caller proves the handler runs, not that the deployment is configured.
+  - id: integration-test
+    kind: service
+    # sha256 of "dev-test-token-not-a-secret"
+    tokenSHA256: "4167faa73aedad9589d46f41c47e5964fedca12b5e9fc3a54c7b174dbb892dbf"
+    mayActAs:
+      - deep-research-general@0.1.0
+    mayApprove: true

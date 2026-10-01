@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -32,10 +31,7 @@ func newCheckpointTestServer(t *testing.T) *httptest.Server {
 func postCheckpoint(t *testing.T, srv *httptest.Server, runID string, body map[string]any) (int, checkpoint.AppendResult) {
 	t.Helper()
 	raw, _ := json.Marshal(body)
-	resp, err := http.Post(srv.URL+"/runs/"+runID+"/checkpoints", "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("POST checkpoint: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/runs/"+runID+"/checkpoints", raw)
 	defer resp.Body.Close()
 	var parsed checkpoint.AppendResult
 	_ = json.NewDecoder(resp.Body).Decode(&parsed)
@@ -77,10 +73,7 @@ func TestCheckpointSeamOverHTTP(t *testing.T) {
 	t.Run("loading returns the journal and where it continues", func(t *testing.T) {
 		postCheckpoint(t, srv, runID, map[string]any{"step_id": "s3", "phase": "attempted"})
 
-		resp, err := http.Get(srv.URL + "/runs/" + runID + "/checkpoints")
-		if err != nil {
-			t.Fatalf("GET checkpoints: %v", err)
-		}
+		resp := getAuthed(t, srv.URL+"/runs/"+runID+"/checkpoints")
 		defer resp.Body.Close()
 		var state runStateResponse
 		if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
@@ -97,10 +90,7 @@ func TestCheckpointSeamOverHTTP(t *testing.T) {
 	t.Run("an unknown run loads as an empty journal, not an error", func(t *testing.T) {
 		// A loop asking "where was I?" before its first checkpoint is the normal first call, not a
 		// failure — answering 404 would make every caller special-case the happy path.
-		resp, err := http.Get(srv.URL + "/runs/never-seen-" + runID + "/checkpoints")
-		if err != nil {
-			t.Fatalf("GET checkpoints: %v", err)
-		}
+		resp := getAuthed(t, srv.URL+"/runs/never-seen-"+runID+"/checkpoints")
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("GET for an unknown run = %d, want 200", resp.StatusCode)

@@ -17,7 +17,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
@@ -123,10 +122,7 @@ func Init(ctx context.Context, serviceName, role, endpoint string) (trace.Tracer
 	//
 	// W3C traceparent plus baggage, because that is what the Python side emits and what any OTel
 	// collector — including an Argus agent — expects.
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-		propagation.TraceContext{},
-		propagation.Baggage{},
-	))
+	otel.SetTextMapPropagator(HTTPPropagator())
 
 	return tp.Tracer(serviceName), tp.Shutdown, nil
 }
