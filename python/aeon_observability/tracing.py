@@ -144,7 +144,9 @@ def inject_trace_context(headers: dict[str, str]) -> dict[str, str]:
     """Add the propagation headers to an outgoing request.
 
     Delegates to `argus.propagate.inject_headers`, which is the SDK's own and therefore agrees with
-    whatever trust mode and header set Argus expects — `ARGUS_PROPAGATE` governs the inbound side, and
+    whatever trust mode and header set Argus expects — `ARGUS_TRUST_INBOUND` governs the inbound side
+    (it was `ARGUS_PROPAGATE` until 1.0.0a14; Argus renamed it because the old name read as a sibling of
+    their `argus.propagate` module, which is the outbound half and a different thing), and
     hand-writing the outbound half is how the two drift.
 
     THIS IS THE LINE THAT MAKES ONE TRACE. Without it a gateway starts a root span and a run's spans end up
