@@ -93,7 +93,51 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   instancia sin ver datos de otros.
 - **Coste:** XL.
 
-### No hay CI: las 93 filas verificadas dependen de que alguien corra `make` a mano
+### ~~No hay CI~~ — CERRADA el 2026-10-01, promovida como `CI-001`
+
+> Cerrada con `.github/workflows/ci.yml` (cuatro jobs) y `scripts/check_skips.py`. Lo que la entrada no
+> podía anticipar: **el riesgo no era que CI no existiera, era que existiera y fuera verde sobre nada.**
+> Cada test de integración se auto-salta sin su infraestructura, así que olvidar una variable en el
+> workflow lo deja pasando para siempre. El guard que cuenta los saltos encontró tres huecos en los
+> targets que ya teníamos — detalles en `roadmap.md`.
+
+### No existe ninguna herramienta permitida que corra sin red
+
+- **Descripción:** el despliegue de referencia registra exactamente dos herramientas y las dos necesitan
+  algo externo: `search.web` sale a las máquinas de búsqueda públicas (que nos limitan por tasa) y
+  `search.rag` necesita las credenciales de embeddings de Prometheus. `shell.exec` existe y la política
+  lo prohíbe para todo agente, a propósito. Y `repository.read` y `artifact.read` están en
+  `policy_bundle.yaml` **y** en el `tools.allow` de `examples/deep-research/agent.yaml` **sin
+  implementación**, así que el manifiesto declara herramientas que el gateway no puede ejecutar.
+  **Consecuencia medida el 2026-10-01:** el único camino extremo-a-extremo de ejecución de herramienta
+  que podemos probar depende de la web pública, así que es intermitente por construcción — dos tests
+  (uno Go, uno Python) tuvieron que pasar a saltarse con motivo cuando todas las máquinas refusaron a la
+  vez.
+- **Fase objetivo:** F2, con lo que quede de `TOOL-006`/`TOOL-007`.
+- **Criterio de entrada:** ninguno especial, pero **sí una decisión**, y no es registrar un stub:
+  `TOOL-007` quitó exactamente eso para que un despliegue sin proveedor de búsqueda no pudiera contestar
+  una búsqueda. Lo honesto es **implementar `repository.read`** —lee un fichero del repo montado, no
+  necesita red, y ya está declarado en el manifiesto y permitido por la política, así que hoy es una
+  promesa incumplida— o quitarlo del manifiesto. Lo primero cierra además el hueco de CI.
+- **Coste:** S.
+
+### El corpus dorado de identidad de paso solo se puede verificar en este portátil
+
+- **Descripción:** `TestStepIdentityMatchesGoldenCorpus` lee
+  `../../../../../Victor/coordinacion_project/contratos/identidad-de-paso/fixtures/hashes-dorados.json`
+  — **fuera del repositorio**, en la carpeta de coordinación de los tres equipos. Es una decisión
+  deliberada y está en `roadmap.md` («Extracción del repo de contratos», `DEFERRED`), pero la
+  consecuencia no estaba escrita en ningún sitio: **el test de aceptación del contrato que compartimos
+  con Synaptum y Axonium se salta en cualquier máquina que no sea esta.** Lo destapó
+  `scripts/check_skips.py` al contar qué se salta con toda la infraestructura levantada.
+- **Fase objetivo:** cuando el corpus tenga un sitio que las tres partes puedan leer.
+- **Criterio de entrada:** acuerdo con Synaptum y Axonium sobre dónde vive. Hay dos salidas y **ninguna
+  es copiarlo aquí sin decírselo**: publicarlo donde los tres CI lo alcancen, o vendorizar una copia
+  **con su hash de procedencia** y un test que falle si divergen — lo segundo es más barato y tiene su
+  propio modo de fallo (una copia que se queda atrás pareciendo verificada).
+- **Coste:** S.
+
+### No hay CI: las 93 filas verificadas dependen de que alguien corra `make` a mano (contexto original)
 
 - **Descripción:** no existe `.github/workflows` ni equivalente. Todo lo que este roadmap afirma está
   medido, y está medido **una vez, en un portátil**. Con más de una persona tocando el repo eso es la

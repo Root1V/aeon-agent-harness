@@ -1,0 +1,94 @@
+# CI for the Aeon Agent Harness.
+#
+# WHY THIS EXISTS, in the words of the backlog entry it closes: everything the roadmap asserts is
+# measured, and until now it was measured ONCE, ON A LAPTOP. With more than one person touching the
+# repository that is the difference between "tested" and "was tested then" — and it had already cost
+# two real defects by the time this file was written. `test_end_to_end_tracing` had been broken since
+# the day a service was renamed, unseen because the only target that runs it had not been run since;
+# and a test that passed alone failed in the suite because another test closed the process's tracer
+# provider. Both were caught by running a target, not by reading.
+#
+# IT RUNS THE MAKE TARGETS, deliberately, and not a faster reimplementation of them. The targets are
+# what a developer runs, and a CI that runs something else tests something else — the exact mistake
+# this repo keeps finding in its own artefacts. The cost is real: the targets build containers, so
+# these jobs take minutes rather than seconds. That is the price of the pipeline checking the thing
+# people actually use.
+#
+# WHAT IT DELIBERATELY DOES NOT RUN: `make test-mdl-015`. That target spends real money on real
+# inference against the real Prometheus deployment, with credentials that have no business in a
+# runner. It stays a target a person runs on a machine that has them.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # One run per ref. A superseded run of a 20-minute pipeline is 20 minutes nobody reads.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: schemas, roadmap
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No toolchain setup: both targets are python3 and the runner has it. Kept as its own job so the
+      # cheapest signal — a roadmap row claiming a test that does not exist — arrives in under a minute
+      # instead of behind a container build.
+      - run: make lint
+      - run: make roadmap-check
+
+  unit:
+    name: unit (go + python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # Docker is present on ubuntu-latest, which both targets need: they run their toolchains in
+      # containers, and go/internal/sandbox's tests drive real sibling containers through the socket.
+      - name: Go unit tests
+        run: make test-go
+      - name: Python unit + integration tests (the ones that need no infrastructure)
+        run: make test-python
+
+  integration-go:
+    name: integration (go, real Postgres + Temporal + Tempo)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Go integration tests
+        shell: bash
+        run: |
+          set -o pipefail
+          make test-go-integration 2>&1 | tee /tmp/go-integration.log
+      - name: Fail if anything skipped because it was not configured
+        # ALWAYS, including after a failure: a job that failed for one reason and silently skipped six
+        # tests for another has two problems, and the second is invisible without this.
+        if: always()
+        run: python3 scripts/check_skips.py /tmp/go-integration.log
+      - name: Compose logs
+        if: failure()
+        run: docker compose -f deploy/compose/docker-compose.yml --profile core --profile obs logs --tail 200
+
+  integration-python:
+    name: integration (python, real gateways)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python integration tests
+        shell: bash
+        run: |
+          set -o pipefail
+          make test-python-integration 2>&1 | tee /tmp/py-integration.log
+      - name: Fail if anything skipped because it was not configured
+        if: always()
+        run: python3 scripts/check_skips.py /tmp/py-integration.log
+      - name: Compose logs
+        if: failure()
+        run: docker compose -f deploy/compose/docker-compose.yml --profile core --profile obs logs --tail 200
