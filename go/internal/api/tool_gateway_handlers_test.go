@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -59,7 +58,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	handlers := &ToolGatewayHandlers{Policy: engine, Executor: executor}
 	handlers.Register(mux)
 
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux, "deep-research-general@0.1.0", "some-other-agent@1.0.0"))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -67,10 +66,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 func postExecute(t *testing.T, srv *httptest.Server, agentManifestRef, toolName string) (status int, body map[string]any) {
 	t.Helper()
 	reqBody, _ := json.Marshal(toolCallRequest{AgentManifestRef: agentManifestRef, ToolName: toolName, Args: map[string]any{}})
-	resp, err := http.Post(srv.URL+"/execute", "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		t.Fatalf("POST /execute: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/execute", reqBody)
 	defer resp.Body.Close()
 	var parsed map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {

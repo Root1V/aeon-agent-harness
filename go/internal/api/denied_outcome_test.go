@@ -33,10 +33,7 @@ const deniedOutcomeAgent = "deep-research-general@0.1.0"
 // made the outcome unreadable to the only consumer that matters.
 func loadRunState(t *testing.T, srv *httptest.Server, runID string) *checkpoint.RunState {
 	t.Helper()
-	resp, err := http.Get(srv.URL + "/runs/" + runID + "/checkpoints")
-	if err != nil {
-		t.Fatalf("GET journal for %s: %v", runID, err)
-	}
+	resp := getAuthed(t, srv.URL+"/runs/"+runID+"/checkpoints")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET journal for %s = %d, want 200", runID, resp.StatusCode)
@@ -86,7 +83,7 @@ func newDeniedOutcomeGateway(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	(&ToolGatewayHandlers{Policy: engine, Executor: executor, Checkpointer: s.Checkpointer()}).Register(mux)
 	(&CheckpointHandlers{Checkpointer: s.Checkpointer()}).Register(mux)
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux, deniedOutcomeAgent))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -94,10 +91,7 @@ func newDeniedOutcomeGateway(t *testing.T) *httptest.Server {
 func postExecuteForRun(t *testing.T, srv *httptest.Server, body toolCallRequest) (int, map[string]any) {
 	t.Helper()
 	raw, _ := json.Marshal(body)
-	resp, err := http.Post(srv.URL+"/execute", "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("POST /execute: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/execute", raw)
 	defer resp.Body.Close()
 	var parsed map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -292,7 +286,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 			Controller: runcontroller.New(c, ""), Checkpointer: s.Checkpointer(),
 		}).Register(mux)
 		(&CheckpointHandlers{Checkpointer: s.Checkpointer()}).Register(mux)
-		srv := httptest.NewServer(mux)
+		srv := httptest.NewServer(authWrap(t, mux, deniedOutcomeAgent))
 		t.Cleanup(srv.Close)
 
 		runID := newRunID("denied-approval")
@@ -365,7 +359,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 			Controller: runcontroller.New(c, ""), Checkpointer: s.Checkpointer(),
 		}).Register(mux)
 		(&CheckpointHandlers{Checkpointer: s.Checkpointer()}).Register(mux)
-		srv := httptest.NewServer(mux)
+		srv := httptest.NewServer(authWrap(t, mux, deniedOutcomeAgent))
 		t.Cleanup(srv.Close)
 
 		runID := newRunID("granted-approval")
@@ -391,6 +385,22 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 		if outcome.Denied() {
 			t.Errorf("Denied() is true for %q — a granted approval would stop a run that a person allowed", outcome)
 		}
+
+		// SEC-005: WHO approved, on a real run that really suspended and was really let through.
+		//
+		// Before this the journal said `approval_granted` with the reason "decided by a person via the
+		// run controller" — and nothing verified any of that: the endpoint was unauthenticated, so the
+		// only true statement was "something that could reach the port". An audit line asserting a
+		// person was involved, on the one step whose entire purpose is that a person was involved.
+		decidedBy, named := loadRunState(t, srv, runID).ApprovalActor(checkpoint.ApprovalStep(approvalID))
+		if !named {
+			t.Fatalf("the approval record names no decider, so the audit trail of an irreversible call " +
+				"says it was approved and cannot say by whom")
+		}
+		if decidedBy != "test-caller" {
+			t.Fatalf("decided_by = %q, want the authenticated caller's id", decidedBy)
+		}
+
 		waitForStatus(t, srv, runID, "SUCCEEDED", 15*time.Second)
 	})
 }

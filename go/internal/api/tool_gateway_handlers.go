@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -12,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/checkpoint"
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/store"
@@ -90,11 +92,43 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, span := toolGatewayTracer.Start(r.Context(), "execute_tool", trace.WithAttributes(
+	ctx, span := toolGatewayTracer.Start(r.Context(), "execute_tool", trace.WithAttributes(
 		attribute.String("gen_ai.operation.name", "execute_tool"),
 		attribute.String("gen_ai.tool.name", body.ToolName),
 	))
 	defer span.End()
+
+	// SEC-005: the caller may only present an agent its own entry lists.
+	//
+	// THIS IS THE LINE THAT MAKES CEDAR MEAN SOMETHING. Until it existed, the principal came straight
+	// off the wire — `IsAllowed(body.AgentManifestRef, ...)` — so the engine was default-deny, well
+	// tested, and judging whichever identity the caller typed. Every `permit` in the bundle was
+	// reachable by anyone who could reach the port and knew the agent's name, which is in the bundle.
+	//
+	// REFUSED WHEN THERE IS NO CALLER AT ALL, not treated as a legacy path. An absent caller means this
+	// handler was mounted without auth.Require, and answering it anyway is how an unauthenticated route
+	// comes back one wiring mistake at a time.
+	caller, ok := auth.CallerFrom(ctx)
+	if !ok {
+		span.SetStatus(codes.Error, "unauthenticated")
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: this gateway was reached without an authenticated caller (SEC-005)",
+		})
+		return
+	}
+	span.SetAttributes(attribute.String("aeon.caller.id", caller.ID), attribute.String("aeon.caller.kind", string(caller.Kind)))
+	if !caller.ActsAs(body.AgentManifestRef) {
+		// 403 and not 404: the caller is known and the refusal is about what it may claim. And the
+		// message names both sides, because "forbidden" without them sends an operator to the Cedar
+		// bundle, which is the wrong file — the policy never got a say.
+		span.SetStatus(codes.Error, "caller may not act as this agent")
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error":              fmt.Sprintf("caller %q may not act as %q", caller.ID, body.AgentManifestRef),
+			"caller_id":          caller.ID,
+			"agent_manifest_ref": body.AgentManifestRef,
+		})
+		return
+	}
 
 	decision := h.Policy.IsAllowed(body.AgentManifestRef, body.ToolName)
 	if !decision.Allowed {

@@ -16,7 +16,8 @@ from typing import Any
 
 from temporalio import activity
 
-from aeon_observability import chat_span, inject_trace_context, set_run_identity
+from aeon_worker.outbound import service_headers
+from aeon_observability import chat_span, set_run_identity
 
 DEFAULT_MODELGW_ADDR = os.environ.get("AEON_MODELGW_ADDR", "localhost:9402")
 
@@ -104,7 +105,7 @@ async def call_model_gateway(inp: DecideInput) -> DecideOutput:
 
         # THE LINE THAT MAKES ONE TRACE. Without it the gateway starts a root span and this run's spans end
         # up scattered across unrelated traces — each present, none connected.
-        headers = inject_trace_context({"Content-Type": "application/json"})
+        headers = service_headers()
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 — fixed internal URL, not user input

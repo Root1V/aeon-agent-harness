@@ -45,7 +45,7 @@ func newSecretBrokerTestServer(t *testing.T, secretValues map[string]string) (*h
 	(&ToolGatewayHandlers{Policy: engine, Executor: executor}).Register(mux)
 	(&SecretBrokerHandlers{Broker: broker}).Register(mux)
 
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux, "secrets-test-agent@1.0.0", "some-other-agent@1.0.0"))
 	t.Cleanup(srv.Close)
 	return srv, broker
 }
@@ -53,10 +53,7 @@ func newSecretBrokerTestServer(t *testing.T, secretValues map[string]string) (*h
 func postIssue(t *testing.T, srv *httptest.Server, name string) (status int, body map[string]any) {
 	t.Helper()
 	reqBody, _ := json.Marshal(issueLeaseRequest{Name: name})
-	resp, err := http.Post(srv.URL+"/secrets/issue", "application/json", bytes.NewReader(reqBody))
-	if err != nil {
-		t.Fatalf("POST /secrets/issue: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/secrets/issue", reqBody)
 	defer resp.Body.Close()
 	var parsed map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -92,10 +89,7 @@ func TestNoSecretInPrompt(t *testing.T) {
 		ToolName:         "secrets.whoami",
 		Args:             map[string]any{"secret_ref": ref},
 	})
-	resp, err := http.Post(srv.URL+"/execute", "application/json", bytes.NewReader(execReqBody))
-	if err != nil {
-		t.Fatalf("POST /execute: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/execute", execReqBody)
 	defer resp.Body.Close()
 	rawResponseBody := new(bytes.Buffer)
 	if _, err := rawResponseBody.ReadFrom(resp.Body); err != nil {

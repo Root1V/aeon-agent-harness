@@ -23,6 +23,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/aeon-ai/aeon/go/internal/api"
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	aeonmcp "github.com/aeon-ai/aeon/go/internal/mcp"
 	"github.com/aeon-ai/aeon/go/internal/policy"
@@ -201,7 +202,10 @@ func main() {
 		log.Println("aeon-toolgw: AEON_PG_DSN not set — /mcp not mounted (Tool Registry unavailable)")
 	}
 
-	srv := httpserver.New("aeon-toolgw", mux)
+	// SEC-005: every route but /healthz and /readyz is behind this. Fatal when unconfigured — see
+	// auth.MustLoadFromEnv for why a warning would be worse than not starting.
+	callers := auth.MustLoadFromEnv("aeon-toolgw")
+	srv := httpserver.New("aeon-toolgw", mux, callers)
 	// Deliberately says nothing about which optional subsystems are live: every one of them logs for
 	// itself above, from the line that knows whether it actually came up. This line used to claim "dedupe
 	// table not yet implemented" directly underneath the line reporting deduplication as live — a summary

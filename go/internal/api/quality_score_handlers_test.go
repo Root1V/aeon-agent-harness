@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -50,10 +49,7 @@ func TestQualityAwareRoutingChangesWithADegradedScore(t *testing.T) {
 	})
 
 	reportBody, _ := json.Marshal(reportQualityScoreRequest{Provider: "primary-provider", Model: model, Suite: "provider_conformance", Score: 0.4})
-	resp, err := http.Post(srv.URL+"/quality-scores", "application/json", bytes.NewReader(reportBody))
-	if err != nil {
-		t.Fatalf("POST /quality-scores: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/quality-scores", reportBody)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("POST /quality-scores: status = %d", resp.StatusCode)
@@ -74,10 +70,7 @@ func TestQualityAwareRoutingChangesWithADegradedScore(t *testing.T) {
 	})
 
 	t.Run("GET /quality-scores lists the real reported score", func(t *testing.T) {
-		resp, err := http.Get(srv.URL + "/quality-scores")
-		if err != nil {
-			t.Fatalf("GET /quality-scores: %v", err)
-		}
+		resp := getAuthed(t, srv.URL+"/quality-scores")
 		defer resp.Body.Close()
 		var parsed map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {

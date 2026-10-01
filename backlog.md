@@ -93,6 +93,58 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   instancia sin ver datos de otros.
 - **Coste:** XL.
 
+### No hay CI: las 93 filas verificadas dependen de que alguien corra `make` a mano
+
+- **Descripción:** no existe `.github/workflows` ni equivalente. Todo lo que este roadmap afirma está
+  medido, y está medido **una vez, en un portátil**. Con más de una persona tocando el repo eso es la
+  diferencia entre «probado» y «se probó entonces». **No es teórico y ya pasó dos veces el 2026-10-01:**
+  `test_end_to_end_tracing` llevaba roto desde el cambio de nombre de servicio de Argus (afirmaba
+  `aeon-toolgw` cuando el servicio es `toolgw`) y nadie lo vio porque el único target que corre ese
+  fichero no se había corrido desde entonces; y `test_approval_wait_is_observable` pasaba sola y
+  fallaba en la suite porque otro test cerraba el TracerProvider del proceso.
+- **Fase objetivo:** antes de cualquier piloto con otro equipo.
+- **Criterio de entrada:** ninguno especial. Lo que hay que decidir es qué corre en cada push: `make
+  test` entero es contenedores + descargas y tarda; `test-go` + `test-python` sin infra es barato y es
+  la mayoría de la cobertura. Los targets que necesitan Postgres/Temporal/Tempo son los que de verdad
+  cazan estas cosas, así que al menos uno tiene que correr en algún sitio.
+- **Coste:** S (un workflow) / M (si hay que hacer los targets de integración reproducibles en CI).
+
+### `deploy/helm` es un directorio vacío
+
+- **Descripción:** existe `deploy/helm/` y no contiene **nada**. El despliegue real es
+  `deploy/compose` y solo eso. Un directorio con ese nombre es una promesa que el repo no cumple, y
+  es la misma familia de defecto que este proyecto lleva semanas encontrando en sus propios
+  artefactos: algo que afirma una capacidad que no existe.
+- **Fase objetivo:** cuando haya un destino que no sea un portátil.
+- **Criterio de entrada:** un despliegue real sobre Kubernetes. Hasta entonces la acción honesta es
+  **borrar el directorio**, no llenarlo: un chart escrito contra un cluster que no existe se escribe
+  dos veces.
+- **Coste:** S (borrarlo) / L (un chart de verdad).
+
+### Las claves de proveedor viajan en texto plano por el entorno del proceso
+
+- **Descripción:** `.env` → entorno de compose → entorno del proceso de `aeon-modelgw`. El Secret
+  Broker (`SEC-002`) existe, está probado y **el Model Gateway no lo usa** (ya hay una entrada aparte
+  sobre eso). Lo que esta añade es el otro extremo: en un piloto, las claves de un tercero no deberían
+  estar en un fichero del host ni en `docker inspect`.
+- **Fase objetivo:** cuando el harness maneje credenciales que no sean nuestras.
+- **Criterio de entrada:** que exista un almacén de secretos en el entorno de despliegue (Vault, SOPS,
+  el de la nube que sea). `SEC-005` ya empuja en esta dirección: el bundle de callers guarda hashes y
+  no tokens, así que el patrón está establecido.
+- **Coste:** M.
+
+### El esquema de Postgres no tiene migraciones versionadas
+
+- **Descripción:** `store.Connect` llama a `Migrate()`, que aplica `schema.sql` idempotentemente bajo
+  un advisory lock. Para cambios aditivos funciona y está probado. Lo que no existe es historia para
+  un cambio **destructivo** —renombrar una columna, estrechar un tipo— ni forma de saber qué versión
+  tiene una base de datos, ni rollback.
+- **Fase objetivo:** antes del primer cambio de esquema sobre datos que importen.
+- **Criterio de entrada:** ninguno especial, pero **sí una decisión**: una herramienta de migraciones
+  (golang-migrate, atlas) o un `schema_version` propio. Lo segundo parece más barato y es cómo se
+  acaba teniendo una herramienta de migraciones peor.
+- **Coste:** M.
+
 ### La deriva de `step_seq` es invisible para Temporal, y no sabemos si es inofensiva (`RUN-004`)
 
 - **Descripción:** nuestra `idempotency_key` es `hash(run_id, node_id, step_seq, args)` y `step_seq`

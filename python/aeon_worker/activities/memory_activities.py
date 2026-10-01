@@ -26,7 +26,7 @@ from typing import Any
 from temporalio import activity
 
 from aeon_memory.reflection import MemoryCandidate, Reflector, ReflectionError, RunSummary
-from aeon_observability import inject_trace_context
+from aeon_worker.outbound import service_headers
 from aeon_worker.activities.model_activities import DecideCandidate, DecideInput, call_model_gateway
 
 # The control plane hosts the memory surface (MEM-001/MEM-002). Unset means no memory write path is
@@ -191,7 +191,7 @@ async def write_memory_candidates_activity(inp: WriteCandidatesInput) -> WriteCa
             f"http://{CONTROLPLANE_ADDR}/memory/candidates",
             data=body,
             method="POST",
-            headers=inject_trace_context({"Content-Type": "application/json"}),
+            headers=service_headers(),
         )
         try:
             with urllib.request.urlopen(request, timeout=30):

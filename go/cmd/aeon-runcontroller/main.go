@@ -19,6 +19,7 @@ import (
 	"go.temporal.io/sdk/interceptor"
 
 	"github.com/aeon-ai/aeon/go/internal/api"
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/checkpoint"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	"github.com/aeon-ai/aeon/go/internal/runcontroller"
@@ -99,7 +100,10 @@ func main() {
 	tempoURL := os.Getenv("AEON_TEMPO_QUERY_URL")
 	(&api.ConsoleHandlers{Controller: controller, TempoURL: tempoURL}).Register(mux)
 
-	srv := httpserver.New("aeon-runcontroller", mux)
+	// SEC-005: every route but /healthz and /readyz is behind this. Fatal when unconfigured — see
+	// auth.MustLoadFromEnv for why a warning would be worse than not starting.
+	callers := auth.MustLoadFromEnv("aeon-runcontroller")
+	srv := httpserver.New("aeon-runcontroller", mux, callers)
 	log.Printf("aeon-runcontroller starting (temporal=%s, task_queue=%s)", address, taskQueue)
 	httpserver.MustListenAndServe(srv)
 }

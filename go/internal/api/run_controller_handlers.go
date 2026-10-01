@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/checkpoint"
 	"github.com/aeon-ai/aeon/go/internal/runcontroller"
 	"github.com/aeon-ai/aeon/go/internal/store"
@@ -160,6 +161,31 @@ type approvalDecisionRequest struct {
 	ToolCallHash string `json:"tool_call_hash"`
 }
 
+// approver resolves who is deciding a pending approval, or writes the refusal and returns false.
+//
+// TWO CHECKS AND THEY ARE DIFFERENT QUESTIONS. The first is whether anybody is authenticated at all;
+// the second is whether that somebody may approve. `mayApprove` is never implied by `mayActAs`
+// (go/internal/auth), and this is the endpoint that distinction exists for: a worker holding a
+// credential good enough to run tools must not be able to approve the irreversible call it is itself
+// blocked on, or the gate is decoration with a journal entry.
+func (h *RunControllerHandlers) approver(w http.ResponseWriter, r *http.Request) (auth.Caller, bool) {
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: this run controller was reached without an authenticated caller (SEC-005)",
+		})
+		return auth.Caller{}, false
+	}
+	if !caller.MayApprove {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error":     fmt.Sprintf("caller %q may not decide approvals", caller.ID),
+			"caller_id": caller.ID,
+		})
+		return auth.Caller{}, false
+	}
+	return caller, true
+}
+
 func (h *RunControllerHandlers) approve(w http.ResponseWriter, r *http.Request) {
 	var body approvalDecisionRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -170,12 +196,16 @@ func (h *RunControllerHandlers) approve(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, fmt.Errorf("tool_call_hash is required"))
 		return
 	}
+	caller, ok := h.approver(w, r)
+	if !ok {
+		return
+	}
 	decision, err := h.Controller.Approve(r.Context(), workflowID(r.PathValue("run_id")), body.ToolCallHash)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	h.respondToApproval(w, r, decision)
+	h.respondToApproval(w, r, caller, decision)
 }
 
 func (h *RunControllerHandlers) reject(w http.ResponseWriter, r *http.Request) {
@@ -188,12 +218,16 @@ func (h *RunControllerHandlers) reject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("tool_call_hash is required"))
 		return
 	}
+	caller, ok := h.approver(w, r)
+	if !ok {
+		return
+	}
 	decision, err := h.Controller.Reject(r.Context(), workflowID(r.PathValue("run_id")), body.ToolCallHash)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	h.respondToApproval(w, r, decision)
+	h.respondToApproval(w, r, caller, decision)
 }
 
 // respondToApproval journals the decision and answers 202 with what was recorded.
@@ -203,20 +237,23 @@ func (h *RunControllerHandlers) reject(w http.ResponseWriter, r *http.Request) {
 // becomes true when Temporal accepts the signal, so journalling first would assert something that had
 // not happened yet. The rule both follow: write the record as soon as the fact is true, and never sooner.
 func (h *RunControllerHandlers) respondToApproval(
-	w http.ResponseWriter, r *http.Request, decision runcontroller.ApprovalDecision,
+	w http.ResponseWriter, r *http.Request, caller auth.Caller, decision runcontroller.ApprovalDecision,
 ) {
-	journal := h.journalApproval(r.Context(), r.PathValue("run_id"), decision)
+	journal := h.journalApproval(r.Context(), r.PathValue("run_id"), caller, decision)
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"approval_id":    decision.ApprovalID,
 		"tool_call_hash": decision.ToolCallHash,
 		"outcome":        checkpoint.OutcomeForApproval(decision.Approved),
-		"journalled":     journal.Journalled,
-		"journal":        journal,
+		// Echoed back, because the caller that approved should be able to see the name the journal
+		// recorded rather than trust that it matched.
+		"decided_by": caller.ID,
+		"journalled": journal.Journalled,
+		"journal":    journal,
 	})
 }
 
 func (h *RunControllerHandlers) journalApproval(
-	ctx context.Context, runID string, decision runcontroller.ApprovalDecision,
+	ctx context.Context, runID string, caller auth.Caller, decision runcontroller.ApprovalDecision,
 ) approvalJournalResult {
 	if h.Checkpointer == nil {
 		return approvalJournalResult{Reason: "this control plane has no checkpointer configured"}
@@ -239,8 +276,18 @@ func (h *RunControllerHandlers) journalApproval(
 	if err != nil {
 		return approvalJournalResult{Reason: err.Error()}
 	}
-	payload, err := checkpoint.OutcomePayload(
-		checkpoint.OutcomeForApproval(decision.Approved), "decided by a person via the run controller", detail,
+	// SEC-005: the record names WHO, and the reason stops claiming what this code could not know.
+	//
+	// It used to read "decided by a person via the run controller". Nothing verified that: the endpoint
+	// was unauthenticated, so the only true statement was "something that could reach the port". An
+	// audit line asserting a person was involved, on a step whose whole purpose is that a person was
+	// involved, is the most expensive kind of nearly-correct — and the kind this repo keeps finding in
+	// its own artefacts. Now the kind comes from the caller's own declaration in the bundle.
+	payload, err := checkpoint.OutcomePayloadDecidedBy(
+		checkpoint.OutcomeForApproval(decision.Approved),
+		fmt.Sprintf("decided by %s %q via the run controller", caller.Kind, caller.ID),
+		caller.ID,
+		detail,
 	)
 	if err != nil {
 		return approvalJournalResult{Reason: err.Error()}

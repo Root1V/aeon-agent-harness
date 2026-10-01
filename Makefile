@@ -65,6 +65,7 @@ test-python-integration: ## Run Python tests against a real Tool Gateway + Postg
 		-e AEON_TEST_OTEL_ENDPOINT="otel-collector:4318" \
 		-e AEON_TEST_TEMPO_QUERY_URL="http://tempo:3200" \
 		-e AEON_TOOL_EXECUTION_MODE=local-ledger \
+		-e AEON_CALLER_TOKEN="$(or $(AEON_CALLER_TOKEN),dev-test-token-not-a-secret)" \
 		python:3.13-slim sh -c \
 		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q tests/integration/test_tool_execution_through_gateway.py tests/integration/test_end_to_end_tracing.py tests/integration/test_argus_semconv_conformance.py tests/integration/test_approval_wait_is_observable.py tests/integration/test_deep_research_workflow.py"
 	$(COMPOSE) --profile core --profile obs stop postgres toolgw controlplane otel-collector tempo
@@ -102,6 +103,7 @@ test-mdl-015: ## Run the real-platform acceptance tests (real inference, real mo
 		-e AEON_TEST_MODELGW_ADDR="modelgw:9402" \
 		-e AEON_TEST_TOOLGW_ADDR="toolgw:9403" \
 		-e AEON_TOOL_EXECUTION_MODE=local-ledger \
+		-e AEON_CALLER_TOKEN="$(or $(AEON_CALLER_TOKEN),dev-worker-token-not-a-secret)" \
 		python:3.13-slim sh -c \
 		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q -s tests/integration/test_deep_research_against_real_prometheus.py"
 	$(COMPOSE) --profile core --profile obs stop postgres modelgw toolgw otel-collector

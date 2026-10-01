@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/aeon-ai/aeon/go/internal/api"
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/circuitbreaker"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	"github.com/aeon-ai/aeon/go/internal/store"
@@ -92,7 +93,10 @@ func main() {
 	checkpointHandlers := &api.CheckpointHandlers{Checkpointer: s.Checkpointer()}
 	checkpointHandlers.Register(mux)
 
-	srv := httpserver.New("aeon-controlplane", mux)
+	// SEC-005: every route but /healthz and /readyz is behind this. Fatal when unconfigured — see
+	// auth.MustLoadFromEnv for why a warning would be worse than not starting.
+	callers := auth.MustLoadFromEnv("aeon-controlplane")
+	srv := httpserver.New("aeon-controlplane", mux, callers)
 	log.Println("aeon-controlplane starting (Agent/Tool registries + Memory Store/Candidate Pipeline + circuit breaker + checkpoint seam live; policy/approvals not yet implemented — see roadmap.md F0/F4)")
 	httpserver.MustListenAndServe(srv)
 }

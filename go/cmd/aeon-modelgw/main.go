@@ -30,6 +30,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/aeon-ai/aeon/go/internal/api"
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/finops"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	"github.com/aeon-ai/aeon/go/internal/modelgateway"
@@ -99,7 +100,10 @@ func main() {
 		(&api.QualityScoreHandlers{Scores: qualityScores}).Register(mux)
 	}
 
-	srv := httpserver.New("aeon-modelgw", mux)
+	// SEC-005: every route but /healthz and /readyz is behind this. Fatal when unconfigured — see
+	// auth.MustLoadFromEnv for why a warning would be worse than not starting.
+	callers := auth.MustLoadFromEnv("aeon-modelgw")
+	srv := httpserver.New("aeon-modelgw", mux, callers)
 	log.Println("aeon-modelgw starting")
 	httpserver.MustListenAndServe(srv)
 }

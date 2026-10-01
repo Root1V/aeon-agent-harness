@@ -180,7 +180,7 @@ func TestRunStartedOverHTTPIsOneTraceDownToTheWorker(t *testing.T) {
 // one hop and not the other, and nothing else in this repo would notice.
 func TestTemporalAndHTTPHopsCarryTheSameFormats(t *testing.T) {
 	httpFields := map[string]bool{}
-	for _, f := range tracing.Propagator().Fields() {
+	for _, f := range tracing.HTTPPropagator().Fields() {
 		httpFields[f] = true
 	}
 	temporalFields := map[string]bool{}
@@ -188,8 +188,8 @@ func TestTemporalAndHTTPHopsCarryTheSameFormats(t *testing.T) {
 		temporalFields[f] = true
 	}
 	if len(httpFields) == 0 {
-		t.Fatalf("the HTTP propagator carries no fields at all — Go's global default is a no-op, and a "+
-			"no-op here means nothing propagates over HTTP: %v", tracing.Propagator())
+		t.Fatalf("the composite Init installs carries no fields at all, so nothing would propagate over "+
+			"HTTP: %v", tracing.HTTPPropagator())
 	}
 	for f := range httpFields {
 		if !temporalFields[f] {

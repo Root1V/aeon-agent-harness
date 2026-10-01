@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -62,7 +61,7 @@ func newDedupeTestServer(t *testing.T, tool *countingTool, toolName string, with
 
 	mux := http.NewServeMux()
 	handlers.Register(mux)
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux, "deep-research-general@0.1.0"))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -70,10 +69,7 @@ func newDedupeTestServer(t *testing.T, tool *countingTool, toolName string, with
 func postExecuteBody(t *testing.T, srv *httptest.Server, body map[string]any) (int, map[string]any) {
 	t.Helper()
 	raw, _ := json.Marshal(body)
-	resp, err := http.Post(srv.URL+"/execute", "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("POST /execute: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/execute", raw)
 	defer resp.Body.Close()
 	var parsed map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&parsed)
@@ -227,7 +223,7 @@ func TestToolExecutionIsDeduplicatedByIdempotencyKey(t *testing.T) {
 		}
 		mux := http.NewServeMux()
 		(&ToolGatewayHandlers{Policy: engine, Executor: executor, Executions: newAPITestStore(t).ToolExecutions()}).Register(mux)
-		srv := httptest.NewServer(mux)
+		srv := httptest.NewServer(authWrap(t, mux, "deep-research-general@0.1.0"))
 		t.Cleanup(srv.Close)
 
 		key := newKey("inflight")
@@ -250,10 +246,7 @@ func TestToolExecutionIsDeduplicatedByIdempotencyKey(t *testing.T) {
 
 		// The first call is now inside the tool, holding the claim.
 		raw2, _ := json.Marshal(body)
-		resp, err := http.Post(srv.URL+"/execute", "application/json", bytes.NewReader(raw2))
-		if err != nil {
-			t.Fatalf("second POST: %v", err)
-		}
+		resp := postJSONAuthed(t, srv.URL+"/execute", raw2)
 		secondStatus := resp.StatusCode
 		retryAfter := resp.Header.Get("Retry-After")
 		var secondBody map[string]any

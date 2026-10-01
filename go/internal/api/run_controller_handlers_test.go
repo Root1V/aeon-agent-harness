@@ -2,7 +2,6 @@ package api
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -40,7 +39,10 @@ func newRunControllerTestServer(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	handlers := &RunControllerHandlers{Controller: runcontroller.New(c, "")}
 	handlers.Register(mux)
-	srv := httptest.NewServer(mux)
+	// SEC-005: wrapped like the real binary, with a caller allowed to approve. Unwrapped, every
+	// approve/reject in this test gets a 401 — which is the handler failing closed on a missing caller,
+	// correctly, and not something to work around by taking the guard out of the handler.
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -66,10 +68,7 @@ func startRun(t *testing.T, srv *httptest.Server, runID string, graph map[string
 func startRunWithBudgets(t *testing.T, srv *httptest.Server, runID string, graph, budgets map[string]any) {
 	t.Helper()
 	raw, _ := json.Marshal(startRunRequest{RunID: runID, Graph: graph, Budgets: budgets})
-	resp, err := http.Post(srv.URL+"/runs", "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("POST /runs: %v", err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/runs", raw)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("POST /runs status = %d, want 201", resp.StatusCode)
@@ -78,10 +77,7 @@ func startRunWithBudgets(t *testing.T, srv *httptest.Server, runID string, graph
 
 func postAction(t *testing.T, srv *httptest.Server, runID, action string) {
 	t.Helper()
-	resp, err := http.Post(srv.URL+"/runs/"+runID+"/"+action, "application/json", nil)
-	if err != nil {
-		t.Fatalf("POST /runs/%s/%s: %v", runID, action, err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/runs/"+runID+"/"+action, nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("POST /runs/%s/%s status = %d, want 202", runID, action, resp.StatusCode)
@@ -91,10 +87,7 @@ func postAction(t *testing.T, srv *httptest.Server, runID, action string) {
 func postApprovalDecision(t *testing.T, srv *httptest.Server, runID, action, toolCallHash string) *http.Response {
 	t.Helper()
 	raw, _ := json.Marshal(approvalDecisionRequest{ToolCallHash: toolCallHash})
-	resp, err := http.Post(srv.URL+"/runs/"+runID+"/"+action, "application/json", bytes.NewReader(raw))
-	if err != nil {
-		t.Fatalf("POST /runs/%s/%s: %v", runID, action, err)
-	}
+	resp := postJSONAuthed(t, srv.URL+"/runs/"+runID+"/"+action, raw)
 	return resp
 }
 
@@ -126,10 +119,7 @@ func sequentialGraph(prefix string, n int) map[string]any {
 
 func getStatus(t *testing.T, srv *httptest.Server, runID string) map[string]any {
 	t.Helper()
-	resp, err := http.Get(srv.URL + "/runs/" + runID)
-	if err != nil {
-		t.Fatalf("GET /runs/%s: %v", runID, err)
-	}
+	resp := getAuthed(t, srv.URL+"/runs/"+runID)
 	defer resp.Body.Close()
 	var parsed map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
@@ -235,10 +225,7 @@ func TestRunControllerLifecycle(t *testing.T) {
 		runID := newRunID("stream")
 		startRun(t, srv, runID, simpleGraph("stream-test.txt"))
 
-		resp, err := http.Get(srv.URL + "/runs/" + runID + "/stream")
-		if err != nil {
-			t.Fatalf("GET /runs/%s/stream: %v", runID, err)
-		}
+		resp := getAuthed(t, srv.URL+"/runs/"+runID+"/stream")
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("stream status = %d, want 200", resp.StatusCode)

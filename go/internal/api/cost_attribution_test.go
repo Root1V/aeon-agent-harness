@@ -209,10 +209,7 @@ func TestCostIsAttributedToRunAndAgent(t *testing.T) {
 	})
 
 	t.Run("the dashboard shows both attributions and names what is unattributed", func(t *testing.T) {
-		resp, err := http.Get(srv.URL + "/finops/costs")
-		if err != nil {
-			t.Fatalf("GET /finops/costs: %v", err)
-		}
+		resp := getAuthed(t, srv.URL+"/finops/costs")
 		defer resp.Body.Close()
 		// io.ReadAll and not a single Read into a fixed buffer: this page grows with the shared
 		// database, and a fixed buffer made an earlier version of this assertion fail once the page
