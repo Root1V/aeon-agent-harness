@@ -34,16 +34,26 @@ test-go-integration: ## Run Go tests against real Postgres + Temporal + a real w
 	# la suite puede fallar por código viejo — o, peor, PASAR probándolo. Observado las dos veces:
 	# aquí con los cambios de TOOL-004, y en test-python-integration con una toolgw anterior a
 	# TOOL-005 que ignoraba la idempotency_key por completo.
-	$(COMPOSE) --profile core --profile obs up -d --build --wait postgres temporal worker otel-collector tempo searxng
-	docker run --rm --network aeon_default -v "$(PWD):/repo" -w /repo/go \
+	# toolgw is in this list because of what its absence was doing: TestEnforcementSeamLatencyByDeployment
+	# Shape and TestSeamShapesAreBothReachable both self-skip on AEON_TEST_TOOLGW_ADDR, so INT-010's
+	# latency measurement had never run in any target. Found by counting what the suite skips
+	# (scripts/check_skips.py), which is the whole reason that script exists.
+	$(COMPOSE) --profile core --profile obs up -d --build --wait postgres temporal worker toolgw otel-collector tempo searxng
+	# The docker socket, which this target did NOT mount until CI started counting skips: TOOL-003's five
+	# sandbox tests were reporting "docker daemon not reachable" in the one target whose whole claim is
+	# that everything is real. They ran under `make test-go`, so nothing was uncovered — but the target
+	# that looks most thorough was the one skipping them.
+	docker run --rm --network aeon_default -v "$(PWD):/repo" -v /var/run/docker.sock:/var/run/docker.sock -w /repo/go \
 		-e AEON_TEST_PG_DSN="postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable" \
 		-e AEON_TEST_TEMPORAL_ADDRESS="temporal:7233" \
+		-e AEON_TEST_TOOLGW_ADDR="toolgw:9403" \
+		-e AEON_CALLER_TOKEN="$(or $(AEON_CALLER_TOKEN),dev-test-token-not-a-secret)" \
 		-e AEON_TEST_OTEL_ENDPOINT="otel-collector:4318" \
 		-e AEON_TEST_TEMPO_QUERY_URL="http://tempo:3200" \
 		-e AEON_TEST_SEARXNG_URL="http://searxng:8080" \
 		golang:1.25-alpine sh -c \
 		"apk add --no-cache postgresql-client >/dev/null && until pg_isready -h postgres -U aeon >/dev/null 2>&1; do sleep 1; done && go test ./... -v"
-	$(COMPOSE) --profile core --profile obs stop postgres temporal worker otel-collector tempo searxng
+	$(COMPOSE) --profile core --profile obs stop postgres temporal worker toolgw otel-collector tempo searxng
 
 test-python-integration: ## Run Python tests against a real Tool Gateway + Postgres (starts/stops them around the run)
 	# TOOL-004: the worker's execute_tool talks to the real aeon-toolgw over HTTP, so proving it
@@ -67,7 +77,7 @@ test-python-integration: ## Run Python tests against a real Tool Gateway + Postg
 		-e AEON_TOOL_EXECUTION_MODE=local-ledger \
 		-e AEON_CALLER_TOKEN="$(or $(AEON_CALLER_TOKEN),dev-test-token-not-a-secret)" \
 		python:3.13-slim sh -c \
-		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q tests/integration/test_tool_execution_through_gateway.py tests/integration/test_end_to_end_tracing.py tests/integration/test_argus_semconv_conformance.py tests/integration/test_approval_wait_is_observable.py tests/integration/test_deep_research_workflow.py"
+		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q -rs tests/integration/test_tool_execution_through_gateway.py tests/integration/test_end_to_end_tracing.py tests/integration/test_argus_semconv_conformance.py tests/integration/test_approval_wait_is_observable.py tests/integration/test_deep_research_workflow.py"
 	$(COMPOSE) --profile core --profile obs stop postgres toolgw controlplane otel-collector tempo
 
 test-python: ## Run Python unit + integration tests in a throwaway container via uv

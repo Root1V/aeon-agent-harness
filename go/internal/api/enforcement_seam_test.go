@@ -16,6 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/toolexec"
@@ -68,7 +69,11 @@ func newEnforcementSeamServer(t *testing.T, checkpointer bool) *httptest.Server 
 		(&CheckpointHandlers{Checkpointer: s.Checkpointer()}).Register(mux)
 	}
 	handlers.Register(mux)
-	srv := httptest.NewServer(authWrap(t, mux, "deep-research-general@0.1.0"))
+	// The SHIPPED bundle on the local shape too, not this package's own test caller. The remote shape of
+	// this comparison is the real aeon-toolgw container, which verifies against the shipped bundle — so
+	// using a different one locally would mean the two shapes authenticate differently, and the latency
+	// comparison would be measuring that difference along with the deployment one.
+	srv := httptest.NewServer(auth.Require(shippedPlusTestCallers(t, "deep-research-general@0.1.0"))(mux))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -260,8 +265,22 @@ func TestEnforcementSeamLatencyByDeploymentShape(t *testing.T) {
 		// Warmed first, and the warm-up is not cosmetic: the first call pays TCP setup and, on the remote
 		// shape, DNS. Reporting that as the per-call cost of enforcement would overstate it by an order of
 		// magnitude and send Synaptum to the wrong deployment.
+		// SEC-005: both shapes authenticate now, and this helper is where that was missing. The local
+		// shape is wrapped like the binary and the remote one IS the binary, so a call with no credential
+		// gets a 401 from both — and this test had never run in any target, so nothing said so until
+		// toolgw was added to the Go integration target.
+		post := func() (*http.Response, error) {
+			req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+seamCallerToken())
+			return client.Do(req)
+		}
+
 		for i := 0; i < 5; i++ {
-			resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+			resp, err := post()
 			if err != nil {
 				t.Fatalf("%s: warm-up: %v", label, err)
 			}
@@ -272,7 +291,7 @@ func TestEnforcementSeamLatencyByDeploymentShape(t *testing.T) {
 		samples := make([]time.Duration, 0, n)
 		for i := 0; i < n; i++ {
 			start := time.Now()
-			resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+			resp, err := post()
 			if err != nil {
 				t.Fatalf("%s: %v", label, err)
 			}
@@ -397,4 +416,17 @@ func TestSeamShapesAreBothReachable(t *testing.T) {
 	}
 	conn.Close()
 	t.Log(fmt.Sprintf("both shapes reachable: remote=%s and a local handler in-process", remote))
+}
+
+// seamCallerToken is the credential the latency measurement presents.
+//
+// The REMOTE shape is the real aeon-toolgw container, which verifies against the shipped development
+// bundle — so this has to be a token from that bundle, not the one this package mints for its own
+// wrapped servers. AEON_CALLER_TOKEN lets the target override it; the default is the bundle's
+// `integration-test` caller, which is declared mayActAs deep-research-general@0.1.0.
+func seamCallerToken() string {
+	if t := os.Getenv("AEON_CALLER_TOKEN"); t != "" {
+		return t
+	}
+	return "dev-test-token-not-a-secret"
 }
