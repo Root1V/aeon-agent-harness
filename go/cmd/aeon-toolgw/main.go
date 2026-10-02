@@ -86,6 +86,37 @@ func main() {
 		log.Println("aeon-toolgw: search.web not registered (set AEON_WEBSEARCH_SEARXNG_URL)")
 	}
 
+	// TOOL-008: repository.read over a real directory. Registered only when a root is configured, for
+	// the same reason as search.web above — and this tool is the reason that rule had a hole: it was in
+	// the policy bundle and in the agent manifest's tools.allow with NOTHING behind it, so the manifest
+	// declared a tool this gateway answered "unknown tool" for. CI-001 found it by counting skips.
+	//
+	// The root is opened ONCE, here, and the handle is what the tool uses — so containment is decided at
+	// startup by the operating system rather than per call by string comparison. A root that is missing
+	// or is not a directory is a configuration error worth failing on: a gateway that advertises
+	// repository.read and answers every call with an error is the "present but lying" state TOOL-007
+	// removed.
+	if repoRoot := os.Getenv("AEON_REPOSITORY_ROOT"); repoRoot != "" {
+		// The root is checked for credentials BEFORE it is opened, and a failure is fatal. This is not
+		// defensive programming: the first version of this feature pointed the root at the whole
+		// repository and a probe through the real gateway returned `.env` — including
+		// PROMETHEUS_CLIENT_SECRET — to a caller holding the public development token. The tool was
+		// doing what it was told. Refusing to start is the only answer that does not depend on somebody
+		// noticing.
+		if err := toolexec.CheckRepositoryRoot(repoRoot); err != nil {
+			log.Fatalf("aeon-toolgw: %v", err)
+		}
+		root, err := os.OpenRoot(repoRoot)
+		if err != nil {
+			log.Fatalf("aeon-toolgw: AEON_REPOSITORY_ROOT=%s is not an openable directory: %v", repoRoot, err)
+		}
+		defer root.Close()
+		toolexec.RegisterRepositoryReadTool(executor, root, repoRoot)
+		log.Printf("aeon-toolgw: repository.read live over %s (read-only, contained by os.Root)", repoRoot)
+	} else {
+		log.Println("aeon-toolgw: repository.read not registered (set AEON_REPOSITORY_ROOT)")
+	}
+
 	// SEC-002: a real Secret Broker — callers get short-lived, opaque lease references (POST
 	// /secrets/issue), never the raw values; only "secrets.whoami"'s own server-side execution ever
 	// resolves one (go/internal/secrets, go/internal/toolexec/secrets_tool.go). AEON_SECRET_NAMES is

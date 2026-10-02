@@ -101,7 +101,20 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 > workflow lo deja pasando para siempre. El guard que cuenta los saltos encontró tres huecos en los
 > targets que ya teníamos — detalles en `roadmap.md`.
 
-### No existe ninguna herramienta permitida que corra sin red
+### ~~No existe ninguna herramienta permitida que corra sin red~~ — CERRADA como `TOOL-008` el 2026-10-02
+
+> Cerrada implementando `repository.read`, que era la opción que la entrada recomendaba. Lo que la
+> entrada no podía anticipar: **la primera versión entregaba `.env`**. Montar el repositorio entero como
+> root parecía la lectura obvia de «repository.read» y una sonda devolvió el secreto de Prometheus a un
+> llamante con el token público. El montaje de referencia es ahora `docs/` y el gateway se niega a
+> arrancar con un root que contenga credenciales. Detalles en `roadmap.md`.
+>
+> **Sigue abierto `artifact.read`**, que está en el bundle y en el manifiesto con la misma falta de
+> implementación. No lo arrastro aquí porque su contrato es distinto —un artefacto producido por un run,
+> no un fichero del repo— y porque su root natural es el `ObservationStore`, que hoy escribe en disco
+> local (ver la entrada del context inspector).
+
+### No existe ninguna herramienta permitida que corra sin red (contexto original)
 
 - **Descripción:** el despliegue de referencia registra exactamente dos herramientas y las dos necesitan
   algo externo: `search.web` sale a las máquinas de búsqueda públicas (que nos limitan por tasa) y
