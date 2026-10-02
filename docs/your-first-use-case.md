@@ -101,9 +101,14 @@ Three things, stated plainly because finding them yourself is worse:
    instance the public engines are not rate-limiting; `search.rag` needs the platform's embedding
    credentials; `shell.exec` exists, is sandboxed, and the reference bundle forbids it for everyone.
    Your own tools go in `go/internal/toolexec` and are registered in `go/cmd/aeon-toolgw`.
-3. **Budgets stop tool calls, depth and wall-clock — not tokens or money.** `max_tool_calls`,
-   `max_depth` and `deadline_seconds` are enforced; `max_tokens` and `max_cost_usd` are declared and
-   not. A loop that stays inside its tool-call budget can still spend.
+3. **Two budgets, enforced in two places, and one gap left.** Per run, in the graph request:
+   `max_tool_calls`, `max_depth` and `deadline_seconds` are hard stops in the Graph Runtime. Per run,
+   from the agent manifest's `spec.runtime.budgets`: `costUsd` and `modelCalls` are enforced by the
+   Model Gateway, which refuses a call with **402** once the ledger says the run has spent its ceiling
+   — checked before each call, so the overshoot is bounded by one call's cost and not by nothing. The
+   ceiling comes from the manifest and not the request, because a caller that declares its own ceiling
+   can raise it. Still **not** enforced: a token ceiling, and the Graph Runtime's own
+   `budgets.max_tokens` / `max_cost_usd` fields.
 
 ## Where the stack is
 

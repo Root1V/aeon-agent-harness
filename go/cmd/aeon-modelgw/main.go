@@ -74,6 +74,8 @@ func main() {
 
 	var ledger *store.FinOpsLedger
 	var qualityScores *store.QualityScoreStore
+	// MDL-017: the agent registry, for the cost ceiling the manifest declares.
+	var agents *store.AgentRegistry
 	if dsn := os.Getenv("AEON_PG_DSN"); dsn != "" {
 		s, err := store.Connect(context.Background(), dsn)
 		if err != nil {
@@ -82,6 +84,7 @@ func main() {
 		defer s.Close()
 		ledger = s.FinOpsLedger()
 		log.Println("aeon-modelgw: FinOps cost ledger live (GET /finops/costs)")
+		agents = s.AgentRegistry()
 
 		qualityScores = s.QualityScores(qualityScoreThreshold())
 		gw.Quality = qualityScores
@@ -91,7 +94,15 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	(&api.ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger}).Register(mux)
+	// MDL-017: the registry the cost ceiling is read from. Optional like the ledger, and the log says
+	// which of the three states this deployment is in — enforcing, or not, and why — because a gateway
+	// that has quietly stopped capping spend is the worst of the three.
+	if agents != nil && ledger != nil {
+		log.Println("aeon-modelgw: cost ceiling live (spec.runtime.budgets from the agent registry; a call naming a run and an agent is capped)")
+	} else {
+		log.Println("aeon-modelgw: cost ceiling NOT enforced (needs AEON_PG_DSN for both the agent registry and the cost ledger)")
+	}
+	(&api.ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger, Agents: agents}).Register(mux)
 	(&api.OpenAICompatibleHandlers{Gateway: gw, Bundle: bundle}).Register(mux)
 	if ledger != nil {
 		(&api.FinOpsHandlers{Ledger: ledger}).Register(mux)
