@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -141,7 +142,10 @@ def _start_fake_model_gateway() -> tuple[ThreadingHTTPServer, threading.Thread]:
     return server, thread
 
 
-def _spawn_worker(address: str, task_queue: str, modelgw_addr: str, controlplane_addr: str = "") -> subprocess.Popen:
+def _spawn_worker(
+    address: str, task_queue: str, modelgw_addr: str, controlplane_addr: str = "",
+    env_extra: dict[str, str] | None = None,
+) -> subprocess.Popen:
     env = os.environ.copy()
     env["AEON_TEMPORAL_ADDRESS"] = address
     env["AEON_TASK_QUEUE"] = task_queue
@@ -152,6 +156,9 @@ def _spawn_worker(address: str, task_queue: str, modelgw_addr: str, controlplane
     if controlplane_addr:
         env["AEON_CONTROLPLANE_ADDR"] = controlplane_addr
     env["PYTHONPATH"] = str(REPO_PYTHON_DIR) + os.pathsep + env.get("PYTHONPATH", "")
+    if env_extra:
+        env.update(env_extra)
+
     return subprocess.Popen(
         [sys.executable, "-m", "aeon_worker"], cwd=str(REPO_PYTHON_DIR), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
     )
@@ -214,6 +221,8 @@ async def test_deep_research_workflow_produces_a_verified_report_end_to_end():
 
 
 CONTROLPLANE_ADDR = os.environ.get("AEON_TEST_CONTROLPLANE_ADDR", "")
+# TOOL-009: the read half of the artifact loop runs against the real gateway.
+TOOLGW_ADDR = os.environ.get("AEON_TEST_TOOLGW_ADDR", "")
 
 
 @pytest.mark.asyncio
@@ -307,6 +316,90 @@ async def test_every_model_call_in_a_run_says_which_run_and_agent_it_is_for():
         "\nOBS-003b: "
         + ", ".join(f"{name}={len(bodies)}" for name, bodies in by_stage.items())
         + f" model call(s), all attributed to run {report.run_id}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_runs_report_is_readable_by_id_through_the_real_gateway():
+    """TOOL-009: a run parks its report, and `artifact.read` fetches it back by the id the run reported.
+
+    THE LOOP IS THE POINT, not either half. `artifact.read` was in the policy bundle and in the agent
+    manifest's tools.allow with no implementation — and implementing the reader alone would have left a
+    reader over an empty store, which is the defect this project found three times this week (OBS-003b's
+    cost columns, MEM-003's reflection, DR-001's pipeline: both ends built, the wire never run). Nothing
+    in the deployment produced an artifact before this: CTX-003's offload store is a Python module with
+    no caller, and MinIO runs in the reference stack with not one line of code talking to it.
+
+    So this test writes with a real run and reads with the real gateway, in different processes, through
+    a store they only share because the deployment says they do. Real throughout except the model.
+
+    WHAT IT WOULD CATCH THAT A UNIT TEST WOULD NOT: the two halves agreeing on the id format and on the
+    directory. The reader accepts `art_<hex>` and nothing else (go/internal/toolexec.ArtifactIDPattern);
+    the writer derives the id from uuid5 in Python. Those are two independent spellings of one contract,
+    and the only way to know they match is to pass an id from one to the other.
+    """
+    if not TOOLGW_ADDR:
+        pytest.skip("AEON_TEST_TOOLGW_ADDR not set — the read half needs the real Tool Gateway")
+    artifact_root = os.environ.get("AEON_TEST_ARTIFACT_ROOT")
+    if not artifact_root:
+        pytest.skip("AEON_TEST_ARTIFACT_ROOT not set — needs the store the gateway reads (see make test-python-integration)")
+
+    task_queue = f"aeon-artifact-test-{uuid.uuid4().hex[:8]}"
+    gateway_server, _ = _start_fake_model_gateway()
+    try:
+        modelgw_addr = f"127.0.0.1:{gateway_server.server_address[1]}"
+        async with await WorkflowEnvironment.start_local() as env:
+            address = env.client.service_client.config.target_host
+            # The worker writes into the SAME directory the gateway container reads. That is the one
+            # thing this test cannot fake: if the two paths disagree, the read below 404s.
+            worker = _spawn_worker(address, task_queue, modelgw_addr, env_extra={"AEON_ARTIFACT_ROOT": artifact_root})
+            try:
+                time.sleep(0.5)
+                _assert_still_running(worker)
+                report = await start_deep_research_run(
+                    "what is the state of the art in agent harnesses?",
+                    candidates=[{"provider": "fake", "model": "fake-model", "priority": 0}],
+                    model="fake-model",
+                    temporal_address=address,
+                    task_queue=task_queue,
+                )
+            finally:
+                worker.terminate()
+                try:
+                    worker.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    worker.kill()
+                    worker.wait(timeout=10)
+    finally:
+        gateway_server.shutdown()
+
+    assert report.artifact_note == "", f"the report was not parked: {report.artifact_note}"
+    assert report.report_artifact_id.startswith("art_"), (
+        f"report_artifact_id = {report.report_artifact_id!r}. The reader accepts art_<hex> and nothing "
+        "else, so a differently-shaped id here means the two halves of this contract disagree"
+    )
+
+    # READ IT BACK THROUGH THE GATEWAY, which is a different process reading a different mount.
+    body = json.dumps({
+        "agent_manifest_ref": "deep-research-general@0.1.0",
+        "tool_name": "artifact.read",
+        "args": {"artifact_id": report.report_artifact_id},
+    }).encode()
+    request = urllib.request.Request(
+        f"http://{TOOLGW_ADDR}/execute", data=body, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + os.environ.get("AEON_CALLER_TOKEN", "dev-test-token-not-a-secret"),
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as resp:
+        answer = json.loads(resp.read())
+
+    assert answer.get("allowed") is True, f"the gateway refused the read: {answer}"
+    content = answer.get("result", {}).get("content", "")
+    assert content == report.report_text, (
+        "the artifact's content is not the report the run produced. The two agree on the id and not on "
+        f"the bytes, which is worse than not finding it: got {content[:120]!r}"
     )
 
 

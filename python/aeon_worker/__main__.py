@@ -19,6 +19,7 @@ from temporalio.contrib.opentelemetry import TracingInterceptor
 from temporalio.worker import Worker
 
 from aeon_worker.activities.approval_activities import record_approval_wait_activity
+from aeon_worker.activities.artifact_activities import write_artifact_activity
 from aeon_worker.activities.deep_research_activities import build_report_activity, plan_research_activity, research_subtask_activity
 from aeon_worker.activities.framework_adapter_activities import (
     run_claude_agent_interop_activity,
@@ -87,6 +88,8 @@ async def main() -> None:
             # swallows the failure by design, so the run would work and the wait would stay invisible,
             # which is the exact defect OBS-010 exists to remove.
             record_approval_wait_activity,
+            # TOOL-009: parks a run's report where artifact.read can fetch it by id.
+            write_artifact_activity,
         ],
     )
     logger.info("worker ready, polling task_queue=%s", task_queue)

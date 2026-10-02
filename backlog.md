@@ -109,10 +109,9 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 > llamante con el token público. El montaje de referencia es ahora `docs/` y el gateway se niega a
 > arrancar con un root que contenga credenciales. Detalles en `roadmap.md`.
 >
-> **Sigue abierto `artifact.read`**, que está en el bundle y en el manifiesto con la misma falta de
-> implementación. No lo arrastro aquí porque su contrato es distinto —un artefacto producido por un run,
-> no un fichero del repo— y porque su root natural es el `ObservationStore`, que hoy escribe en disco
-> local (ver la entrada del context inspector).
+> **`artifact.read` cerrado como `TOOL-009` el 2026-10-02**, con su escritor: un run de Deep Research
+> aparca su informe y el gateway lo lee por id. Ya no queda ninguna herramienta declarada sin
+> implementación en el manifiesto de referencia.
 
 ### No existe ninguna herramienta permitida que corra sin red (contexto original)
 
@@ -133,6 +132,21 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   necesita red, y ya está declarado en el manifiesto y permitido por la política, así que hoy es una
   promesa incumplida— o quitarlo del manifiesto. Lo primero cierra además el hueco de CI.
 - **Coste:** S.
+
+### MinIO corre en el stack de referencia y nadie le habla
+
+- **Descripción:** el servicio `minio` está en los cuatro perfiles de `deploy/compose` y **ni una línea
+  de Go o de Python lo usa**. El único sitio donde aparece es un comentario en
+  `python/aeon_context/offload.py` diciendo que un despliegue de producción apuntaría ahí el
+  `ObservationStore`. Encontrado al buscar dónde vivían los artefactos para `TOOL-009`, que acabó
+  usando un directorio compartido precisamente porque no había cliente de objetos.
+- **Fase objetivo:** cuando los artefactos tengan que sobrevivir al host o compartirse entre máquinas.
+- **Criterio de entrada:** ninguno especial, y **una decisión primero**: o se implementa el
+  `ObservationStore` sobre S3 y `artifact.read`/`write_artifact_activity` pasan por ahí, o **se quita
+  MinIO del compose**. Un servicio corriendo para nadie es un recurso consumido y una capacidad
+  aparente — la misma familia que `deploy/helm` vacío. Lo segundo es gratis y honesto hasta que lo
+  primero haga falta.
+- **Coste:** S (quitarlo) / M (cliente S3 real detrás del mismo Protocol).
 
 ### El corpus dorado de identidad de paso solo se puede verificar en este portátil
 

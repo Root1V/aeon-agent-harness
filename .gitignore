@@ -39,3 +39,7 @@ deploy/compose/.data/
 
 # Temporal / logs
 *.log
+
+# TOOL-009: the local artifact store (run outputs). Shared between the worker and the gateway
+# through a host mount, so it is a real directory here and never committed.
+.artifacts/

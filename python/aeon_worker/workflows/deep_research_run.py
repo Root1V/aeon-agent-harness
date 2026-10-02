@@ -31,6 +31,7 @@ with workflow.unsafe.imports_passed_through():
     from aeon_profiles.deep_research.reporter import ReportDraft, select_allowed_claims
     from aeon_profiles.deep_research.researcher import ResearchResult, ToolCallRecord
     from aeon_profiles.deep_research.sufficiency_gate import evaluate_sufficiency
+    from aeon_worker.activities.artifact_activities import WriteArtifactInput, write_artifact_activity
     from aeon_worker.activities.memory_activities import (
         ReflectInput,
         ReflectOutput,
@@ -86,6 +87,11 @@ class DeepResearchWorkflowResult:
     # misconfigured deployment look like a run the model had no lessons from.
     memory_candidates_written: int = 0
     reflection_note: str = ""
+    # TOOL-009: where the finished report was parked, so a later step — or a person — can fetch it by id
+    # instead of through Temporal. Both fields for the same reason as the two above: an empty id with a
+    # note means there was nowhere to park it, which is not the same as a run that produced no report.
+    report_artifact_id: str = ""
+    artifact_note: str = ""
 
 
 @workflow.defn
@@ -211,6 +217,19 @@ class DeepResearchWorkflow:
                 if write_output.skipped_reason:
                     reflection_note = write_output.skipped_reason
 
+        # TOOL-009: the report is parked as an artifact, AFTER the verification that decides what it is
+        # allowed to contain. Writing it earlier would park a draft and report its id as the report's.
+        #
+        # One attempt and no retry policy: the deliverable is already produced and in the result below, so
+        # a retry loop here would spend time after the work for a copy. The activity never raises — the
+        # reason travels in `note` — so this needs no try/except of its own.
+        artifact = await workflow.execute_activity(
+            write_artifact_activity,
+            WriteArtifactInput(run_id=run_id, name="report.md", content=draft.text),
+            start_to_close_timeout=_ACTIVITY_TIMEOUT,
+            retry_policy=RetryPolicy(maximum_attempts=1),
+        )
+
         return DeepResearchWorkflowResult(
             query=request.query,
             report_text=draft.text,
@@ -219,6 +238,8 @@ class DeepResearchWorkflow:
             topics_to_replan=decision.topics_to_replan,
             memory_candidates_written=candidates_written,
             reflection_note=reflection_note,
+            report_artifact_id=artifact.artifact_id,
+            artifact_note=artifact.note,
         )
 
 
