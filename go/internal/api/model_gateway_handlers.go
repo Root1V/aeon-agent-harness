@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/aeon-ai/aeon/go/internal/finops"
 	"github.com/aeon-ai/aeon/go/internal/modelgateway"
@@ -25,6 +26,10 @@ type ModelGatewayHandlers struct {
 	Gateway *modelgateway.Gateway
 	Pricing *finops.PricingTable
 	Ledger  *store.FinOpsLedger
+	// Agents is the registry the cost ceiling is read from (MDL-017). Optional: without it no ceiling
+	// is enforced, which is reported at startup rather than assumed — a gateway that silently stops
+	// enforcing budgets is worse than one that never did.
+	Agents *store.AgentRegistry
 }
 
 // Register mounts the model gateway routes on mux.
@@ -42,9 +47,10 @@ type decideRequest struct {
 	Candidates      []decideCandidate `json:"candidates"`
 	RenderedContext map[string]any    `json:"rendered_context"`
 	DataSensitivity string            `json:"data_sensitivity,omitempty"`
-	// RunID/AgentManifestRef (OBS-003, optional): tags a recorded cost event so it can later be
-	// aggregated per run/agent, not just per model. No real caller populates these yet — see
-	// backlog.md — so today every ledger row has both null.
+	// RunID/AgentManifestRef (OBS-003): tags a recorded cost event so it can be aggregated per run and
+	// per agent, not just per model — and since MDL-017 they are also what the cost ceiling is checked
+	// against. Still optional, because a call outside any run is legitimate; a call that names neither
+	// simply cannot be capped, and the gateway says so in its startup log rather than pretending.
 	RunID            string `json:"run_id,omitempty"`
 	AgentManifestRef string `json:"agent_manifest_ref,omitempty"`
 }
@@ -57,6 +63,16 @@ func (h *ModelGatewayHandlers) decide(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(body.Candidates) == 0 {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("candidates must be non-empty"))
+		return
+	}
+
+	// MDL-017: the ceiling, checked BEFORE the provider is called. After would record the spend and
+	// then refuse, which is a receipt rather than a cap.
+	if refusal := h.overBudget(r, body.RunID, body.AgentManifestRef); refusal != nil {
+		// 402 and not 429: a budget stop is not a rate limit and must not be retried. The worker maps
+		// 4xx to non-retryable (tool_activities' mapping, same reasoning), so a 5xx here would have the
+		// run keep trying a call that can never be allowed again.
+		writeJSON(w, http.StatusPaymentRequired, refusal)
 		return
 	}
 
@@ -287,4 +303,96 @@ func costModelName(pricing *finops.PricingTable, provider, model string) *string
 		return nil
 	}
 	return &rate.CostModel
+}
+
+// overBudget returns a refusal body when this run has already spent what its agent's manifest allows,
+// or nil when the call may proceed.
+//
+// WHAT IT ENFORCES, stated exactly rather than generously: spend RECORDED SO FAR against the ceiling,
+// checked before each call. A single call can therefore carry a run past its ceiling — the overshoot is
+// bounded by one call's cost, because the next one is refused. An exact cap is not available to anyone:
+// a call's cost is not known until the provider answers, so the only way to never exceed would be to
+// refuse any call that *might* exceed, which means refusing on the basis of a number nobody has.
+// Claiming an exact cap would be the kind of nearly-correct this project keeps finding.
+//
+// UNPRICED CALLS ARE REPORTED, NOT COUNTED AS ZERO. This is OBS-009's rule, already settled for the
+// circuit breaker: what is actually measured fires on real spend however much unpriced traffic sits
+// beside it, and the unpriced count travels in the answer so "at $4.90 of $5.00" stays distinguishable
+// from "at $4.90 of $5.00 plus twelve calls nobody could price".
+func (h *ModelGatewayHandlers) overBudget(r *http.Request, runID, agentRef string) map[string]any {
+	// A call that names no run cannot be capped: there is nothing to sum. Same for a call that names no
+	// agent — the ceiling lives in the manifest. Both are legitimate (a script, an eval), and the
+	// gateway's startup log says whether enforcement is configured at all.
+	if h.Agents == nil || h.Ledger == nil || runID == "" || agentRef == "" {
+		return nil
+	}
+	name, version, ok := splitManifestRef(agentRef)
+	if !ok {
+		return nil
+	}
+	record, err := h.Agents.Get(r.Context(), name, version)
+	if err != nil || record == nil {
+		// An unregistered agent is not capped, and this is the one place that decision is worth
+		// disagreeing with later: refusing would make the ceiling fail closed, at the cost of breaking
+		// every deployment whose agents are not in the registry. It is logged so the gap is visible.
+		log.Printf("aeon-modelgw: no manifest for %s, so no cost ceiling is enforced for run %s", agentRef, runID)
+		return nil
+	}
+	ceiling, problems := finops.CeilingFromManifest(record.Manifest)
+	for _, p := range problems {
+		// A budget field that does not parse is a manifest whose author believes it is enforced.
+		log.Printf("aeon-modelgw: %s budget: %s", agentRef, p)
+	}
+	if !ceiling.Declared() {
+		return nil
+	}
+
+	spend, err := h.Ledger.SpendForRun(r.Context(), runID)
+	if err != nil {
+		// The ledger is unreachable, so the spend is unknown. Allowing the call is the deliberate
+		// choice: a database blip would otherwise stop every run in flight, and the failure mode of
+		// over-spending by a window is smaller than the failure mode of a platform-wide halt. Logged,
+		// because a ceiling that is quietly not being checked is the worst of the three states.
+		log.Printf("aeon-modelgw: cannot read spend for run %s, so its ceiling is NOT enforced this call: %v", runID, err)
+		return nil
+	}
+
+	exceeded := ""
+	if ceiling.CostUSD != nil && spend.CostUSD >= *ceiling.CostUSD {
+		exceeded = fmt.Sprintf("cost: $%.4f recorded, ceiling $%.4f", spend.CostUSD, *ceiling.CostUSD)
+	} else if ceiling.ModelCalls != nil && spend.ModelCalls >= int64(*ceiling.ModelCalls) {
+		exceeded = fmt.Sprintf("model calls: %d recorded, ceiling %d", spend.ModelCalls, *ceiling.ModelCalls)
+	}
+	if exceeded == "" {
+		return nil
+	}
+
+	refusal := map[string]any{
+		"error":              "budget exceeded: " + exceeded,
+		"run_id":             runID,
+		"agent_manifest_ref": agentRef,
+		"ceiling":            ceiling.String(),
+		"spent_usd":          spend.CostUSD,
+		"model_calls":        spend.ModelCalls,
+		"retryable":          false,
+	}
+	if spend.UnpricedCalls > 0 {
+		// Surfaced in the refusal itself. The number enforced is a lower bound whenever this is
+		// non-zero, and a caller reading "$4.90 of $5.00" deserves to know the real figure is higher.
+		refusal["unpriced_calls"] = spend.UnpricedCalls
+		refusal["note"] = fmt.Sprintf(
+			"%d call(s) in this run had no known cost, so the recorded spend is a lower bound", spend.UnpricedCalls)
+	}
+	log.Printf("aeon-modelgw: run %s refused: %s (agent %s)", runID, exceeded, agentRef)
+	return refusal
+}
+
+// splitManifestRef splits "name@version", which is the form the manifest ref takes everywhere else in
+// this codebase (the Cedar principal, the policy bundle, the agent registry key).
+func splitManifestRef(ref string) (name, version string, ok bool) {
+	at := strings.LastIndex(ref, "@")
+	if at <= 0 || at == len(ref)-1 {
+		return "", "", false
+	}
+	return ref[:at], ref[at+1:], true
 }

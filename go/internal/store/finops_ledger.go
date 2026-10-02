@@ -303,3 +303,39 @@ func nullable(v string) *string {
 	}
 	return &v
 }
+
+// RunSpend is what one run has cost so far, as the ledger can honestly report it.
+//
+// THREE NUMBERS AND NOT ONE, for the reason OBS-008 and OBS-009 exist: a run whose calls include some
+// the gateway could not price has a cost that is a LOWER BOUND, and a single float cannot say so.
+// `UnpricedCalls` is what makes "you are at $4.90 of $5.00" distinguishable from "you are at $4.90 of
+// $5.00 plus twelve calls nobody could price".
+type RunSpend struct {
+	CostUSD       float64 `json:"cost_usd"`
+	PricedCalls   int64   `json:"priced_calls"`
+	UnpricedCalls int64   `json:"unpriced_calls"`
+	ModelCalls    int64   `json:"model_calls"`
+}
+
+// SpendForRun sums one run's recorded cost (MDL-017).
+//
+// Reads the ledger rather than keeping a counter in memory, and that is the point: the gateway is
+// restartable and horizontally scalable, so an in-process counter would reset on a deploy and be wrong
+// per replica — a ceiling that forgets is not a ceiling. The ledger is the same table the FinOps
+// dashboard aggregates, so the number enforced is the number an operator sees.
+func (l *FinOpsLedger) SpendForRun(ctx context.Context, runID string) (RunSpend, error) {
+	var s RunSpend
+	var sum *float64
+	err := l.pool.QueryRow(ctx,
+		`SELECT coalesce(sum(cost_usd), 0), count(*) FILTER (WHERE cost_usd IS NOT NULL),
+		        count(*) FILTER (WHERE cost_usd IS NULL), count(*)
+		 FROM model_gateway_costs WHERE run_id = $1`, runID,
+	).Scan(&sum, &s.PricedCalls, &s.UnpricedCalls, &s.ModelCalls)
+	if err != nil {
+		return RunSpend{}, fmt.Errorf("store: summing spend for run %s: %w", runID, err)
+	}
+	if sum != nil {
+		s.CostUSD = *sum
+	}
+	return s, nil
+}
