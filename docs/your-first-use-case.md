@@ -101,14 +101,19 @@ Three things, stated plainly because finding them yourself is worse:
    instance the public engines are not rate-limiting; `search.rag` needs the platform's embedding
    credentials; `shell.exec` exists, is sandboxed, and the reference bundle forbids it for everyone.
    Your own tools go in `go/internal/toolexec` and are registered in `go/cmd/aeon-toolgw`.
-3. **Two budgets, enforced in two places, and one gap left.** Per run, in the graph request:
-   `max_tool_calls`, `max_depth` and `deadline_seconds` are hard stops in the Graph Runtime. Per run,
-   from the agent manifest's `spec.runtime.budgets`: `costUsd` and `modelCalls` are enforced by the
-   Model Gateway, which refuses a call with **402** once the ledger says the run has spent its ceiling
-   — checked before each call, so the overshoot is bounded by one call's cost and not by nothing. The
-   ceiling comes from the manifest and not the request, because a caller that declares its own ceiling
-   can raise it. Still **not** enforced: a token ceiling, and the Graph Runtime's own
-   `budgets.max_tokens` / `max_cost_usd` fields.
+3. **Budgets, enforced in two places.** Per run, in the graph request: `max_tool_calls`, `max_depth`
+   and `deadline_seconds` are hard stops in the Graph Runtime. Per run, from the agent manifest's
+   `spec.runtime.budgets`: `costUsd`, `tokens` and `modelCalls` are enforced by the Model Gateway,
+   which refuses a call with **402** once the ledger says the run has reached its ceiling — checked
+   before each call, so the overshoot is bounded by one call and not by nothing. The ceiling comes
+   from the manifest and not the request, because a caller that declares its own ceiling can raise it.
+
+   `tokens` is not redundant with `costUsd`: a deployment on local inference is never priced, so a
+   cost ceiling cannot cap it at all. If you run on your own GPUs, that is the one to set.
+
+   `GET /runs/{id}` reports the run's real `cost_usd`, `tokens` and `model_calls` from the ledger —
+   and **omits** them when no ledger is configured, rather than reporting zeros. A `0` there used to
+   mean "nobody counted".
 
 ## Where the stack is
 

@@ -69,6 +69,9 @@ func main() {
 
 	var registry *store.AgentRegistry
 	var checkpointer checkpoint.Checkpointer
+	// MDL-018: where a run's real cost and token count come from. Without it the status endpoint omits
+	// them instead of reporting zeros.
+	var ledger *store.FinOpsLedger
 	if dsn := os.Getenv("AEON_PG_DSN"); dsn != "" {
 		s, err := store.Connect(context.Background(), dsn)
 		if err != nil {
@@ -82,11 +85,15 @@ func main() {
 		// while the loop is not running and only this process witnesses it.
 		checkpointer = s.Checkpointer()
 		log.Println("aeon-runcontroller: approval decisions journalled as known outcomes (INT-011)")
+
+		ledger = s.FinOpsLedger()
+		log.Println("aeon-runcontroller: GET /runs/{id} reports real cost and tokens from the FinOps ledger (MDL-018)")
 	} else {
-		log.Println("aeon-runcontroller: AEON_PG_DSN not set — circuit breaker enforcement skipped (see A5 in roadmap.md), approval decisions not journalled (INT-011)")
+		log.Println("aeon-runcontroller: AEON_PG_DSN not set — circuit breaker enforcement skipped (see A5 in roadmap.md), approval decisions not journalled (INT-011), and run status OMITS cost/tokens rather than reporting zeros (MDL-018)")
 	}
 
 	controller := runcontroller.New(temporalClient, taskQueue)
+	controller.Ledger = ledger
 	mux := http.NewServeMux()
 	handlers := &api.RunControllerHandlers{
 		Controller:   controller,

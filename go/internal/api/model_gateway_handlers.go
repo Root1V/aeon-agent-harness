@@ -360,6 +360,8 @@ func (h *ModelGatewayHandlers) overBudget(r *http.Request, runID, agentRef strin
 	exceeded := ""
 	if ceiling.CostUSD != nil && spend.CostUSD >= *ceiling.CostUSD {
 		exceeded = fmt.Sprintf("cost: $%.4f recorded, ceiling $%.4f", spend.CostUSD, *ceiling.CostUSD)
+	} else if ceiling.Tokens != nil && spend.Tokens >= int64(*ceiling.Tokens) {
+		exceeded = fmt.Sprintf("tokens: %d recorded, ceiling %d", spend.Tokens, *ceiling.Tokens)
 	} else if ceiling.ModelCalls != nil && spend.ModelCalls >= int64(*ceiling.ModelCalls) {
 		exceeded = fmt.Sprintf("model calls: %d recorded, ceiling %d", spend.ModelCalls, *ceiling.ModelCalls)
 	}
@@ -373,8 +375,14 @@ func (h *ModelGatewayHandlers) overBudget(r *http.Request, runID, agentRef strin
 		"agent_manifest_ref": agentRef,
 		"ceiling":            ceiling.String(),
 		"spent_usd":          spend.CostUSD,
+		"tokens":             spend.Tokens,
 		"model_calls":        spend.ModelCalls,
 		"retryable":          false,
+	}
+	if spend.UnreportedUsageCalls > 0 {
+		// The token equivalent of the unpriced note, and it needs its own: a provider can report a cost
+		// and no usage, or usage and no cost, so one counter cannot stand for both.
+		refusal["unreported_usage_calls"] = spend.UnreportedUsageCalls
 	}
 	if spend.UnpricedCalls > 0 {
 		// Surfaced in the refusal itself. The number enforced is a lower bound whenever this is

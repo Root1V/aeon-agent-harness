@@ -315,6 +315,13 @@ type RunSpend struct {
 	PricedCalls   int64   `json:"priced_calls"`
 	UnpricedCalls int64   `json:"unpriced_calls"`
 	ModelCalls    int64   `json:"model_calls"`
+	// Tokens is prompt + completion across the run (MDL-018). Summed from the same rows as the cost,
+	// so a token ceiling and a cost ceiling cannot disagree about what a run did.
+	//
+	// It is a LOWER BOUND for the same reason the cost is: a provider that reports no usage leaves
+	// nulls, which sum to nothing rather than to a guess. UnreportedUsageCalls is how many.
+	Tokens               int64 `json:"tokens"`
+	UnreportedUsageCalls int64 `json:"unreported_usage_calls"`
 }
 
 // SpendForRun sums one run's recorded cost (MDL-017).
@@ -328,9 +335,11 @@ func (l *FinOpsLedger) SpendForRun(ctx context.Context, runID string) (RunSpend,
 	var sum *float64
 	err := l.pool.QueryRow(ctx,
 		`SELECT coalesce(sum(cost_usd), 0), count(*) FILTER (WHERE cost_usd IS NOT NULL),
-		        count(*) FILTER (WHERE cost_usd IS NULL), count(*)
+		        count(*) FILTER (WHERE cost_usd IS NULL), count(*),
+		        coalesce(sum(coalesce(prompt_tokens, 0) + coalesce(completion_tokens, 0)), 0),
+		        count(*) FILTER (WHERE prompt_tokens IS NULL AND completion_tokens IS NULL)
 		 FROM model_gateway_costs WHERE run_id = $1`, runID,
-	).Scan(&sum, &s.PricedCalls, &s.UnpricedCalls, &s.ModelCalls)
+	).Scan(&sum, &s.PricedCalls, &s.UnpricedCalls, &s.ModelCalls, &s.Tokens, &s.UnreportedUsageCalls)
 	if err != nil {
 		return RunSpend{}, fmt.Errorf("store: summing spend for run %s: %w", runID, err)
 	}

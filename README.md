@@ -11,8 +11,9 @@ tracing, and eval gates — without locking you into one model provider or one a
 > `DONE`, and that status is mechanically checked (`make roadmap-check`) against a test that exists.
 > CI runs the whole thing on every push.
 >
-> **Not yet suitable for:** multi-tenant deployments, token ceilings, or secrets you would not put in
-> a `.env`. (A per-run **cost** ceiling from the agent manifest is enforced — `MDL-017`.) [backlog.md](backlog.md) says which of those is missing and why, with the entry
+> **Not yet suitable for:** multi-tenant deployments, or secrets you would not put in a `.env`.
+> (Per-run cost, token and model-call ceilings from the agent manifest are enforced — `MDL-017`,
+> `MDL-018`.) [backlog.md](backlog.md) says which of those is missing and why, with the entry
 > criterion for each.
 >
 > **To run your own agent on it: [docs/your-first-use-case.md](docs/your-first-use-case.md)** — two
