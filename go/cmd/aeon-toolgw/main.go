@@ -117,6 +117,29 @@ func main() {
 		log.Println("aeon-toolgw: repository.read not registered (set AEON_REPOSITORY_ROOT)")
 	}
 
+	// TOOL-009: artifact.read over the artifact store a run writes to. Registered only when a root is
+	// configured, like the two above. NOT checked for credentials the way the repository root is: this
+	// directory holds what our own runs produced, and a credentials scan of it would be noise rather
+	// than a guard — the repository check exists because an operator can point THAT at a source
+	// checkout, which is a mistake with a known shape.
+	if artifactRoot := os.Getenv("AEON_ARTIFACT_ROOT"); artifactRoot != "" {
+		// MkdirAll and not a fatal on absence: the writer is the Python worker and the reader is this
+		// process, so on a cold stack the gateway can come up BEFORE any run has produced anything. An
+		// empty store is a correct state; a missing directory is not a configuration error.
+		if err := os.MkdirAll(artifactRoot, 0o755); err != nil {
+			log.Fatalf("aeon-toolgw: AEON_ARTIFACT_ROOT=%s cannot be created: %v", artifactRoot, err)
+		}
+		root, err := os.OpenRoot(artifactRoot)
+		if err != nil {
+			log.Fatalf("aeon-toolgw: AEON_ARTIFACT_ROOT=%s is not an openable directory: %v", artifactRoot, err)
+		}
+		defer root.Close()
+		toolexec.RegisterArtifactReadTool(executor, root, artifactRoot)
+		log.Printf("aeon-toolgw: artifact.read live over %s (read-only, contained by os.Root)", artifactRoot)
+	} else {
+		log.Println("aeon-toolgw: artifact.read not registered (set AEON_ARTIFACT_ROOT)")
+	}
+
 	// SEC-002: a real Secret Broker — callers get short-lived, opaque lease references (POST
 	// /secrets/issue), never the raw values; only "secrets.whoami"'s own server-side execution ever
 	// resolves one (go/internal/secrets, go/internal/toolexec/secrets_tool.go). AEON_SECRET_NAMES is

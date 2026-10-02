@@ -30,6 +30,10 @@ x-common-env: &common-env
   # Override both this and AEON_CALLER_TOKEN for anything reachable by anyone else.
   AEON_CALLERS_PATH: ${AEON_CALLERS_PATH:-/examples/deep-research/callers.yaml}
 
+  # TOOL-009: where artifacts live. The worker writes here and the Tool Gateway's artifact.read reads
+  # here; the gateway mounts it READ-ONLY, so a tool cannot write one even if a future bug tried.
+  AEON_ARTIFACT_ROOT: ${AEON_ARTIFACT_ROOT:-/artifacts}
+
 services:
   # ---- Durable execution -----------------------------------------------------------------
   temporal:
@@ -312,6 +316,11 @@ services:
       - path: ../../.env
         required: false
     volumes:
+      # TOOL-009: the artifact store, shared between the worker (which writes) and the gateway (which
+      # reads). A HOST directory and not a named volume on purpose: the integration test runs its own
+      # worker in a third container that mounts the repository, so this is the only place all three can
+      # see the same files. Gitignored.
+      - ../../.artifacts:/artifacts:ro
       - ../../examples:/examples:ro
       # TOOL-008's root: `docs/`, and NOT the repository. Mounting the whole thing was the first
       # version, and a probe returned `.env` with PROMETHEUS_CLIENT_SECRET in it to a caller holding the
@@ -397,6 +406,11 @@ services:
       # executor nor permitted by policy_bundle.yaml, so pointing the worker at the gateway now
       # would turn a passing suite into a denied one without any tool becoming more real.
     volumes:
+      # TOOL-009: the artifact store, shared between the worker (which writes) and the gateway (which
+      # reads). A HOST directory and not a named volume on purpose: the integration test runs its own
+      # worker in a third container that mounts the repository, so this is the only place all three can
+      # see the same files. Gitignored.
+      - ../../.artifacts:/artifacts
       - ../../proto:/proto:ro
 
   runcontroller:

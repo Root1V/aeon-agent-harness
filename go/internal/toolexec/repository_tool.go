@@ -43,6 +43,112 @@ const maxRepositoryReadBytes = 256 * 1024
 // library rather than from this file being clever, which is the same reasoning as using Argus's SDK
 // instead of hand-rolling their attributes. TestRepositoryReadCannotEscapeItsRoot measures it instead
 // of trusting the documentation, including the symlink case.
+// readContainedTextFile is the whole of both read tools: containment, the three checks that must
+// happen before the open, the byte limit, the UTF-8 refusal and the optional line range.
+//
+// ONE COPY ON PURPOSE. `repository.read` and `artifact.read` differ in what they are pointed at and in
+// what they call their argument, and in nothing else that matters. Two copies of a path-containment
+// routine is two places for the symlink case to be got right, and the second one is always the one that
+// drifts. The tools differ above this line and share everything below it.
+//
+// CONTAINMENT IS os.Root's, NOT OURS. Every path check written by hand gets symlinks wrong: a
+// `filepath.Clean`-and-prefix-compare passes a symlink inside the root that points at /etc/passwd,
+// because cleaning a path does not follow links. Go 1.24's os.Root performs each operation relative to
+// the directory and refuses to escape it, links included — so the guarantee comes from the standard
+// library rather than from this file being clever, which is the same reasoning as using Argus's SDK
+// instead of hand-rolling their attributes. TestRepositoryReadCannotEscapeItsRoot measures it instead
+// of trusting the documentation, including the symlink case.
+func readContainedTextFile(root *os.Root, toolName, argName, rel string, args map[string]any) (map[string]any, error) {
+	start, end, err := repositoryLineRange(toolName, args)
+	if err != nil {
+		return nil, err
+	}
+
+	// STAT BEFORE OPEN, and the order is the whole point of these three checks.
+	//
+	// The first version did it the other way round — open, then check the mode — and the FIFO test hung
+	// the suite for ten minutes. `open(2)` on a FIFO with no writer BLOCKS, so the regular-file guard was
+	// placed after the operation it exists to prevent and could never run. The same shape as a bound that
+	// folds its own input before checking for the fold: a guard that arrives after the damage.
+	//
+	// Stat and not Lstat: the target's type is what matters, and os.Root keeps the resolution inside the
+	// root either way.
+	info, err := root.Stat(rel)
+	if err != nil {
+		// os.Root's refusal is reported verbatim. A traversal attempt and a missing file both land here
+		// and they are DIFFERENT facts, so collapsing them into "not found" would hide the first — and the
+		// first is the one worth seeing in a trace.
+		return nil, fmt.Errorf("toolexec: %s: %w", toolName, err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("toolexec: %s: %q is a directory, not a file", toolName, rel)
+	}
+	if !info.Mode().IsRegular() {
+		// A FIFO or a device. `mode` is in the message because "not a regular file" alone leaves the
+		// reader guessing what it is.
+		return nil, fmt.Errorf("toolexec: %s: %q is not a regular file (mode %s)", toolName, rel, info.Mode())
+	}
+
+	f, err := root.Open(rel)
+	if err != nil {
+		return nil, fmt.Errorf("toolexec: %s: %w", toolName, err)
+	}
+	defer f.Close()
+
+	result := map[string]any{"status": "executed", "tool": toolName, argName: rel}
+	if start == 0 {
+		// The whole file, which only happens when the whole file fits. The size is checked BEFORE the
+		// read so a 2 GB file is never loaded into this process to then be rejected.
+		if info.Size() > maxRepositoryReadBytes {
+			return nil, fmt.Errorf(
+				"toolexec: %s: %q is %d bytes, over the %d-byte limit for one read — "+
+					"pass start_line and end_line to read part of it",
+				toolName, rel, info.Size(), maxRepositoryReadBytes)
+		}
+		raw, err := io.ReadAll(f)
+		if err != nil {
+			return nil, fmt.Errorf("toolexec: %s: %w", toolName, err)
+		}
+		if !utf8.Valid(raw) {
+			// JSON cannot carry invalid UTF-8: encoding it replaces each bad byte with U+FFFD, so a binary
+			// file would come back as plausible-looking mojibake and a model would read it as the file's
+			// contents. Refusing is the only answer that is not a quiet corruption.
+			return nil, fmt.Errorf("toolexec: %s: %q is not valid UTF-8 text (%d bytes) — this tool reads text", toolName, rel, len(raw))
+		}
+		content := string(raw)
+		result["content"] = content
+		result["bytes"] = len(raw)
+		// Counted only here, where the whole file was actually read. With a line range the count is absent
+		// rather than partial: reporting the lines we happened to read as the file's total is the same lie
+		// as a truncated body without a flag.
+		result["lines_total"] = countLines(content)
+		return result, nil
+	}
+
+	content, lastLine, err := readLineRange(f, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("toolexec: %s: %q: %w", toolName, rel, err)
+	}
+	result["content"] = content
+	result["bytes"] = len(content)
+	result["start_line"] = start
+	result["end_line"] = lastLine
+	return result, nil
+}
+
+// RegisterRepositoryReadTool wires `repository.read`: a file out of the repository, and nothing else.
+//
+// WHY THIS EXISTS AT ALL, which is not "the agent needed it". `repository.read` has been in
+// examples/deep-research/policy_bundle.yaml and in the agent manifest's `tools.allow` since those files
+// were written, with no implementation behind it — so the manifest declared a tool the gateway answered
+// `unknown tool` for. Found by CI-001 counting what the suite skips: the reference deployment
+// registered exactly two tools and BOTH need something external (`search.web` the public web, which
+// rate-limits us, and `search.rag` the platform's embedding credentials), so there was no permitted
+// tool that runs offline and the only end-to-end tool test was flaky by construction.
+//
+// Registering a stub would have closed that and is exactly what TOOL-007 removed: a tool that answers
+// `{"status":"executed"}` without doing anything is worse than an absent one, because an absent one
+// fails on the first call. This reads a real file off a real disk.
 func RegisterRepositoryReadTool(e *Executor, root *os.Root, rootPath string) {
 	e.Register("repository.read", func(args map[string]any) (map[string]any, error) {
 		rel, _ := args["path"].(string)
@@ -50,95 +156,19 @@ func RegisterRepositoryReadTool(e *Executor, root *os.Root, rootPath string) {
 		if rel == "" {
 			return nil, fmt.Errorf("toolexec: repository.read: missing required string arg %q", "path")
 		}
-		// Absolute paths are refused BEFORE os.Root sees them. os.Root would reject them too, with its
-		// own message about the operation; refusing here lets the error say what a caller should have
-		// sent, because the fix is "make it relative to the repository root" and nothing in a path error
-		// says that.
+		// Absolute paths are refused BEFORE os.Root sees them. os.Root would reject them too, with its own
+		// message about the operation; refusing here lets the error say what a caller should have sent,
+		// because the fix is "make it relative to the repository root" and nothing in a path error says
+		// that.
 		if path.IsAbs(rel) || strings.HasPrefix(rel, "/") || strings.Contains(rel, `\`) {
 			return nil, fmt.Errorf("toolexec: repository.read: %q is absolute — paths are relative to the repository root", rel)
 		}
-
-		start, end, err := repositoryLineRange(args)
-		if err != nil {
-			return nil, err
-		}
-
-		// STAT BEFORE OPEN, and the order is the whole point of these three checks.
-		//
-		// The first version of this did it the other way round — open, then check the mode — and the FIFO
-		// test hung the suite for ten minutes. `open(2)` on a FIFO with no writer BLOCKS, so the
-		// regular-file guard was placed after the operation it exists to prevent and could never run. The
-		// same shape as a bound that folds its own input before checking for the fold: a guard that
-		// arrives after the damage.
-		//
-		// Stat and not Lstat: the target's type is what matters, and os.Root keeps the resolution inside
-		// the root either way.
-		info, err := root.Stat(rel)
-		if err != nil {
-			// os.Root's refusal is reported verbatim. A traversal attempt and a missing file both land
-			// here and they are DIFFERENT facts, so collapsing them into "not found" would hide the first
-			// — and the first is the one worth seeing in a trace.
-			return nil, fmt.Errorf("toolexec: repository.read: %w", err)
-		}
-		if info.IsDir() {
-			return nil, fmt.Errorf("toolexec: repository.read: %q is a directory, not a file", rel)
-		}
-		if !info.Mode().IsRegular() {
-			// A FIFO or a device. `mode` is in the message because "not a regular file" alone leaves the
-			// reader guessing what it is.
-			return nil, fmt.Errorf("toolexec: repository.read: %q is not a regular file (mode %s)", rel, info.Mode())
-		}
-
-		f, err := root.Open(rel)
-		if err != nil {
-			return nil, fmt.Errorf("toolexec: repository.read: %w", err)
-		}
-		defer f.Close()
-
-		result := map[string]any{"status": "executed", "tool": "repository.read", "path": rel}
-		if start == 0 {
-			// The whole file, which only happens when the whole file fits. The size is checked BEFORE the
-			// read so a 2 GB file is never loaded into this process to then be rejected.
-			if info.Size() > maxRepositoryReadBytes {
-				return nil, fmt.Errorf(
-					"toolexec: repository.read: %q is %d bytes, over the %d-byte limit for one read — "+
-						"pass start_line and end_line to read part of it",
-					rel, info.Size(), maxRepositoryReadBytes)
-			}
-			raw, err := io.ReadAll(f)
-			if err != nil {
-				return nil, fmt.Errorf("toolexec: repository.read: %w", err)
-			}
-			if !utf8.Valid(raw) {
-				// JSON cannot carry invalid UTF-8: encoding it replaces each bad byte with U+FFFD, so a
-				// binary file would come back as plausible-looking mojibake and a model would read it as
-				// the file's contents. Refusing is the only answer that is not a quiet corruption.
-				return nil, fmt.Errorf("toolexec: repository.read: %q is not valid UTF-8 text (%d bytes) — this tool reads text", rel, len(raw))
-			}
-			content := string(raw)
-			result["content"] = content
-			result["bytes"] = len(raw)
-			// Counted only here, where the whole file was actually read. With a line range the count is
-			// absent rather than partial: reporting the lines we happened to read as the file's total is
-			// the same lie as a truncated body without a flag.
-			result["lines_total"] = countLines(content)
-			return result, nil
-		}
-
-		content, lastLine, err := readLineRange(f, start, end)
-		if err != nil {
-			return nil, fmt.Errorf("toolexec: repository.read: %q: %w", rel, err)
-		}
-		result["content"] = content
-		result["bytes"] = len(content)
-		result["start_line"] = start
-		result["end_line"] = lastLine
-		return result, nil
+		return readContainedTextFile(root, "repository.read", "path", rel, args)
 	})
 }
 
 // repositoryLineRange reads the optional 1-based inclusive range. start == 0 means "the whole file".
-func repositoryLineRange(args map[string]any) (start, end int, err error) {
+func repositoryLineRange(toolName string, args map[string]any) (start, end int, err error) {
 	// float64 because this arrives as decoded JSON. An int that came through as something else is
 	// reported rather than silently treated as absent, which would read the whole file instead of the
 	// range the caller asked for — a bigger answer than they wanted, which is the wrong direction to
@@ -150,10 +180,10 @@ func repositoryLineRange(args map[string]any) (start, end int, err error) {
 		}
 		f, ok := raw.(float64)
 		if !ok {
-			return 0, fmt.Errorf("toolexec: repository.read: %s must be a number, got %T", key, raw)
+			return 0, fmt.Errorf("toolexec: %s: %s must be a number, got %T", toolName, key, raw)
 		}
 		if f != float64(int(f)) {
-			return 0, fmt.Errorf("toolexec: repository.read: %s must be a whole number, got %v", key, f)
+			return 0, fmt.Errorf("toolexec: %s: %s must be a whole number, got %v", toolName, key, f)
 		}
 		return int(f), nil
 	}
@@ -169,13 +199,13 @@ func repositoryLineRange(args map[string]any) (start, end int, err error) {
 	case start == 0:
 		// end without start. Defaulting start to 1 would be a guess, and the guess is unbounded: a caller
 		// who meant "the last ten lines" would get the first N instead and never know.
-		return 0, 0, fmt.Errorf("toolexec: repository.read: end_line was given without start_line")
+		return 0, 0, fmt.Errorf("toolexec: %s: end_line was given without start_line", toolName)
 	case start < 1:
-		return 0, 0, fmt.Errorf("toolexec: repository.read: start_line is 1-based, got %d", start)
+		return 0, 0, fmt.Errorf("toolexec: %s: start_line is 1-based, got %d", toolName, start)
 	case end == 0:
 		return start, 0, nil // open-ended: to the end of the file, still bounded by the byte limit
 	case end < start:
-		return 0, 0, fmt.Errorf("toolexec: repository.read: end_line %d is before start_line %d", end, start)
+		return 0, 0, fmt.Errorf("toolexec: %s: end_line %d is before start_line %d", toolName, end, start)
 	}
 	return start, end, nil
 }

@@ -76,6 +76,7 @@ test-python-integration: ## Run Python tests against a real Tool Gateway + Postg
 		-e AEON_TEST_TEMPO_QUERY_URL="http://tempo:3200" \
 		-e AEON_TOOL_EXECUTION_MODE=local-ledger \
 		-e AEON_CALLER_TOKEN="$(or $(AEON_CALLER_TOKEN),dev-test-token-not-a-secret)" \
+		-e AEON_TEST_ARTIFACT_ROOT="/repo/.artifacts" \
 		python:3.13-slim sh -c \
 		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q -rs tests/integration/test_tool_execution_through_gateway.py tests/integration/test_end_to_end_tracing.py tests/integration/test_argus_semconv_conformance.py tests/integration/test_approval_wait_is_observable.py tests/integration/test_deep_research_workflow.py"
 	$(COMPOSE) --profile core --profile obs stop postgres toolgw controlplane otel-collector tempo

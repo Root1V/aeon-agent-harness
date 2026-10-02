@@ -32,6 +32,12 @@ class DeepResearchReport:
     # look like a run the model had no lessons from.
     memory_candidates_written: int = 0
     reflection_note: str = ""
+    # TOOL-009: the id the report was parked under, and why it was not when it was not. Carried through
+    # here because the workflow returning a field the SDK drops is the same "both ends built, the wire
+    # never run" shape this feature exists to close — and the test that reads the artifact back caught
+    # exactly that: the workflow set it and `DeepResearchReport` had no such attribute.
+    report_artifact_id: str = ""
+    artifact_note: str = ""
 
 
 async def start_deep_research_run(
@@ -80,4 +86,6 @@ async def start_deep_research_run(
         topics_to_replan=result.topics_to_replan,
         memory_candidates_written=result.memory_candidates_written,
         reflection_note=result.reflection_note,
+        report_artifact_id=result.report_artifact_id,
+        artifact_note=result.artifact_note,
     )
