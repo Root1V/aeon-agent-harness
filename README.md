@@ -5,9 +5,18 @@ it always needs and always reimplements badly: a durable execution loop, typed c
 verifiable evidence and citations, authorization enforced outside the model, hard budgets, OTel
 tracing, and eval gates — without locking you into one model provider or one agent framework.
 
-> **Status:** early scaffolding. See [roadmap.md](roadmap.md) for what's actually done (with a
-> passing acceptance test) vs. stubbed vs. not started. Don't trust a feature is real until its row
-> says `DONE` — that status is mechanically checked, see `make roadmap-check`.
+> **Status:** 96 features `DONE`, each with a named acceptance test that runs against real
+> infrastructure — real Postgres, real Temporal, real model providers, real money where the feature is
+> about money. [roadmap.md](roadmap.md) is the index; don't trust a feature is real until its row says
+> `DONE`, and that status is mechanically checked (`make roadmap-check`) against a test that exists.
+> CI runs the whole thing on every push.
+>
+> **Not yet suitable for:** multi-tenant deployments, token/cost hard stops, or secrets you would not
+> put in a `.env`. [backlog.md](backlog.md) says which of those is missing and why, with the entry
+> criterion for each.
+>
+> **To run your own agent on it: [docs/your-first-use-case.md](docs/your-first-use-case.md)** — two
+> files and one HTTP call, no code in this repository changes.
 
 ## Why
 
@@ -42,19 +51,25 @@ Everything runs in containers. There is no required local Go or Python toolchain
 ## Quickstart
 
 ```bash
-cp .env.example .env   # fill in provider keys you have; unset ones are simply unavailable
-make dev                # docker compose --profile full up -d --build
-make ps                 # check everything is healthy
+cp .env.example .env     # fill in provider keys you have; unset ones are simply unavailable
+PROFILE=core make dev    # core = the harness. `make dev` alone adds vLLM, which needs a GPU
+make ps                  # check everything is healthy
+make first-use-case      # run a real agent end to end: see docs/your-first-use-case.md
 make test                # go test + pytest, both in throwaway containers
 ```
 
-Temporal UI: http://localhost:8080 · MinIO console: http://localhost:9001 · Grafana:
-http://localhost:3000 · Tempo: http://localhost:3200.
+Temporal UI: http://localhost:8080 · Grafana: http://localhost:3000 · Tempo: http://localhost:3200.
+(MinIO is in the compose file and nothing uses it yet — see backlog.md.)
 
-The reference agent lives in [examples/deep-research/](examples/deep-research/): an `agent.yaml`
-(`AgentManifest`) and a `model_policy_bundle.yaml` binding its `reasoning-high` / `reasoning-local`
-profiles to concrete providers. The Deep Research profile itself (planner, isolated researchers,
-citation verifier) is not implemented yet — see roadmap.md F2.
+Two agents to start from:
+
+- **[examples/first-use-case/](examples/first-use-case/)** — the smallest thing that works: a graph, a
+  policy bundle, a caller bundle. Copy it. Walked through in
+  [docs/your-first-use-case.md](docs/your-first-use-case.md).
+- **[examples/deep-research/](examples/deep-research/)** — the reference profile, and it is
+  implemented: planner, isolated researchers with per-subtask budgets, a sufficiency gate, a reporter
+  and a citation verifier that refuses a claim the evidence does not support. It runs against the real
+  Prometheus deployment with real inference (`make test-mdl-015`, which spends real money).
 
 ## Repository layout
 

@@ -1,0 +1,36 @@
+# The smallest policy bundle that permits one agent two tools, and nothing else.
+#
+# DEFAULT-DENY IS THE WHOLE POINT: there is no "allow everything" rule, and a tool not named below is
+# refused with the policy id that refused it. Adding a tool to an agent means editing this file, which
+# is the file an auditor reads.
+apiVersion: harness.ai/v1
+kind: PolicyBundle
+cedarVersion: "4.0"
+policies:
+  - id: allow-first-use-case-reads
+    effect: permit
+    cedarSource: |
+      permit(
+        principal == Agent::"first-use-case@0.1.0",
+        action,
+        resource
+      ) when {
+        resource is Tool &&
+        ["repository.read", "artifact.read"].contains(resource.name)
+      };
+
+  # Named explicitly rather than left to default-deny, and the difference matters when something goes
+  # wrong: a run stopped by THIS rule reports `forbid-shell-for-first-use-case`, which says a human
+  # decided, while default-deny reports that nothing permitted it — a configuration gap. Two different
+  # conversations, and the policy id is what tells them apart.
+  - id: forbid-shell-for-first-use-case
+    effect: forbid
+    cedarSource: |
+      forbid(
+        principal == Agent::"first-use-case@0.1.0",
+        action,
+        resource
+      ) when {
+        resource is Tool &&
+        ["shell.exec"].contains(resource.name)
+      };
