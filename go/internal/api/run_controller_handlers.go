@@ -56,7 +56,7 @@ func (h *RunControllerHandlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /runs/{run_id}/stream", h.stream)
 }
 
-func workflowID(runID string) string { return "graph-run-" + runID }
+func workflowID(runID string) string { return runcontroller.WorkflowIDPrefix + runID }
 
 type startRunRequest struct {
 	RunID   string         `json:"run_id"`

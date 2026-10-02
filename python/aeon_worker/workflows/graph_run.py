@@ -126,10 +126,26 @@ class GraphRunWorkflow:
 
     @workflow.query
     def budgets_consumed(self) -> dict[str, Any]:
+        """What this workflow has actually counted — and nothing it has not (MDL-018).
+
+        THIS USED TO REPORT THREE ZEROS AS MEASUREMENTS. `model_calls`, `tokens` and `cost_usd` were
+        returned as 0 on every run, because this generic Graph Runtime has no `model_call` node kind and
+        never increments them — and `GET /runs/{id}` surfaces this dict verbatim. So a run that had
+        spent two dollars answered `cost_usd: 0.0`, which reads as "this run was free". It is the
+        `DEFAULT 0` defect OBS-008 removed from the cost ledger, sitting in a user-facing API.
+
+        The three are omitted now, and the Run Controller fills them from the FinOps ledger, which is
+        the component that actually knows (go/internal/runcontroller). The workflow cannot: reading a
+        database from workflow code is exactly what docs/adr/0001 forbids, and the numbers would not
+        replay.
+
+        Absent and not null, because the two keys left are the ones this workflow measures itself, and a
+        consumer that sees `cost_usd` missing has to go and ask rather than believe a zero.
+        """
         if self._state is None:
-            return {"tool_calls": 0, "depth": 0, "model_calls": 0, "tokens": 0, "cost_usd": 0.0}
+            return {"tool_calls": 0, "depth": 0}
         c = self._state.consumed
-        return {"tool_calls": c.tool_calls, "depth": c.depth, "model_calls": c.model_calls, "tokens": c.tokens, "cost_usd": c.cost_usd}
+        return {"tool_calls": c.tool_calls, "depth": c.depth}
 
     async def _record_approval_wait(
         self, node_id: str, approval_id: str, tool_call_hash: str, outcome: str, waited_ms: int | None = None

@@ -8,9 +8,13 @@ package runcontroller
 import (
 	"context"
 	"fmt"
+	"log"
+	"strings"
 
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
+
+	"github.com/aeon-ai/aeon/go/internal/store"
 )
 
 const (
@@ -25,7 +29,16 @@ const (
 type Controller struct {
 	Client    client.Client
 	TaskQueue string
+	// Ledger is where a run's real cost and token count come from (MDL-018). Optional: without it the
+	// status omits them rather than reporting zeros, which is the defect it exists to remove.
+	Ledger *store.FinOpsLedger
 }
+
+// WorkflowIDPrefix is what a run id becomes as a Temporal workflow id. Named once here because
+// MDL-018 needs to go the other way — the ledger is keyed by the run id the caller chose — and two
+// hand-written copies of a prefix is how the status endpoint ends up looking up the wrong run.
+// WorkflowIDPrefix is exported because the HTTP layer builds the same id (go/internal/api).
+const WorkflowIDPrefix = "graph-run-"
 
 // New returns a Controller. taskQueue defaults to DefaultTaskQueue when empty.
 func New(c client.Client, taskQueue string) *Controller {
@@ -47,7 +60,7 @@ type RunInfo struct {
 // (RUN-003) — pass nil for no limits — and is shaped like {"max_tool_calls": int,
 // "max_depth": int, "deadline_seconds": int}; see graph_run.py's _budget_policy_from_request.
 func (c *Controller) Start(ctx context.Context, runID string, graph map[string]any, budgets map[string]any, agentManifestRef string) (*RunInfo, error) {
-	workflowID := "graph-run-" + runID
+	workflowID := WorkflowIDPrefix + runID
 	input := map[string]any{"run_id": runID, "graph": graph}
 	// TOOL-004: the principal the Tool Gateway evaluates policy against. It already arrived at the
 	// API (A5 uses it to refuse a quarantined agent) and simply never reached the worker, so every
@@ -203,6 +216,7 @@ func (c *Controller) Status(ctx context.Context, workflowID string) (*Status, er
 	if val, err := c.Client.QueryWorkflow(ctx, workflowID, "", "budgets_consumed"); err == nil {
 		_ = val.Get(&budgetsConsumed)
 	}
+	c.addLedgerSpend(ctx, workflowID, &budgetsConsumed)
 
 	return &Status{
 		WorkflowID:      workflowID,
@@ -234,5 +248,50 @@ func mapStatus(s enumspb.WorkflowExecutionStatus, paused, hasPendingApproval boo
 		return "CANCELLED"
 	default:
 		return "PENDING"
+	}
+}
+
+// addLedgerSpend fills the three numbers the workflow cannot know (MDL-018).
+//
+// WHY THEY COME FROM HERE. `budgets_consumed` used to report `model_calls`, `tokens` and `cost_usd` as
+// 0 on every run: the generic Graph Runtime has no model_call node kind and never increments them, and
+// this status endpoint returned the dict verbatim. A run that had spent two dollars answered
+// `cost_usd: 0.0`, which reads as "this run was free" — the DEFAULT 0 defect OBS-008 removed from the
+// ledger, sitting in a user-facing API.
+//
+// The workflow cannot fill them: reading a database from workflow code is what docs/adr/0001 forbids,
+// and the numbers would not replay. This component can — it already holds a Postgres connection for
+// the circuit-breaker check — and the ledger is the same table the FinOps dashboard aggregates and the
+// Model Gateway enforces the ceiling against, so the three agree by construction.
+//
+// WITHOUT A LEDGER THEY STAY ABSENT, which is the whole point. A deployment with no AEON_PG_DSN knows
+// nothing about what a run spent, and saying so is the only honest answer — a zero there would be the
+// defect this function exists to remove, reintroduced by its own fallback.
+func (c *Controller) addLedgerSpend(ctx context.Context, workflowID string, consumed *map[string]any) {
+	if c.Ledger == nil {
+		return
+	}
+	// The run id is the workflow id minus the prefix this controller adds when it starts a run, because
+	// the ledger is keyed by the run id the CALLER chose.
+	runID := strings.TrimPrefix(workflowID, WorkflowIDPrefix)
+	spend, err := c.Ledger.SpendForRun(ctx, runID)
+	if err != nil {
+		log.Printf("runcontroller: cannot read spend for run %s, so its status omits cost: %v", runID, err)
+		return
+	}
+	if *consumed == nil {
+		*consumed = map[string]any{}
+	}
+	(*consumed)["model_calls"] = spend.ModelCalls
+	(*consumed)["tokens"] = spend.Tokens
+	(*consumed)["cost_usd"] = spend.CostUSD
+	// The two bounds, reported whenever they are non-zero. A reader comparing `cost_usd` against a
+	// ceiling needs to know the figure is a lower bound, and which kind — a provider can report a cost
+	// and no usage, or usage and no cost.
+	if spend.UnpricedCalls > 0 {
+		(*consumed)["unpriced_calls"] = spend.UnpricedCalls
+	}
+	if spend.UnreportedUsageCalls > 0 {
+		(*consumed)["unreported_usage_calls"] = spend.UnreportedUsageCalls
 	}
 }

@@ -1,6 +1,9 @@
 package finops
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Ceiling is what an AgentManifest declares a run may spend: `spec.runtime.budgets`.
 //
@@ -15,21 +18,31 @@ import "fmt"
 type Ceiling struct {
 	CostUSD    *float64
 	ModelCalls *int
+	// Tokens is the ceiling MDL-018 added, and it is not redundant with CostUSD. A deployment on local
+	// inference has no per-token price at all — `prometheus_inference` is compute_based, so its rows
+	// carry a NULL cost — and a cost ceiling cannot cap a run that is never priced. Tokens are reported
+	// by every provider that reports usage at all, priced or not.
+	Tokens *int
 }
 
 // Declared reports whether this manifest asks for any enforcement at all.
-func (c Ceiling) Declared() bool { return c.CostUSD != nil || c.ModelCalls != nil }
+func (c Ceiling) Declared() bool { return c.CostUSD != nil || c.ModelCalls != nil || c.Tokens != nil }
 
 func (c Ceiling) String() string {
-	switch {
-	case c.CostUSD != nil && c.ModelCalls != nil:
-		return fmt.Sprintf("costUsd=%.4f modelCalls=%d", *c.CostUSD, *c.ModelCalls)
-	case c.CostUSD != nil:
-		return fmt.Sprintf("costUsd=%.4f", *c.CostUSD)
-	case c.ModelCalls != nil:
-		return fmt.Sprintf("modelCalls=%d", *c.ModelCalls)
+	var parts []string
+	if c.CostUSD != nil {
+		parts = append(parts, fmt.Sprintf("costUsd=%.4f", *c.CostUSD))
 	}
-	return "none declared"
+	if c.ModelCalls != nil {
+		parts = append(parts, fmt.Sprintf("modelCalls=%d", *c.ModelCalls))
+	}
+	if c.Tokens != nil {
+		parts = append(parts, fmt.Sprintf("tokens=%d", *c.Tokens))
+	}
+	if len(parts) == 0 {
+		return "none declared"
+	}
+	return strings.Join(parts, " ")
 }
 
 // CeilingFromManifest reads spec.runtime.budgets out of a stored AgentManifest.
@@ -54,6 +67,14 @@ func CeilingFromManifest(manifest map[string]any) (Ceiling, []string) {
 			c.CostUSD = &f
 		} else {
 			problems = append(problems, fmt.Sprintf("costUsd is %v (%T), which is not a non-negative number — NOT enforced", raw, raw))
+		}
+	}
+	if raw, present := budgets["tokens"]; present {
+		if f, ok := asFloat(raw); ok && f >= 0 {
+			n := int(f)
+			c.Tokens = &n
+		} else {
+			problems = append(problems, fmt.Sprintf("tokens is %v (%T), which is not a non-negative number — NOT enforced", raw, raw))
 		}
 	}
 	if raw, present := budgets["modelCalls"]; present {

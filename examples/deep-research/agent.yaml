@@ -20,6 +20,10 @@ spec:
       modelCalls: 60
       toolCalls: 120
       costUsd: 5.0
+      # MDL-018. Set alongside costUsd rather than instead of it: this profile's fallback chain ends at
+      # `reasoning-local`, and a local deployment is never priced — its ledger rows carry a NULL cost on
+      # purpose (OBS-008) — so costUsd alone would stop capping the moment routing fell back.
+      tokens: 2000000
   contextPolicy:
     lanes:
       policy: { fidelity: PINNED_EXACT }
