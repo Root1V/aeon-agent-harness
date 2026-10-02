@@ -38,8 +38,10 @@ GO_REASON = re.compile(r"^(?P<where>[a-z0-9_]+_test\.go:\d+):\s*(?P<reason>.*)$"
 # Substrings of a reason that a CI run may legitimately report. Each one is a condition of the world
 # that no amount of configuration fixes, and each is here with its own justification.
 TOLERATED = (
-    # The only tool the reference deployment can execute and policy permits goes out to public search
-    # engines, and they rate-limit. See test_tool_execution_through_gateway for the gap behind this.
+    # The public engines behind SearXNG rate-limit and serve CAPTCHAs. Only the Go searcher's own test
+    # reports this now: TOOL-008 gave the deployment an offline tool (repository.read), so the
+    # end-to-end tool test no longer depends on the public web at all — which is what this tolerance
+    # used to be covering for.
     "every upstream search engine refused",
     # A generator, not a test: it REWRITES the shared golden corpus and is guarded by an env var so a
     # normal run cannot overwrite the artefact three teams verify against.

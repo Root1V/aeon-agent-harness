@@ -301,6 +301,10 @@ services:
       # Config-as-code (FND-003): the policy bundle is a file in Git, mounted read-only, not baked
       # into the image. Point this at a different bundle to authorize a different set of agents.
       AEON_POLICY_BUNDLE_PATH: /examples/deep-research/policy_bundle.yaml
+      # TOOL-008: what repository.read may read. Mounted READ-ONLY below, and the tool is contained by
+      # os.Root on top of that — two independent guarantees, because the mount protects the host and
+      # os.Root protects everything outside this directory on the gateway's own filesystem.
+      AEON_REPOSITORY_ROOT: /repository
       # SEC-002: comma-separated names the Secret Broker loads from AEON_SECRET_<NAME> env vars
       # (see .env.example) — optional, empty until a real tool needs a credential.
       AEON_SECRET_NAMES: "${AEON_SECRET_NAMES:-}"
@@ -309,6 +313,12 @@ services:
         required: false
     volumes:
       - ../../examples:/examples:ro
+      # TOOL-008's root: `docs/`, and NOT the repository. Mounting the whole thing was the first
+      # version, and a probe returned `.env` with PROMETHEUS_CLIENT_SECRET in it to a caller holding the
+      # public development token. Whatever is mounted here is readable IN FULL by any agent policy
+      # permits repository.read — that is the property to think about when changing this line.
+      # `:ro` is not the tool's containment (os.Root is); it is the second, independent one.
+      - ../../docs:/repository:ro
       # TOOL-003: go/internal/sandbox spawns real, isolated containers for shell.exec via the host
       # Docker daemon (sibling containers, not nested Docker-in-Docker) — this grants toolgw
       # root-equivalent access to the host. Real, current tradeoff, not a mistake: SEC-002's Secret

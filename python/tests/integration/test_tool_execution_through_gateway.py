@@ -39,48 +39,23 @@ def _call(**overrides) -> ExecuteToolInput:
         "run_id": f"tool004-{uuid.uuid4()}",
         "node_id": "n0",
         "step_seq": 1,
-        "tool_name": "search.web",
-        "tool_args": {"query": "estado del arte"},
+        # TOOL-008's repository.read, and the switch from search.web is the point.
+        #
+        # This test's subject is the integration — the worker reaches the gateway with a principal, the
+        # tool really runs, a repeat is deduplicated — and `search.web` made all of that depend on Brave,
+        # DuckDuckGo and Google not rate-limiting the SearXNG instance, which they do. Before
+        # repository.read existed there was no alternative: the reference deployment registered two
+        # tools and both needed something external. This one reads a file off a disk.
+        #
+        # The path is relative to AEON_REPOSITORY_ROOT, which deploy/compose points at the repository's
+        # `docs/` — deliberately narrow, because whatever that root is becomes readable in full by any
+        # agent policy permits this tool.
+        "tool_name": "repository.read",
+        "tool_args": {"path": "adr/0001-temporal-determinism-boundary.md", "start_line": 1, "end_line": 3},
         "agent_manifest_ref": AGENT_REF,
     }
     base.update(overrides)
     return ExecuteToolInput(**base)
-
-
-async def _execute_or_skip_a_broken_searcher(call):
-    """Run the call, or skip when every upstream search engine refused.
-
-    WHY A SKIP AND NOT A FAILURE, and the distinction is narrow on purpose. This test's subject is the
-    integration: that the worker reaches the gateway with a principal, that the tool really runs, and
-    that a repeat is deduplicated. The only tool the reference deployment can actually execute and that
-    policy permits is `search.web`, which goes out to public engines — so the assertion depends on
-    Brave, DuckDuckGo and Google not rate-limiting the SearXNG instance, which they do. Observed on
-    2026-10-01: every engine returned "Suspended: too many requests" or a CAPTCHA.
-    
-    A red build for that trains people to ignore the build, which is worse than the gap it reports.
-    But a silent skip is worse still, so the reason is spelled out and CI prints every skip it sees
-    (scripts/check_skips.py). It is matched on the gateway's OWN message — it already distinguishes
-    "this is a broken searcher, not an empty web" — and nothing else is tolerated: a 401, a policy
-    denial or an unreachable gateway all still fail.
-
-    THE REAL GAP THIS EXPOSES, written here because it is where someone will read it: the reference
-    deployment registers exactly two tools, and both need something external (`search.web` needs the
-    public web, `search.rag` needs the Prometheus embeddings). `repository.read` and `artifact.read`
-    are in the policy bundle AND in the agent manifest's tools.allow, and neither is implemented — so
-    the manifest declares tools the gateway cannot execute, and there is no permitted tool that runs
-    offline. That is a backlog entry, not something to paper over by registering a stub in the binary:
-    TOOL-007 removed exactly such a stub so that a deployment with no search provider could not answer
-    a search call.
-    """
-    try:
-        return await execute_tool(call)
-    except Exception as exc:  # noqa: BLE001 - re-raised below unless it is the one known condition
-        if "broken searcher, not an empty web" not in str(exc):
-            raise
-        pytest.skip(
-            "every upstream search engine refused (rate limit or CAPTCHA), so the only executable "
-            f"permitted tool could not run: {exc}"
-        )
 
 
 @pytest.mark.asyncio
@@ -95,11 +70,14 @@ async def test_worker_tool_call_executes_through_the_gateway_and_deduplicates(ga
     """
     call = _call()
 
-    first = await _execute_or_skip_a_broken_searcher(call)
+    first = await execute_tool(call)
     assert first.deduplicated is False
     # The result now comes from the Go executor, not from a file that records intentions. The old
     # ledger path answered {"status": "written"} without a "tool" key and without ever running.
-    assert first.result.get("tool") == "search.web", first.result
+    assert first.result.get("tool") == "repository.read", first.result
+    # And the CONTENT is the file's. A tool that returns its own arguments back is what TOOL-007
+    # removed, and it would satisfy every other assertion here.
+    assert "ADR-001" in first.result.get("content", ""), first.result
     assert first.idempotency_key
 
     second = await execute_tool(call)
