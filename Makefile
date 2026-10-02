@@ -2,7 +2,7 @@
 COMPOSE := docker compose -f deploy/compose/docker-compose.yml
 PROFILE ?= full
 
-.PHONY: dev down logs ps build test test-go test-go-integration test-python test-python-integration test-mdl-015 lint roadmap-check clean
+.PHONY: dev down logs ps build test test-go test-go-integration test-python test-python-integration test-mdl-015 test-first-use-case first-use-case lint roadmap-check clean
 
 dev: ## Start the full reference stack (Temporal, Postgres, MinIO, OTel, Tempo, Grafana, gateways, worker)
 	$(COMPOSE) --profile $(PROFILE) up -d --build
@@ -118,6 +118,29 @@ test-mdl-015: ## Run the real-platform acceptance tests (real inference, real mo
 		python:3.13-slim sh -c \
 		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q -s tests/integration/test_deep_research_against_real_prometheus.py"
 	$(COMPOSE) --profile core --profile obs stop postgres modelgw toolgw otel-collector
+
+test-first-use-case: ## Check the on-ramp in docs/your-first-use-case.md still works
+	# A document is the artefact most likely to assert something the code no longer does — this repo's
+	# README claimed the Deep Research profile was unimplemented for weeks after it ran against real
+	# inference. So the guide's example is executed, not proofread.
+	$(COMPOSE) -f deploy/compose/first-use-case.override.yml --profile core up -d --build --wait \
+		postgres temporal worker toolgw runcontroller
+	docker run --rm --network aeon_default -v "$(PWD):/repo" -w /repo/python \
+		-e AEON_TEST_RUNCONTROLLER_ADDR="runcontroller:9404" \
+		-e AEON_TEST_TOOLGW_ADDR="toolgw:9403" \
+		python:3.13-slim sh -c \
+		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q -rs tests/integration/test_first_use_case.py"
+	$(COMPOSE) -f deploy/compose/first-use-case.override.yml --profile core stop postgres temporal worker toolgw runcontroller
+
+first-use-case: ## Run examples/first-use-case end to end against the real gateway (docs/your-first-use-case.md)
+	# The on-ramp, and it is a TARGET rather than a block of shell in a document because a documented
+	# command nobody runs is a document that rots. `make test-python-integration` runs this same example
+	# through test_first_use_case_runs_end_to_end, so the guide cannot drift from what works.
+	$(COMPOSE) -f deploy/compose/first-use-case.override.yml --profile core up -d --build --wait \
+		postgres temporal worker toolgw runcontroller
+	scripts/first_use_case.sh
+	@echo
+	@echo "Stack still up. 'make down' when you are finished, or read docs/your-first-use-case.md for what to change next."
 
 eval-run: ## Run an EvalSuite offline (EVAL-002): make eval-run SUITE=deep_research_core [TRIALS=3]
 	# `aeon eval run` (go/cmd/aeon) shells out to this same aeon_evalops.cli entrypoint when a local

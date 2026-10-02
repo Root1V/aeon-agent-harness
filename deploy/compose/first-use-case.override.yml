@@ -1,0 +1,31 @@
+# Overrides that make the reference stack execute tools FOR REAL, for docs/your-first-use-case.md.
+#
+# WHY AN OVERRIDE AND NOT THE DEFAULT. The base stack's worker runs with
+# AEON_TOOL_EXECUTION_MODE=local-ledger, which records a tool call's intent in a file and executes
+# NOTHING. That is deliberate and it is still the right default for the base stack: every graph in the
+# test suite calls `artifact.write`, which the Go executor does not implement and which the reference
+# policy bundle answers with `require_approval` — so in gateway mode those runs would correctly block
+# on a person who is not there. Flipping the default would turn a dozen passing tests red for the right
+# reason and tell a newcomer nothing.
+#
+# This file is the other half of that honesty: a use case built on tools that DO exist
+# (`repository.read`, `artifact.read`) runs against the real gateway, with real policy, and this is how.
+services:
+  worker:
+    environment:
+      # Both would be a contradiction and the worker refuses it out loud (tool_activities.py), so the
+      # ledger mode is cleared rather than left to be overridden by precedence.
+      AEON_TOOL_EXECUTION_MODE: ""
+      AEON_TOOLGW_ADDR: toolgw:9403
+      AEON_CALLER_TOKEN: dev-first-use-case-token-not-a-secret
+
+  toolgw:
+    environment:
+      # The use case's own bundles. The base stack hardcodes the deep-research ones, which is why
+      # pointing at these needs a file and not a shell variable.
+      AEON_POLICY_BUNDLE_PATH: /examples/first-use-case/policy_bundle.yaml
+      AEON_CALLERS_PATH: /examples/first-use-case/callers.yaml
+
+  runcontroller:
+    environment:
+      AEON_CALLERS_PATH: /examples/first-use-case/callers.yaml

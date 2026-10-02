@@ -1,0 +1,26 @@
+{
+  "id": "review-an-adr",
+  "kind": "sequential",
+  "children": [
+    {
+      "id": "read-the-decision",
+      "kind": "tool_call",
+      "tool_name": "repository.read",
+      "tool_args": {
+        "path": "adr/0001-temporal-determinism-boundary.md",
+        "start_line": 1,
+        "end_line": 40
+      }
+    },
+    {
+      "id": "read-the-second-decision",
+      "kind": "tool_call",
+      "tool_name": "repository.read",
+      "tool_args": {
+        "path": "adr/0004-model-gateway-provider-abstraction.md",
+        "start_line": 1,
+        "end_line": 40
+      }
+    }
+  ]
+}

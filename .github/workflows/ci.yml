@@ -77,6 +77,27 @@ jobs:
         if: failure()
         run: docker compose -f deploy/compose/docker-compose.yml --profile core --profile obs logs --tail 200
 
+  on-ramp:
+    name: the on-ramp (docs/your-first-use-case.md)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      # Its own job rather than a step in integration-python, because the override it needs points the
+      # Tool Gateway at a DIFFERENT policy bundle — running both in one job would mean the other tests
+      # were evaluated against a bundle written for the example.
+      - name: Run the guide's own example
+        shell: bash
+        run: |
+          set -o pipefail
+          make test-first-use-case 2>&1 | tee /tmp/on-ramp.log
+      - name: Fail if anything skipped because it was not configured
+        if: always()
+        run: python3 scripts/check_skips.py /tmp/on-ramp.log
+      - name: Compose logs
+        if: failure()
+        run: docker compose -f deploy/compose/docker-compose.yml --profile core logs --tail 200
+
   integration-python:
     name: integration (python, real gateways)
     runs-on: ubuntu-latest

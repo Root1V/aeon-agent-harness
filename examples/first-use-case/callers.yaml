@@ -1,0 +1,29 @@
+# Who may call the harness for this use case (SEC-005).
+#
+# The token below is PUBLIC — it is in a committed file. That is fine for a laptop and not fine for
+# anything another person can reach. For a real deployment:
+#
+#   token=$(openssl rand -hex 32)          # keep this where you keep secrets
+#   printf '%s' "$token" | shasum -a 256   # put THIS in tokenSHA256
+#
+# The bundle never holds a token, only its SHA-256.
+apiVersion: harness.ai/v1
+kind: CallerBundle
+callers:
+  # The process that starts runs and executes tools as this agent. It may NOT approve: the caller that
+  # gets blocked on an approval must not be able to answer it, or the gate is decoration.
+  - id: first-use-case-runner
+    kind: service
+    # sha256 of "dev-first-use-case-token-not-a-secret"
+    tokenSHA256: "6c86efc85ec4a08866e5a2caab1f160fe877f3a05c73c2b77f5b4b4746eaa03a"
+    mayActAs:
+      - first-use-case@0.1.0
+    mayApprove: false
+
+  # A person. May approve, and may not act as the agent — both directions matter.
+  - id: first-use-case-operator
+    kind: human
+    # sha256 of "dev-first-use-case-operator-token-not-a-secret"
+    tokenSHA256: "1a88fe75edad3fe66e3e4b1810a760235e92ead7b2061203353a15f21590166b"
+    mayActAs: []
+    mayApprove: true
