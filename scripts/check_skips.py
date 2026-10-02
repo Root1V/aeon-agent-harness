@@ -66,6 +66,11 @@ TOLERATED = (
     # The streaming half of the seam measurement needs a real aeon-modelgw wired to a real provider —
     # which means provider credentials, same argument as the Prometheus ones above.
     "AEON_TEST_MODELGW_ADDR not set",
+    # TOOL-008 asserts that a root holding a .env is refused. A fresh checkout has no .env — it is
+    # gitignored — so on a runner there is nothing for the check to find in the repository root. The
+    # property itself is covered with a temp directory in the same test; this half only exercises the
+    # real directories, and no workflow should create a .env to make it run.
+    "there is nothing for the check to find in the repository root",
 )
 
 

@@ -329,9 +329,20 @@ func TestARootHoldingCredentialsIsRefusedAtStartup(t *testing.T) {
 		if err := CheckRepositoryRoot(filepath.Join(repoRoot, "docs")); err != nil {
 			t.Fatalf("docs/ — the compose default — was refused: %v", err)
 		}
+		// AND THE REPOSITORY ROOT ONLY WHEN THERE IS SOMETHING THERE TO FIND. The first version of this
+		// subtest asserted the repo root is always refused, which is a property of a laptop that has run
+		// the stack and not of the repository: `.env` is gitignored, so a fresh checkout does not have
+		// one. CI said so on its first run after CI-001 shipped — the assertion passed here and failed
+		// there, which is the pair this project keeps meeting from the other side.
+		//
+		// The disclosure case itself is covered above with a temp directory, and against the real binary.
+		if _, err := os.Stat(filepath.Join(repoRoot, ".env")); err != nil {
+			t.Skipf("this checkout has no .env, so there is nothing for the check to find in the repository root (%v)", err)
+		}
 		if err := CheckRepositoryRoot(repoRoot); err == nil {
-			t.Fatal("the repository root was ACCEPTED. It holds .env on any machine that has run this " +
-				"stack, and this test is the one that would have caught the first version of TOOL-008")
+			t.Fatal("the repository root was ACCEPTED while holding a .env — this is the check that would " +
+				"have caught the first version of TOOL-008, which returned PROMETHEUS_CLIENT_SECRET " +
+				"through the gateway")
 		}
 	})
 }
