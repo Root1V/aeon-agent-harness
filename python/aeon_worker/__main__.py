@@ -40,15 +40,21 @@ logger = logging.getLogger("aeon_worker")
 
 
 async def main() -> None:
-    # SEC-006: resolve this worker's own credential FIRST, because resolving it is what removes it
-    # from os.environ — and this process goes on to spawn the `claude` CLI with its whole
-    # environment (claude_agent_sdk builds the child's env as {**os.environ, **options.env}). Doing
-    # it here rather than leaving it to the first outbound call makes the scrub happen at boot
-    # instead of whenever an activity first runs, which is after a subprocess could already have
-    # started. A misconfigured credential is fatal, in the only place where "fatal" still means the
-    # worker never claimed a task.
+    # SEC-006: take this worker's own credential FIRST — `take` is the one that removes it from
+    # os.environ, and this process goes on to spawn the `claude` CLI with its whole
+    # environment (claude_agent_sdk builds the child's env as {**os.environ, **options.env}).
+    #
+    # IT IS HERE AND NOT IN outbound.caller_token() because scrubbing is a decision about THIS
+    # process. A library that scrubs on read takes the variable away from whatever imported it, and
+    # that is exactly what broke the Python integration suite: pytest runs an in-process worker in
+    # one file and spawns one with os.environ.copy() in the next, so the second worker started with
+    # no credential and its activities died on 401. An entrypoint can make this decision; a header
+    # builder cannot.
+    #
+    # A misconfigured credential is fatal, in the only place where "fatal" still means the worker
+    # never claimed a task.
     try:
-        token = outbound.caller_token()
+        token = secretref.take(outbound.CALLER_TOKEN_ENV)
     except secretref.SecretRefError as exc:
         raise SystemExit(f"aeon-worker: {exc}") from exc
     logger.info(

@@ -28,7 +28,11 @@ CALLER_TOKEN_ENV = "AEON_CALLER_TOKEN"
 
 
 def caller_token() -> str:
-    return secretref.take(CALLER_TOKEN_ENV)
+    # resolve, NOT take: this is a library function, and scrubbing here removed the variable from
+    # whatever process imported it — including pytest, which runs an in-process worker in one file
+    # and spawns one with os.environ.copy() in the next. See aeon_worker.secretref's docstring; the
+    # scrub belongs to aeon_worker/__main__.py, which is the process that spawns the `claude` CLI.
+    return secretref.resolve(CALLER_TOKEN_ENV)
 
 
 def service_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
