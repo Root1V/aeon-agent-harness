@@ -22,6 +22,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/circuitbreaker"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
+	"github.com/aeon-ai/aeon/go/internal/secretref"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
@@ -51,7 +52,13 @@ func main() {
 	if dsn == "" {
 		log.Fatal("aeon-controlplane: AEON_PG_DSN is required")
 	}
-	memoryHMACKey := os.Getenv("AEON_MEMORY_HMAC_KEY")
+	// SEC-006: AEON_MEMORY_HMAC_KEY_FILE also works, and either way the key leaves this process's
+	// environment once read. It is a secret in the strict sense — whoever holds it can forge a
+	// provenance_hmac, which is the one thing MEM-001/SEC-004's tamper detection rests on.
+	memoryHMACKey, _, err := secretref.Take("AEON_MEMORY_HMAC_KEY")
+	if err != nil {
+		log.Fatalf("aeon-controlplane: %v", err)
+	}
 	if memoryHMACKey == "" {
 		log.Fatal("aeon-controlplane: AEON_MEMORY_HMAC_KEY is required (MEM-001 provenance_hmac)")
 	}

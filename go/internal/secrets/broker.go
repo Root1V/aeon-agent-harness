@@ -20,10 +20,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/aeon-ai/aeon/go/internal/secretref"
 )
 
 // DefaultLeaseTTL is used when Issue is called with ttl<=0.
@@ -55,19 +56,28 @@ func NewBroker(values map[string]string) *Broker {
 	return &Broker{secrets: copied, leases: map[string]lease{}}
 }
 
-// NewBrokerFromEnv builds a Broker whose secret values come from AEON_SECRET_<NAME> environment
-// variables — the same "config-as-code from environment" convention every provider credential in
-// this project already follows (go/cmd/aeon-modelgw/main.go). A name with no corresponding
-// non-empty env var is simply absent (Issue for it fails with a clear error) rather than the
-// process refusing to start.
-func NewBrokerFromEnv(names []string) *Broker {
+// NewBrokerFromEnv builds a Broker whose secret values come from AEON_SECRET_<NAME> — or, since
+// SEC-006, from AEON_SECRET_<NAME>_FILE, which is how a real secret store feeds this without the
+// value ever entering the process's environment (go/internal/secretref). Either way the variable is
+// removed from the environment once read, so the broker's own secrets are not inherited by anything
+// aeon-toolgw spawns, which includes TOOL-003's sandbox containers.
+//
+// A name with no corresponding value is simply absent (Issue for it fails with a clear error)
+// rather than the process refusing to start. A name configured WRONG — both sources at once, or a
+// _FILE that cannot be read — returns an error, because that is a broker that would answer "no such
+// secret" for a secret the deployment believes it provisioned.
+func NewBrokerFromEnv(names []string) (*Broker, error) {
 	values := make(map[string]string, len(names))
 	for _, name := range names {
-		if v := os.Getenv(envVarName(name)); v != "" {
+		v, _, err := secretref.Take(envVarName(name))
+		if err != nil {
+			return nil, fmt.Errorf("secrets: loading %q: %w", name, err)
+		}
+		if v != "" {
 			values[name] = v
 		}
 	}
-	return NewBroker(values)
+	return NewBroker(values), nil
 }
 
 func envVarName(name string) string {

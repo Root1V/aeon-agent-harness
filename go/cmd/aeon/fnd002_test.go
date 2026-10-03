@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aeon-ai/aeon/go/internal/secretref"
+
 	"github.com/aeon-ai/aeon/go/internal/abom"
 )
 
@@ -21,6 +23,13 @@ func TestPublishGeneratesAndSignsReproducibleABOM(t *testing.T) {
 	srv := newFakeControlPlane(t)
 	t.Setenv("AEON_CONTROLPLANE_ADDR", strings.TrimPrefix(srv.URL, "http://"))
 	t.Setenv("AEON_ABOM_SIGNING_KEY", strings.Repeat("cd", 32)) // 32 bytes of 0xcd, a fixed test seed
+	// SEC-006: secretref.Take is memoised per PROCESS, which is right for the real CLI — one
+	// invocation of `aeon publish` is one process — and wrong for a test binary, where every test is
+	// pretending to be a separate process. Without this reset the cache is whatever the first test in
+	// this package resolved: a dx002 test publishes with no signing key, caches the empty string, and
+	// this test's t.Setenv then has no effect, so the two publishes below get two EPHEMERAL keys and
+	// the reproducibility assertion fails on a defect that only exists in the test binary.
+	secretref.ResetForTest()
 
 	manifestPath := writeTempAgentManifest(t, "abom-test-agent", "0.1.0")
 
@@ -73,6 +82,7 @@ func TestPublishWarnsWhenSigningKeyIsEphemeral(t *testing.T) {
 	srv := newFakeControlPlane(t)
 	t.Setenv("AEON_CONTROLPLANE_ADDR", strings.TrimPrefix(srv.URL, "http://"))
 	t.Setenv("AEON_ABOM_SIGNING_KEY", "") // explicitly unset
+	secretref.ResetForTest()              // see the note above: one test, one pretend process
 
 	manifestPath := writeTempAgentManifest(t, "abom-ephemeral-agent", "0.1.0")
 

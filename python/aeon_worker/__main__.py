@@ -32,6 +32,7 @@ from aeon_worker.activities.memory_activities import reflect_activity, write_mem
 from aeon_worker.activities.model_activities import decide_activity
 from aeon_worker.activities.tool_activities import execute_tool_activity
 from aeon_observability import init_tracing
+from aeon_worker import outbound, secretref
 from aeon_worker.registry import WORKFLOWS
 
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +40,23 @@ logger = logging.getLogger("aeon_worker")
 
 
 async def main() -> None:
+    # SEC-006: resolve this worker's own credential FIRST, because resolving it is what removes it
+    # from os.environ — and this process goes on to spawn the `claude` CLI with its whole
+    # environment (claude_agent_sdk builds the child's env as {**os.environ, **options.env}). Doing
+    # it here rather than leaving it to the first outbound call makes the scrub happen at boot
+    # instead of whenever an activity first runs, which is after a subprocess could already have
+    # started. A misconfigured credential is fatal, in the only place where "fatal" still means the
+    # worker never claimed a task.
+    try:
+        token = outbound.caller_token()
+    except secretref.SecretRefError as exc:
+        raise SystemExit(f"aeon-worker: {exc}") from exc
+    logger.info(
+        "caller credential: %s (%s)",
+        "configured" if token else "NOT configured — every call to an Aeon service will get a 401",
+        "never in this process's environment" if token else outbound.CALLER_TOKEN_ENV,
+    )
+
     address = os.environ.get("AEON_TEMPORAL_ADDRESS", "localhost:7233")
     task_queue = os.environ.get("AEON_TASK_QUEUE", "aeon-agent-run")
     namespace = os.environ.get("AEON_TEMPORAL_NAMESPACE", "default")

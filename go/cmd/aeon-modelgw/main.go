@@ -39,6 +39,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/providers/openai"
 	openaicompatible "github.com/aeon-ai/aeon/go/internal/providers/openai_compatible"
 	prometheusinference "github.com/aeon-ai/aeon/go/internal/providers/prometheus_inference"
+	"github.com/aeon-ai/aeon/go/internal/secretref"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
@@ -159,41 +160,72 @@ func loadModelPolicyBundle() modelgateway.ModelPolicyBundleDoc {
 
 // registerProvidersFromEnv wires each adapter whose required credentials/endpoints are present in
 // the environment (see .env.example) and returns the names actually registered.
+//
+// SEC-006: every credential below comes from secretref.Take, so each one can arrive as
+// <NAME>_FILE instead of <NAME> — and either way it is removed from this process's environment once
+// read. The endpoints and client IDs beside them stay plain os.Getenv on purpose: they are not
+// secrets, scrubbing them would hide them from `docker inspect` where an operator wants to see them,
+// and a gateway URL in a child process's environment is a configuration detail and not a disclosure.
 func registerProvidersFromEnv(gw *modelgateway.Gateway, bundle modelgateway.ModelPolicyBundleDoc) []string {
 	var registered []string
 
-	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+	if key, ok := takeSecret("ANTHROPIC_API_KEY"); ok {
 		gw.RegisterProvider(anthropic.Name, &anthropic.Adapter{APIKey: key})
 		registered = append(registered, anthropic.Name)
 	}
-	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+	if key, ok := takeSecret("OPENAI_API_KEY"); ok {
 		gw.RegisterProvider(openai.Name, &openai.Adapter{APIKey: key})
 		registered = append(registered, openai.Name)
 	}
-	if key := os.Getenv("GOOGLE_API_KEY"); key != "" {
+	if key, ok := takeSecret("GOOGLE_API_KEY"); ok {
 		gw.RegisterProvider(gemini.Name, &gemini.Adapter{APIKey: key})
 		registered = append(registered, gemini.Name)
 	}
 	if clientID := os.Getenv("PROMETHEUS_CLIENT_ID"); clientID != "" {
+		clientSecret, _ := takeSecret("PROMETHEUS_CLIENT_SECRET")
 		gw.RegisterProvider(prometheusinference.Name, prometheusinference.New(
 			os.Getenv("PROMETHEUS_AUTH_URL"),
 			os.Getenv("PROMETHEUS_GATEWAY_URL"),
 			clientID,
-			os.Getenv("PROMETHEUS_CLIENT_SECRET"),
+			clientSecret,
 			prometheusScope(bundle),
 			os.Getenv("PROMETHEUS_DEFAULT_MODEL"),
 		))
 		registered = append(registered, prometheusinference.Name)
 	}
 	if baseURL := os.Getenv("OPENAI_COMPATIBLE_BASE_URL"); baseURL != "" {
+		key, _ := takeSecret("OPENAI_COMPATIBLE_API_KEY")
 		gw.RegisterProvider(openaicompatible.Name, &openaicompatible.Adapter{
 			BaseURL: baseURL,
-			APIKey:  os.Getenv("OPENAI_COMPATIBLE_API_KEY"),
+			APIKey:  key,
 		})
 		registered = append(registered, openaicompatible.Name)
 	}
 
 	return registered
+}
+
+// takeSecret resolves one credential and refuses to start the gateway if it is configured wrong —
+// two sources at once, or a <NAME>_FILE that cannot be read. NOT configured is not wrong: it returns
+// false and the caller skips that adapter, which is how a deployment with no Anthropic account runs.
+//
+// Fatal rather than a warning, because the alternative was measured in MDL-015's neighbourhood: an
+// adapter that silently fails to register does not break anything visibly. Routing falls through to
+// the next candidate in the bundle, the run succeeds, and it answers from a different model at a
+// different price. A credential whose secret store did not mount has to look like a broken
+// deployment, not like a cheaper one.
+func takeSecret(name string) (string, bool) {
+	value, source, err := secretref.Take(name)
+	if err != nil {
+		log.Fatalf("aeon-modelgw: %v", err)
+	}
+	if source == secretref.SourceFile {
+		// The source, never the value. Worth a line: "is this deployment on the file path?" is the
+		// first question after wiring a secret store, and the honest answer is in the process that
+		// read it rather than in the compose file someone believes is in effect.
+		log.Printf("aeon-modelgw: %s resolved from %s%s (never entered this process's environment)", name, name, secretref.FileSuffix)
+	}
+	return value, source != secretref.SourceAbsent
 }
 
 // prometheusScope builds the OAuth scope the Prometheus adapter requests, naming EVERY
@@ -268,10 +300,14 @@ func verifyDeclaredModalities(bundle modelgateway.ModelPolicyBundleDoc) {
 	if clientID == "" {
 		return // no Prometheus candidates can be in play; nothing to verify against
 	}
+	// SEC-006: the same memoised read registerProvidersFromEnv already did. secretref.Take is
+	// destructive, so this second read gets the cached value rather than the empty string the
+	// environment now holds — the reason that memoisation exists is exactly this call site.
+	clientSecret, _ := takeSecret("PROMETHEUS_CLIENT_SECRET")
 	client := &prometheusinference.Client{
 		GatewayURL:   os.Getenv("PROMETHEUS_GATEWAY_URL"),
 		ClientID:     clientID,
-		ClientSecret: os.Getenv("PROMETHEUS_CLIENT_SECRET"),
+		ClientSecret: clientSecret,
 		Scope:        prometheusScope(bundle),
 	}
 	defer client.Close()

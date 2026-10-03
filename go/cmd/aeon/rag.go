@@ -10,6 +10,7 @@ import (
 
 	prometheusinference "github.com/aeon-ai/aeon/go/internal/providers/prometheus_inference"
 	"github.com/aeon-ai/aeon/go/internal/rag"
+	"github.com/aeon-ai/aeon/go/internal/secretref"
 	"github.com/aeon-ai/aeon/go/internal/store"
 )
 
@@ -39,6 +40,15 @@ func runRagIndex(dir, corpus string) error {
 	}
 	defer s.Close()
 
+	// SEC-006: the credential leaves this process's environment once read, which matters in the CLI
+	// specifically because `aeon eval run` and `aeon replay` exec a Python interpreter with no
+	// cmd.Env — so before this, every provider secret in the operator's shell was handed to a child
+	// process that has no use for it.
+	clientSecret, _, err := secretref.Take("PROMETHEUS_CLIENT_SECRET")
+	if err != nil {
+		return err
+	}
+
 	embedder := &prometheusinference.Embedder{
 		Client: &prometheusinference.Client{
 			// MDL-009: one address. PROMETHEUS_AUTH_URL is no longer read — the gateway serves
@@ -47,7 +57,7 @@ func runRagIndex(dir, corpus string) error {
 			// party with nothing failing.
 			GatewayURL:   os.Getenv("PROMETHEUS_GATEWAY_URL"),
 			ClientID:     os.Getenv("PROMETHEUS_CLIENT_ID"),
-			ClientSecret: os.Getenv("PROMETHEUS_CLIENT_SECRET"),
+			ClientSecret: clientSecret,
 			Scope:        "inference:read model:" + model,
 		},
 		ModelID: model,

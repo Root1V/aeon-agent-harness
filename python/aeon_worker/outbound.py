@@ -6,9 +6,12 @@ site. Before SEC-005 the three outbound call sites each wrote
 to three hand-written dicts is how one of them ends up with the trace and not the credential — and the
 failure mode is a 401 from one activity and not the others, which reads as a flaky service.
 
-THE TOKEN IS AN ENVIRONMENT VARIABLE AND NOT A FILE, because the worker is a caller rather than a
-verifier: it needs its own credential, not the bundle of everyone's hashes. `AEON_CALLER_TOKEN` is the
-secret; the bundle the gateways load holds only its SHA-256 (go/internal/auth).
+THE TOKEN IS A CREDENTIAL AND NOT A BUNDLE, because the worker is a caller rather than a verifier: it
+needs its own secret, not everyone's hashes. `AEON_CALLER_TOKEN` is the secret; the bundle the
+gateways load holds only its SHA-256 (go/internal/auth). Since SEC-006 it can arrive as
+`AEON_CALLER_TOKEN_FILE`, and either way it is removed from `os.environ` on first read — the worker
+spawns the `claude` CLI with its whole environment, and that binary has no use for the credential
+that lets you call the Tool Gateway as this agent (see aeon_worker.secretref).
 
 AND AN EMPTY TOKEN SENDS NO HEADER AT ALL, rather than `Bearer `. The gateway's answer to a missing
 credential is a 401 that names the variable; its answer to a malformed one would be the same 401 with
@@ -17,13 +20,15 @@ different problems and the first one has to look like itself.
 """
 from __future__ import annotations
 
-import os
-
 from aeon_observability import inject_trace_context
+
+from aeon_worker import secretref
+
+CALLER_TOKEN_ENV = "AEON_CALLER_TOKEN"
 
 
 def caller_token() -> str:
-    return os.environ.get("AEON_CALLER_TOKEN", "")
+    return secretref.take(CALLER_TOKEN_ENV)
 
 
 def service_headers(extra: dict[str, str] | None = None) -> dict[str, str]:

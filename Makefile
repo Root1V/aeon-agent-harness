@@ -1,8 +1,34 @@
 # Aeon — every workflow goes through a container. No local Go/Python toolchain is required.
-COMPOSE := docker compose -f deploy/compose/docker-compose.yml
+#
+# --env-file IS LOAD-BEARING (SEC-006). Compose looks for its interpolation file in the PROJECT
+# directory, which is deploy/compose/ (where the compose file lives) — not the repository root, where
+# `.env` and `.env.example` are. So every `${VAR:-default}` in docker-compose.yml was resolved
+# without ever reading the `.env` the documentation tells you to edit, and there are 16 of them.
+#
+# Measured, because the consequences do not look like a configuration problem:
+#   - AEON_OTEL_ENDPOINT set in .env stayed `otel-collector:4318` in all four Go services, so
+#     ".env.example says pointing the whole stack at an Argus agent is these three variables" was
+#     false. That single-variable change was itself the fix for having to edit four services by hand.
+#   - AEON_CALLER_TOKEN set in .env reached controlplane, modelgw and toolgw — the three services
+#     that VERIFY tokens and never present one — and did NOT reach the worker, the only service that
+#     needs it, which stayed on the public committed development token. Rotating the worker's
+#     credential by editing .env rotated nothing.
+#   - AEON_MEMORY_HMAC_KEY set in .env stayed `dev-only-insecure-memory-hmac-key-change-me`, the
+#     committed default. That key is the whole basis of MEM-001/SEC-004 tamper detection: anyone who
+#     knows it can forge a provenance_hmac, and the public value is in this repository.
+#
+# Conditional on the file existing, because `--env-file` on a missing path is an error and a fresh
+# clone has no `.env` — `make dev` has to work before anything is configured.
+COMPOSE := docker compose $(if $(wildcard .env),--env-file .env,) -f deploy/compose/docker-compose.yml
 PROFILE ?= full
 
-.PHONY: dev down logs ps build test test-go test-go-integration test-python test-python-integration test-mdl-015 test-first-use-case first-use-case lint roadmap-check clean
+.PHONY: dev-secret-files dev-secrets dev down logs ps build test test-go test-go-integration test-python test-python-integration test-mdl-015 test-first-use-case first-use-case lint roadmap-check clean
+
+dev-secret-files: ## SEC-006: write deploy/compose/secrets/* for secrets.override.yml (no values printed)
+	bash scripts/secret_files.sh
+
+dev-secrets: dev-secret-files ## SEC-006: the reference stack with its secrets delivered as FILES, not env vars
+	$(COMPOSE) -f deploy/compose/secrets.override.yml --profile $(PROFILE) up -d --build
 
 dev: ## Start the full reference stack (Temporal, Postgres, MinIO, OTel, Tempo, Grafana, gateways, worker)
 	$(COMPOSE) --profile $(PROFILE) up -d --build

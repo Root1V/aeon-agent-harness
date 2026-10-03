@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/aeon-ai/aeon/go/internal/abom"
+	"github.com/aeon-ai/aeon/go/internal/secretref"
 )
 
 // writeABOM builds and signs the ABOM for a just-published manifest and writes it next to the
@@ -23,7 +24,14 @@ func writeABOM(manifestPath string, manifest map[string]any, rawManifest []byte)
 		return "", "", false, err
 	}
 
-	priv, ephemeral, err := abom.LoadOrGenerateSigningKey(os.Getenv("AEON_ABOM_SIGNING_KEY"))
+	// SEC-006: AEON_ABOM_SIGNING_KEY_FILE also works, and the seed leaves this process's
+	// environment once read. A leaked seed means anyone can sign an ABOM that verifies, which makes
+	// FND-002's whole chain decorative.
+	signingKey, _, err := secretref.Take("AEON_ABOM_SIGNING_KEY")
+	if err != nil {
+		return "", "", false, err
+	}
+	priv, ephemeral, err := abom.LoadOrGenerateSigningKey(signingKey)
 	if err != nil {
 		return "", "", false, err
 	}

@@ -28,6 +28,7 @@ import (
 	aeonmcp "github.com/aeon-ai/aeon/go/internal/mcp"
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	prometheusinference "github.com/aeon-ai/aeon/go/internal/providers/prometheus_inference"
+	"github.com/aeon-ai/aeon/go/internal/secretref"
 	"github.com/aeon-ai/aeon/go/internal/secrets"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/toolexec"
@@ -154,7 +155,10 @@ func main() {
 			}
 		}
 	}
-	broker := secrets.NewBrokerFromEnv(secretNames)
+	broker, err := secrets.NewBrokerFromEnv(secretNames)
+	if err != nil {
+		log.Fatalf("aeon-toolgw: %v", err)
+	}
 	toolexec.RegisterSecretsTool(executor, broker)
 
 	mux := http.NewServeMux()
@@ -279,7 +283,14 @@ func ragEmbedderFromEnv() *prometheusinference.Embedder {
 	authURL := os.Getenv("PROMETHEUS_AUTH_URL")
 	gatewayURL := os.Getenv("PROMETHEUS_GATEWAY_URL")
 	clientID := os.Getenv("PROMETHEUS_CLIENT_ID")
-	clientSecret := os.Getenv("PROMETHEUS_CLIENT_SECRET")
+	// SEC-006: the credential (and only the credential) comes from secretref, so it can arrive as
+	// PROMETHEUS_CLIENT_SECRET_FILE and is removed from this process's environment once read. That
+	// matters more here than in aeon-modelgw: this is the process that executes tools, and TOOL-003's
+	// sandbox and TOOL-008's repository.read are the two surfaces an agent's own output reaches.
+	clientSecret, _, err := secretref.Take("PROMETHEUS_CLIENT_SECRET")
+	if err != nil {
+		log.Fatalf("aeon-toolgw: %v", err)
+	}
 	if model == "" || authURL == "" || gatewayURL == "" || clientID == "" || clientSecret == "" {
 		return nil
 	}

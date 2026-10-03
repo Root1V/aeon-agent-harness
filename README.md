@@ -5,16 +5,22 @@ it always needs and always reimplements badly: a durable execution loop, typed c
 verifiable evidence and citations, authorization enforced outside the model, hard budgets, OTel
 tracing, and eval gates — without locking you into one model provider or one agent framework.
 
-> **Status:** 96 features `DONE`, each with a named acceptance test that runs against real
+> **Status:** 100 features `DONE`, each with a named acceptance test that runs against real
 > infrastructure — real Postgres, real Temporal, real model providers, real money where the feature is
 > about money. [roadmap.md](roadmap.md) is the index; don't trust a feature is real until its row says
 > `DONE`, and that status is mechanically checked (`make roadmap-check`) against a test that exists.
 > CI runs the whole thing on every push.
 >
-> **Not yet suitable for:** multi-tenant deployments, or secrets you would not put in a `.env`.
+> **Not yet suitable for:** multi-tenant deployments.
 > (Per-run cost, token and model-call ceilings from the agent manifest are enforced — `MDL-017`,
 > `MDL-018`.) [backlog.md](backlog.md) says which of those is missing and why, with the entry
 > criterion for each.
+>
+> **Credentials that are not yours:** every one accepts `<NAME>_FILE`, so a real secret store feeds
+> the stack without the value entering any process's environment — measured: not in `docker inspect`,
+> not in `/proc/<pid>/environ`, not inherited by the `claude` CLI the worker spawns. `make
+> dev-secrets`. What is still plaintext, and why, is stated in
+> [docs/secrets.md](docs/secrets.md) (`SEC-006`).
 >
 > **To run your own agent on it: [docs/your-first-use-case.md](docs/your-first-use-case.md)** — two
 > files and one HTTP call, no code in this repository changes.
