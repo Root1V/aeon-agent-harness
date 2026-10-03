@@ -1,9 +1,12 @@
 package stepidentity_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/aeon-ai/aeon/go/internal/stepidentity"
 )
@@ -231,9 +234,58 @@ func TestGenerateGoldenCorpus(t *testing.T) {
 		t.Fatalf("encoding corpus: %v", err)
 	}
 	out = append(out, '\n')
-	path := corpusPath(t)
-	if err := os.WriteFile(path, out, 0o644); err != nil {
-		t.Fatalf("writing %s: %v", path, err)
+
+	// BOTH FILES, IN ONE OPERATION, and that is the point of doing it here rather than in a script
+	// someone remembers to run. The shared file is the contract; the vendored copy is what CI checks.
+	// Writing one without the other produces exactly the state the drift test exists to catch — and
+	// the window in which it goes unnoticed is however long it takes someone to run the suite on the
+	// one machine that can see both.
+	shared := sharedCorpusPath()
+	if err := os.WriteFile(shared, out, 0o644); err != nil {
+		t.Fatalf("writing the shared contract %s: %v\n\nThis is the source of truth, in the three "+
+			"teams' coordination folder. If it is not on this machine, this generator has nothing to "+
+			"publish to and refreshing only the vendored copy would make this repo the contract.", shared, err)
 	}
-	t.Logf("wrote %d golden case(s) to %s", len(corpus.Cases), path)
+	t.Logf("wrote %d golden case(s) to the shared contract %s", len(corpus.Cases), shared)
+
+	vendored := corpusPath(t)
+	if err := os.WriteFile(vendored, out, 0o644); err != nil {
+		t.Fatalf("writing the vendored copy %s: %v", vendored, err)
+	}
+	sum := sha256.Sum256(out)
+	prov := corpusProvenance{
+		UpstreamPath: "Victor/coordinacion_project/contratos/identidad-de-paso/fixtures/hashes-dorados.json",
+		SHA256:       hex.EncodeToString(sum[:]),
+		VendoredAt:   time.Now().UTC().Format("2006-01-02"),
+	}
+	provOut, err := json.MarshalIndent(provenanceDoc(prov), "", "  ")
+	if err != nil {
+		t.Fatalf("encoding provenance: %v", err)
+	}
+	if err := os.WriteFile(provenancePath(t), append(provOut, '\n'), 0o644); err != nil {
+		t.Fatalf("writing provenance: %v", err)
+	}
+	t.Logf("refreshed the vendored copy and its provenance (%s) — tell the other two teams what changed", prov.SHA256[:12])
+}
+
+// provenanceDoc keeps the explanatory comment in the written file. A bare hash in a JSON file invites
+// the next reader to treat this copy as the contract, which it is not.
+func provenanceDoc(p corpusProvenance) map[string]any {
+	return map[string]any{
+		"_comment": []string{
+			"RUN-004: provenance for the vendored copy of the step-identity golden corpus.",
+			"The SOURCE OF TRUTH is upstream_path below, in the three-team coordination folder. This",
+			"copy exists so the contract's acceptance test runs somewhere other than one laptop — it is",
+			"NOT the contract. sha256 is the upstream file's hash at the moment it was vendored, and two",
+			"tests hold it to that: one hashes this copy and fails if it was edited here, the other",
+			"compares it byte for byte against upstream whenever that folder is reachable and fails on any",
+			"difference. Without the second, a copy that falls behind looks exactly like a verified one,",
+			"which is the failure mode this whole arrangement exists to avoid.",
+		},
+		"upstream_path":  p.UpstreamPath,
+		"upstream_owner": "shared contract: Aeon + Synaptum + Axonium",
+		"sha256":         p.SHA256,
+		"vendored_at":    p.VendoredAt,
+		"refresh":        "AEON_WRITE_STEP_IDENTITY_CORPUS=1 go test ./internal/stepidentity/ -run TestGenerateGoldenCorpus  (writes upstream AND refreshes this copy together)",
+	}
 }

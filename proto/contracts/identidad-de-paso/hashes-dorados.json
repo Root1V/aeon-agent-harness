@@ -1,0 +1,193 @@
+{
+  "canonicalization": "RFC 8785 (JCS), SHA-256 over the canonical bytes, hex lowercase",
+  "hashed_shape": "{\"step_id\": string, \"tool_args\": object, \"tool_name\": string} — a JSON OBJECT with exactly these three keys, canonicalized as a whole. JCS sorts the keys, so the order above is derived from the spec and not a convention any team has to remember.",
+  "cases": [
+    {
+      "name": "html-escaping-characters",
+      "why": "Go's encoding/json HTML-escapes \u003c, \u003e and \u0026 by default; JCS does not. Two implementations of the same object would otherwise hash differently with no flag in sight.",
+      "step": {
+        "step_id": "s1",
+        "tool_name": "search.web",
+        "tool_args": {
+          "query": "cats \u0026 dogs \u003ctag\u003e"
+        }
+      },
+      "expect": "hash",
+      "canonical_json": "{\"step_id\":\"s1\",\"tool_args\":{\"query\":\"cats \u0026 dogs \u003ctag\u003e\"},\"tool_name\":\"search.web\"}",
+      "sha256": "ddff2ef1f337d958bac67795a158a40b91fc5b76fcf0d81e736b8fc1900a355c"
+    },
+    {
+      "name": "non-ascii-payload",
+      "why": "Python's json.dumps escapes non-ASCII by default (ensure_ascii=True); JCS emits it raw as UTF-8. This is one of the two divergences that IS a flag, and it still has to be pinned.",
+      "step": {
+        "step_id": "s2",
+        "tool_name": "search.web",
+        "tool_args": {
+          "query": "ñandú café 日本語"
+        }
+      },
+      "expect": "hash",
+      "canonical_json": "{\"step_id\":\"s2\",\"tool_args\":{\"query\":\"ñandú café 日本語\"},\"tool_name\":\"search.web\"}",
+      "sha256": "edfc0975309263883c7f7d910ca113a2a22368bad6e10f39f38114202625ebcb"
+    },
+    {
+      "name": "integral-float-vs-int",
+      "why": "Go writes 1 for a float64 1.0 and Python writes 1.0. NUMBERS ARE NOT A FLAG IN EITHER LANGUAGE, which is the reason a shared canonicalization had to be adopted rather than configured. JCS mandates ECMAScript number serialization, so both become 1.",
+      "step": {
+        "step_id": "s3",
+        "tool_name": "payments.capture",
+        "tool_args": {
+          "amount": 1,
+          "quantity": 1
+        }
+      },
+      "expect": "hash",
+      "canonical_json": "{\"step_id\":\"s3\",\"tool_args\":{\"amount\":1,\"quantity\":1},\"tool_name\":\"payments.capture\"}",
+      "sha256": "ab8fce6d2b3f7d6ef33d1c08153dbea77d9bbc15ae0d00abcbc813a750a2a587"
+    },
+    {
+      "name": "nested-object-key-order",
+      "why": "Key order must be derived from the spec at every depth, not just at the top level. Keys are written here in deliberately wrong order so a canonicalizer that only sorts the outer object fails.",
+      "step": {
+        "step_id": "s4",
+        "tool_name": "repository.read",
+        "tool_args": {
+          "alpha": true,
+          "zebra": {
+            "a": 2,
+            "m": {
+              "b": 4,
+              "y": 3
+            },
+            "z": 1
+          }
+        }
+      },
+      "expect": "hash",
+      "canonical_json": "{\"step_id\":\"s4\",\"tool_args\":{\"alpha\":true,\"zebra\":{\"a\":2,\"m\":{\"b\":4,\"y\":3},\"z\":1}},\"tool_name\":\"repository.read\"}",
+      "sha256": "0a1a934c2767becdea2b21f7e8c443249d440a34499c615351e4171104842ef8"
+    },
+    {
+      "name": "empty-list-vs-absent",
+      "why": "An empty list and an absent key are different objects and must hash differently. This is the pair that makes 'the harness sent no filters' distinguishable from 'the harness sent an empty filter set' — and an approval bound to one must not validate the other.",
+      "step": {
+        "step_id": "s5",
+        "tool_name": "search.rag",
+        "tool_args": {
+          "filters": [],
+          "query": "x"
+        }
+      },
+      "expect": "hash",
+      "canonical_json": "{\"step_id\":\"s5\",\"tool_args\":{\"filters\":[],\"query\":\"x\"},\"tool_name\":\"search.rag\"}",
+      "sha256": "160780be534070df8e740f8704d2e7f331ba384576718d768a1354461d7540ce"
+    },
+    {
+      "name": "absent-list-counterpart",
+      "why": "The other half of empty-list-vs-absent. Two cases rather than one because a corpus that only contains the empty list cannot show that the absent one differs.",
+      "step": {
+        "step_id": "s5",
+        "tool_name": "search.rag",
+        "tool_args": {
+          "query": "x"
+        }
+      },
+      "expect": "hash",
+      "canonical_json": "{\"step_id\":\"s5\",\"tool_args\":{\"query\":\"x\"},\"tool_name\":\"search.rag\"}",
+      "sha256": "239a8f654c905d2833d7e3def272d07a510f5596f46ef942ff2e66a9f89a2a03"
+    },
+    {
+      "name": "key-outside-the-bmp",
+      "why": "JCS sorts by UTF-16 code units, so a key outside the Basic Multilingual Plane is a surrogate pair and sorts by its surrogates — not by code point. An implementation sorting by code point diverges here and nowhere else.",
+      "step": {
+        "step_id": "s6",
+        "tool_name": "artifact.read",
+        "tool_args": {
+          "z": "ascii key",
+          "😀": "emoji key"
+        }
+      },
+      "expect": "hash",
+      "canonical_json": "{\"step_id\":\"s6\",\"tool_args\":{\"z\":\"ascii key\",\"😀\":\"emoji key\"},\"tool_name\":\"artifact.read\"}",
+      "sha256": "f2ad1c6a439f5f87b5efce2a29c55e625b2c412e30bd085432e84489da71ccd3"
+    },
+    {
+      "name": "unicode-normalization-is-not-applied",
+      "why": "Synaptum's addition. Precomposed 'é' (U+00E9) and 'e' + combining acute (U+0065 U+0301) look identical and are different strings. JCS orders by code units and DOES NOT normalize, so both keys coexist and sort apart. Fixed here rather than discovered later.",
+      "step": {
+        "step_id": "s7",
+        "tool_name": "search.web",
+        "tool_args": {
+          "café": "decomposed NFD",
+          "café": "precomposed NFC"
+        }
+      },
+      "expect": "hash",
+      "canonical_json": "{\"step_id\":\"s7\",\"tool_args\":{\"café\":\"decomposed NFD\",\"café\":\"precomposed NFC\"},\"tool_name\":\"search.web\"}",
+      "sha256": "220bd695fdd53ca29acfa5b519df56c1809fa2d21c71f5634c8f81cd4f961488"
+    },
+    {
+      "name": "big-integer-beyond-double-precision",
+      "why": "Synaptum's addition, and the most important case here. 2^53+1 is NOT representable as an IEEE-754 double, and RFC 8785 mandates ECMAScript number serialization - whose numbers ARE doubles. It used to canonicalize to 9007199254740992 and collide. SINCE 2026-09-27 IT IS REFUSED, by agreement between all three teams.",
+      "step": {
+        "step_id": "s8",
+        "tool_name": "payments.capture",
+        "tool_args": {
+          "reference": 9007199254740993
+        }
+      },
+      "expect": "reject",
+      "reject_reason": "an integer of magnitude greater than 2^53 cannot be bound by this hash: two different values canonicalize identically, so an approval granted for one would validate the other. The implementation must RAISE rather than fold or preserve silently. Send such an identifier as a string.",
+      "notes": {
+        "the_bound_is_a_clean_cut": "|v| \u003e 2^53, NOT a round-trip check. Above 2^53 doubles step by two, so every EVEN integer up there still round-trips exactly: a round-trip check accepts half the identifiers anyone uses, BY PARITY - worse than no guard, because whoever integrates it watches their test values pass. Both Aeon and Synaptum said the round-trip version is what they would have written first. See big-integer-exact-but-refused.",
+        "why_refusing_beats_agreeing": "Folding consistently in all three implementations would have restored equivalence and KEPT the collision: we would agree on the same wrong answer. Refusing is what turns 'carry such an identifier as a string' from advice in a document into something that cannot be broken without noticing."
+      }
+    },
+    {
+      "name": "big-integer-exact-but-refused",
+      "why": "2^53+2 IS exactly representable and round-trips perfectly, and it is refused anyway. This case is the difference between the clean cut and the round-trip check, and it is what makes the rule unambiguous to whoever implements it next.",
+      "step": {
+        "step_id": "s8",
+        "tool_name": "payments.capture",
+        "tool_args": {
+          "reference": 9007199254740994
+        }
+      },
+      "expect": "reject",
+      "reject_reason": "refused although exact: its neighbours 2^53+1 and 2^53+3 are not, and nobody can reason about the parity of an identifier that does not exist yet."
+    },
+    {
+      "name": "big-integer-at-the-boundary",
+      "why": "2^53 exactly, which MUST build. Synaptum asked for this one specifically and they were right: a bound with no just-inside case is a bound nobody can tell is at 2^53 rather than 2^53-1, and either implementation could have been written with a \u003e= without anything saying so.",
+      "step": {
+        "step_id": "s8",
+        "tool_name": "payments.capture",
+        "tool_args": {
+          "reference": 9007199254740992
+        }
+      },
+      "expect": "hash",
+      "canonical_json": "{\"step_id\":\"s8\",\"tool_args\":{\"reference\":9007199254740992},\"tool_name\":\"payments.capture\"}",
+      "sha256": "4e75e5fe671655816831928dcded52cfa81402e0695d070c296eaf12bf960ec1",
+      "notes": {
+        "cross_language": "Synaptum's Python implementation did NOT reproduce the fold: Python keeps the exact integer, so the same step produced two different hashes on the two sides. Worse than the collision - on resume that is indistinguishable from someone mutating the arguments after approval, a false alarm in the one place a false alarm costs attention.",
+        "historical_collision": "Before 2026-09-27 a step with reference 9007199254740993 canonicalized to exactly this case's canonical form - byte-identical, therefore the same sha256 - so an approval granted for 9007199254740992 validated 9007199254740993. That pair can no longer be produced, because the other half is now refused; this note is its only record.",
+        "measured_folding": "9007199254740993 -\u003e 9007199254740992 and 9007199254740995 -\u003e 9007199254740996. The collisions are the ODD values. The first version of the pair in this corpus did not collide at all, because it paired 2^53+1 with 2^53+2 - the intuitive choice, and the wrong one."
+      }
+    },
+    {
+      "name": "same-args-different-step",
+      "why": "The hole the triple closed: this is identical to html-escaping-characters except for step_id, and it MUST hash differently. Without step_id an approval for one step would validate the same tool with the same arguments at any other point in the run.",
+      "step": {
+        "step_id": "s1-bis",
+        "tool_name": "search.web",
+        "tool_args": {
+          "query": "cats \u0026 dogs \u003ctag\u003e"
+        }
+      },
+      "expect": "hash",
+      "canonical_json": "{\"step_id\":\"s1-bis\",\"tool_args\":{\"query\":\"cats \u0026 dogs \u003ctag\u003e\"},\"tool_name\":\"search.web\"}",
+      "sha256": "4694e324f5233cc7975d56009beeb01cb2abc859c2d99710ae8463c4afa35d9b"
+    }
+  ]
+}

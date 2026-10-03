@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "RUN-004: provenance for the vendored copy of the step-identity golden corpus.",
+    "The SOURCE OF TRUTH is upstream_path below, in the three-team coordination folder. This",
+    "copy exists so the contract's acceptance test runs somewhere other than one laptop — it is",
+    "NOT the contract. sha256 is the upstream file's hash at the moment it was vendored, and two",
+    "tests hold it to that: one hashes this copy and fails if it was edited here, the other",
+    "compares it byte for byte against upstream whenever that folder is reachable and fails on any",
+    "difference. Without the second, a copy that falls behind looks exactly like a verified one,",
+    "which is the failure mode this whole arrangement exists to avoid."
+  ],
+  "refresh": "AEON_WRITE_STEP_IDENTITY_CORPUS=1 go test ./internal/stepidentity/ -run TestGenerateGoldenCorpus  (writes upstream AND refreshes this copy together)",
+  "sha256": "9ce369a9487e8771b9a19ba8f0baf163555c91ef92b6f6f36bcb661544d48be5",
+  "upstream_owner": "shared contract: Aeon + Synaptum + Axonium",
+  "upstream_path": "Victor/coordinacion_project/contratos/identidad-de-paso/fixtures/hashes-dorados.json",
+  "vendored_at": "2026-10-03"
+}
