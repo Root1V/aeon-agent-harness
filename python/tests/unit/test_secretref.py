@@ -66,7 +66,7 @@ def test_two_sources_for_one_secret_is_refused(tmp_path):
     os.environ[NAME + secretref.FILE_SUFFIX] = str(path)
 
     with pytest.raises(secretref.SecretRefError) as exc:
-        secretref.take(NAME)
+        secretref.resolve(NAME)
     assert NAME in str(exc.value) and NAME + secretref.FILE_SUFFIX in str(exc.value)
 
 
@@ -76,28 +76,28 @@ def test_an_unreadable_secret_store_is_not_an_unconfigured_credential(tmp_path):
     the same 401 as a deployment that was never given one."""
     os.environ[NAME + secretref.FILE_SUFFIX] = str(tmp_path / "never-mounted")
     with pytest.raises(secretref.SecretRefError):
-        secretref.take(NAME)
+        secretref.resolve(NAME)
 
     secretref.reset_for_test()
     empty = tmp_path / "empty"
     empty.write_text("\n")
     os.environ[NAME + secretref.FILE_SUFFIX] = str(empty)
     with pytest.raises(secretref.SecretRefError):
-        secretref.take(NAME)
+        secretref.resolve(NAME)
 
 
 def test_neither_set_is_absent_and_not_an_error():
-    assert secretref.take(NAME) == ""
+    assert secretref.resolve(NAME) == ""
 
 
-def test_a_second_read_gets_the_same_secret():
+def test_a_read_after_the_scrub_still_gets_the_secret():
     os.environ[NAME] = SENTINEL
     assert secretref.take(NAME) == SENTINEL
-    assert secretref.take(NAME) == SENTINEL, (
-        "the second read got a different value: a destructive read without memoisation hands the "
-        "first caller a credential and the second an empty string, in one process"
-    )
     assert NAME not in os.environ
+    assert secretref.resolve(NAME) == SENTINEL, (
+        "the read after the scrub got a different value: without memoisation the scrub hands the "
+        "first caller a credential and every later one an empty string, in one process"
+    )
 
 
 def test_the_caller_token_is_resolved_through_secretref(tmp_path):
@@ -115,5 +115,36 @@ def test_the_caller_token_is_resolved_through_secretref(tmp_path):
     finally:
         secretref.reset_for_test()
         os.environ.pop(outbound.CALLER_TOKEN_ENV + secretref.FILE_SUFFIX, None)
+        if previous is not None:
+            os.environ[outbound.CALLER_TOKEN_ENV] = previous
+
+
+def test_building_a_header_does_not_scrub_the_callers_environment():
+    """THE REGRESSION. The first version of this module scrubbed inside the read, so
+    `outbound.caller_token()` — a library function that builds a header — removed AEON_CALLER_TOKEN
+    from whatever process imported it.
+
+    In the Python integration target that process is pytest: one file runs a worker IN-PROCESS (so
+    the scrub fired there) and the next spawns its worker with `os.environ.copy()` and makes its own
+    authenticated HTTP calls. Both lost the credential, and the symptom was `HTTP Error 401` raised
+    inside a Temporal activity in a test that had nothing to do with secrets. Scrubbing is a decision
+    a process makes about itself; `aeon_worker/__main__.py` makes it.
+    """
+    secretref.reset_for_test()
+    previous = os.environ.get(outbound.CALLER_TOKEN_ENV)
+    os.environ[outbound.CALLER_TOKEN_ENV] = "token-the-test-process-still-needs"
+    try:
+        assert outbound.service_headers()["Authorization"].endswith("token-the-test-process-still-needs")
+        assert os.environ.get(outbound.CALLER_TOKEN_ENV) == "token-the-test-process-still-needs", (
+            "building a header removed the credential from this process's environment: a subprocess "
+            "spawned with os.environ.copy() after this point starts with no credential"
+        )
+        assert child_env_contains("token-the-test-process-still-needs"), (
+            "a child of this process can no longer see the credential — same defect, measured the "
+            "way the integration suite hit it"
+        )
+    finally:
+        secretref.reset_for_test()
+        os.environ.pop(outbound.CALLER_TOKEN_ENV, None)
         if previous is not None:
             os.environ[outbound.CALLER_TOKEN_ENV] = previous

@@ -71,6 +71,24 @@ make dev-secrets        # el stack con los secretos entregados como FICHEROS
 - **ninguna de las dos**: ausente, y **no** es un error. Un despliegue sin cuenta de Anthropic
   simplemente no registra ese adaptador.
 
+## Leer un secreto y borrarlo son dos operaciones
+
+`resolve(nombre)` lee. `take(nombre)` lee **y** lo quita de `os.environ`. Sólo un **entrypoint** llama
+a `take`, porque «quita este secreto de este proceso» es una afirmación sobre el proceso, y sólo el
+proceso puede hacerla.
+
+La primera versión de esto borraba dentro de la lectura, y el defecto lo cazó CI, no el razonamiento:
+`outbound.caller_token()` —una función de librería que construye una cabecera— quitaba
+`AEON_CALLER_TOKEN` del proceso que la importara. En el target de integración de Python ese proceso es
+pytest: un fichero arranca un worker **en-proceso** (ahí disparaba el borrado) y el siguiente arranca
+el suyo con `os.environ.copy()` y hace sus propias llamadas autenticadas. Los dos se quedaron sin
+credencial, y el síntoma fue `HTTP Error 401` lanzado dentro de una activity de Temporal, en un test
+que no tenía nada que ver con secretos. **21 passed antes, un fallo después.** El borrado vive ahora en
+`aeon_worker/__main__.py`, que es el proceso que lanza la CLI `claude`.
+
+El lado Go no tiene esta partición y sólo expone `Take`, porque todos sus llamantes **son** arranques
+de proceso (`main`). La asimetría es deliberada y está escrita en los dos módulos.
+
 ## Qué proceso ve qué
 
 `env_file` con el `.env` entero estaba en tres servicios, y el resultado medido era que cada secreto
