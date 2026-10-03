@@ -148,30 +148,23 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   primero haga falta.
 - **Coste:** S (quitarlo) / M (cliente S3 real detrás del mismo Protocol).
 
-### El corpus dorado de identidad de paso solo se puede verificar en este portátil
+### ~~El corpus dorado solo se puede verificar en este portátil~~ — MEDIO CERRADA el 2026-10-03
 
-- **Descripción:** `TestStepIdentityMatchesGoldenCorpus` lee
-  `../../../../../Victor/coordinacion_project/contratos/identidad-de-paso/fixtures/hashes-dorados.json`
-  — **fuera del repositorio**, en la carpeta de coordinación de los tres equipos. Es una decisión
-  deliberada y está en `roadmap.md` («Extracción del repo de contratos», `DEFERRED`), pero la
-  consecuencia no estaba escrita en ningún sitio: **el test de aceptación del contrato que compartimos
-  con Synaptum y Axonium se salta en cualquier máquina que no sea esta.** Lo destapó
-  `scripts/check_skips.py` al contar qué se salta con toda la infraestructura levantada.
-- **Y es peor de lo que decía esta entrada, medido el 2026-10-03:** se salta **también en este
-  portátil**, porque `make test-go-integration` corre los tests dentro de un contenedor que monta
-  `/repo` y nada más — `Victor/` queda fuera del montaje, así que el salto dice `no such file or
-  directory` sobre un fichero que existe a dos directorios de distancia. El fichero está ahí (11001
-  bytes) y el test **pasa** cuando se invoca `go test` directamente en el host: «verified 12 golden
-  case(s) from RFC 8785 (JCS)». O sea que **ningún target lo verifica**, ni el que parece más
-  exhaustivo, y la única forma de ejecutarlo es a mano fuera de los targets. Es la misma forma que los
-  tres huecos que destapó `CI-001`: el camino que uno correría para comprobarlo todo es el que no lo
-  comprueba.
-- **Fase objetivo:** cuando el corpus tenga un sitio que las tres partes puedan leer.
-- **Criterio de entrada:** acuerdo con Synaptum y Axonium sobre dónde vive. Hay dos salidas y **ninguna
-  es copiarlo aquí sin decírselo**: publicarlo donde los tres CI lo alcancen, o vendorizar una copia
-  **con su hash de procedencia** y un test que falle si divergen — lo segundo es más barato y tiene su
-  propio modo de fallo (una copia que se queda atrás pareciendo verificada).
-- **Coste:** S.
+**Cerrada la mitad que era nuestra:** el contrato se verifica ahora en CI contra una copia
+vendorizada en `proto/contracts/identidad-de-paso/`, con su hash de procedencia y un test que la
+compara byte a byte contra el fichero compartido allí donde la carpeta esté montada (los dos targets
+la montan). Ver la corrección en la fila `CI-001` del roadmap: la entrada original decía «sólo en
+este portátil» y la medición dijo **en ninguno**, porque el target corre la suite en un contenedor
+que monta `/repo` y nada más.
+
+**Sigue abierta la mitad que no es nuestra:** ¿dónde vive el corpus? Publicado donde los tres CI lo
+alcancen sigue siendo la salida correcta y es trabajo de coordinación. Preguntado a Synaptum y
+Axonium el 2026-10-01, sin respuesta; la copia y su hash se les comunicaron el 2026-10-03 con la
+oferta explícita de borrarlos si prefieren publicarlo. Mientras no contesten, lo que hay tiene al
+menos la propiedad de que **no puede quedarse atrás en silencio**.
+
+- **Criterio de entrada para cerrar la otra mitad:** respuesta de los otros dos equipos.
+- **Coste:** S por nuestro lado (borrar la copia y dos tests).
 
 ### No hay CI: las 93 filas verificadas dependen de que alguien corra `make` a mano (contexto original)
 

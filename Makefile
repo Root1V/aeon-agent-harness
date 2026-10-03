@@ -22,6 +22,18 @@
 COMPOSE := docker compose $(if $(wildcard .env),--env-file .env,) -f deploy/compose/docker-compose.yml
 PROFILE ?= full
 
+# RUN-004: the step-identity golden corpus is a THREE-TEAM contract and lives outside this repository,
+# in the coordination folder. A vendored copy under proto/contracts/ is what CI checks, and a test
+# compares the two byte for byte wherever the real folder is reachable — so the targets mount it when
+# it exists. Without the mount that comparison self-skips, which is how a vendored copy falls behind
+# while every test still passes.
+#
+# Conditional, because the folder is on exactly one machine. $(wildcard) also keeps `docker run -v`
+# from CREATING an empty directory on a host that does not have it, which would turn "not on this
+# machine" into "the contract is empty".
+SHARED_CONTRACTS := $(PWD)/../../Victor/coordinacion_project/contratos
+CORPUS_MOUNT := $(if $(wildcard $(SHARED_CONTRACTS)),-v "$(SHARED_CONTRACTS):/contracts:ro" -e AEON_STEP_IDENTITY_SHARED_CORPUS=/contracts/identidad-de-paso/fixtures/hashes-dorados.json,)
+
 .PHONY: dev-secret-files dev-secrets dev down logs ps build test test-go test-go-integration test-python test-python-integration test-mdl-015 test-first-use-case first-use-case lint roadmap-check clean
 
 dev-secret-files: ## SEC-006: write deploy/compose/secrets/* for secrets.override.yml (no values printed)
@@ -53,7 +65,7 @@ test-go: ## Run Go tests in a throwaway container (registry Postgres tests self-
 	# mounts the host's Docker socket: go/internal/sandbox's tests (TOOL-003) run real, sandboxed
 	# containers via the Docker Engine API — sibling containers on the host daemon, not nested
 	# Docker-in-Docker. They self-skip (like the Postgres tests) if the socket isn't reachable.
-	docker run --rm -v "$(PWD):/repo" -v /var/run/docker.sock:/var/run/docker.sock -w /repo/go golang:1.25-alpine go test ./...
+	docker run --rm -v "$(PWD):/repo" -v /var/run/docker.sock:/var/run/docker.sock $(CORPUS_MOUNT) -w /repo/go golang:1.25-alpine go test ./...
 
 test-go-integration: ## Run Go tests against real Postgres + Temporal + a real worker + OTel/Tempo (starts/stops them around the run)
 	# --build no es opcional. Sin él este target levanta la imagen del worker que hubiera, así que
@@ -69,7 +81,7 @@ test-go-integration: ## Run Go tests against real Postgres + Temporal + a real w
 	# sandbox tests were reporting "docker daemon not reachable" in the one target whose whole claim is
 	# that everything is real. They ran under `make test-go`, so nothing was uncovered — but the target
 	# that looks most thorough was the one skipping them.
-	docker run --rm --network aeon_default -v "$(PWD):/repo" -v /var/run/docker.sock:/var/run/docker.sock -w /repo/go \
+	docker run --rm --network aeon_default -v "$(PWD):/repo" -v /var/run/docker.sock:/var/run/docker.sock $(CORPUS_MOUNT) -w /repo/go \
 		-e AEON_TEST_PG_DSN="postgres://aeon:aeon@postgres:5432/aeon?sslmode=disable" \
 		-e AEON_TEST_TEMPORAL_ADDRESS="temporal:7233" \
 		-e AEON_TEST_TOOLGW_ADDR="toolgw:9403" \

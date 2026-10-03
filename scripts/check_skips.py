@@ -55,14 +55,26 @@ TOLERATED = (
     # version of this list had three variants of this message and missed the fourth, which is the kind
     # of near-miss a broad pattern hides.
     "Prometheus embedding credentials not set",
-    # The golden corpus lives OUTSIDE this repository, in the three teams' coordination folder — a
-    # decision recorded in roadmap.md ("Extracción del repo de contratos", DEFERRED). So the acceptance
-    # test of the contract we share with Synaptum and Axonium runs on exactly one laptop. Tolerated
-    # because no workflow change fixes it; recorded in backlog.md because it should not stay that way.
-    "golden corpus not readable",
-    # The RFC 8785 vectors come from the jcs module's own testdata, which is only present when the
-    # module cache has it. Nothing in a workflow puts it there.
-    "RFC testdata is not on this machine",
+    # TWO ENTRIES USED TO BE HERE AND BOTH WERE COVERING FOR BUGS, which is the thing a tolerance list
+    # is most able to do and least able to show. They are gone, not reworded:
+    #
+    #   "golden corpus not readable" — said the contract we share with Synaptum and Axonium could only
+    #   be verified on one laptop. It could not be verified anywhere: the target runs the suite in a
+    #   container that mounts /repo alone, so the shared folder was outside the mount on that laptop
+    #   too. Fixed by vendoring the corpus with its provenance hash, so the contract is checked in CI,
+    #   plus a drift test (below) for whether the copy is still current.
+    #
+    #   "RFC testdata is not on this machine" — claimed "nothing in a workflow puts it there". False.
+    #   The jcs module's testdata was in the module cache all along; the locator read the GOMODCACHE
+    #   *environment variable*, which is empty because GOMODCACHE is a value `go env` computes, and
+    #   fell back to $HOME/go/pkg/mod — right by coincidence on one laptop, wrong in the golang image
+    #   where GOPATH is /go. So the RFC anchor that makes this corpus credible to the other two teams
+    #   was the one piece of evidence no automated target checked. Fixed by asking the toolchain.
+    #
+    # The vendored corpus is verified everywhere; what needs the shared folder is only the question of
+    # whether upstream has moved since. That is a property of the machine and nothing in a workflow
+    # changes it — so this one is a real tolerance and not a cover.
+    "the shared contract folder is not on this machine",
     # The streaming half of the seam measurement needs a real aeon-modelgw wired to a real provider —
     # which means provider credentials, same argument as the Prometheus ones above.
     "AEON_TEST_MODELGW_ADDR not set",

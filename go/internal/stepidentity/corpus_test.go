@@ -2,9 +2,11 @@ package stepidentity_test
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,16 +16,130 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/stepidentity"
 )
 
-// corpusPath is where the golden corpus is published for the other two teams. Outside this repo on
-// purpose: it is a shared artifact, and the coordination folder is where the three teams already look.
-// AEON_STEP_IDENTITY_CORPUS overrides it so the test runs in a container that has not mounted it.
+// corpusPath is the VENDORED copy of the golden corpus, inside this repository.
+//
+// It used to point straight at the shared coordination folder, outside the repo, which is where the
+// contract is published for Synaptum and Axonium — and that is still where the source of truth lives.
+// The consequence of reading it from there was measured rather than reasoned about, and it was worse
+// than the note in backlog.md said: the test skipped on every machine that is not this laptop AND on
+// this laptop too, because `make test-go-integration` runs the suite in a container that mounts
+// /repo and nothing else, so the shared folder is outside the mount. A `no such file or directory`
+// about a file that exists two directories away. **No target verified the contract**, including the
+// one that looks most exhaustive — the same shape as the three gaps CI-001 found.
+//
+// So there are now two files and three tests, and the split is the whole point:
+//
+//	proto/contracts/.../hashes-dorados.json   this copy. Always present, so the contract is checked
+//	                                          everywhere, including CI.
+//	proto/contracts/.../procedencia.json      the upstream path and the upstream file's sha256 at the
+//	                                          moment it was vendored.
+//
+// TestStepIdentityMatchesGoldenCorpus checks the implementation against this copy.
+// TestTheVendoredCorpusIsTheOneThatWasReviewed hashes this copy against the recorded sha256, so
+// editing it here to make a failing test pass is itself a failure, and it runs everywhere.
+// TestTheVendoredCorpusHasNotDriftedFromTheSharedOne compares it byte for byte against upstream
+// wherever that folder is reachable. Without that third one, a copy that falls behind looks exactly
+// like a verified one — which is the defect family this corpus exists to prevent, so reintroducing it
+// as the price of fixing the skip would have been a bad trade.
+//
+// AEON_STEP_IDENTITY_CORPUS still overrides, for checking an implementation against some other file.
 func corpusPath(t *testing.T) string {
 	t.Helper()
 	if p := os.Getenv("AEON_STEP_IDENTITY_CORPUS"); p != "" {
 		return p
 	}
+	return filepath.Join("..", "..", "..", "proto", "contracts", "identidad-de-paso", "hashes-dorados.json")
+}
+
+// provenancePath is corpusPath's companion: where this copy came from, and its hash when it did.
+func provenancePath(t *testing.T) string {
+	t.Helper()
+	return filepath.Join("..", "..", "..", "proto", "contracts", "identidad-de-paso", "procedencia.json")
+}
+
+// sharedCorpusPath is the SOURCE OF TRUTH, in the three teams' coordination folder. Reachable only
+// where that folder is mounted — this laptop, and the integration target now mounts it when it exists.
+// AEON_STEP_IDENTITY_SHARED_CORPUS overrides it, which is how the container is told where it landed.
+func sharedCorpusPath() string {
+	if p := os.Getenv("AEON_STEP_IDENTITY_SHARED_CORPUS"); p != "" {
+		return p
+	}
 	return filepath.Join("..", "..", "..", "..", "..", "Victor", "coordinacion_project",
 		"contratos", "identidad-de-paso", "fixtures", "hashes-dorados.json")
+}
+
+type corpusProvenance struct {
+	UpstreamPath string `json:"upstream_path"`
+	SHA256       string `json:"sha256"`
+	VendoredAt   string `json:"vendored_at"`
+}
+
+func readProvenance(t *testing.T) corpusProvenance {
+	t.Helper()
+	raw, err := os.ReadFile(provenancePath(t))
+	if err != nil {
+		t.Fatalf("reading the vendored corpus's provenance: %v — without it this copy is a file of "+
+			"unknown origin, and the tests below would be checking the implementation against itself", err)
+	}
+	var p corpusProvenance
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatalf("parsing the provenance: %v", err)
+	}
+	if p.SHA256 == "" || p.UpstreamPath == "" {
+		t.Fatalf("the provenance names no %s", map[bool]string{true: "sha256", false: "upstream_path"}[p.SHA256 == ""])
+	}
+	return p
+}
+
+// TestTheVendoredCorpusIsTheOneThatWasReviewed runs EVERYWHERE, and it is what makes the vendored copy
+// worth anything in CI: it proves the bytes being checked are the bytes that were taken from the shared
+// contract, not bytes somebody adjusted locally until the suite went green. The cheapest way to make a
+// contract test pass is to edit the contract, and that is exactly what this refuses.
+func TestTheVendoredCorpusIsTheOneThatWasReviewed(t *testing.T) {
+	prov := readProvenance(t)
+	raw, err := os.ReadFile(corpusPath(t))
+	if err != nil {
+		t.Fatalf("reading the vendored corpus: %v", err)
+	}
+	sum := sha256.Sum256(raw)
+	if got := hex.EncodeToString(sum[:]); got != prov.SHA256 {
+		t.Fatalf("the vendored corpus does not hash to its recorded provenance.\n"+
+			" got: %s\nwant: %s\n\nEither this copy was edited in place — which is how a contract test is "+
+			"made to pass by changing the contract — or it was refreshed without updating procedencia.json. "+
+			"Refresh both together: see the `refresh` field in that file.", got, prov.SHA256)
+	}
+	t.Logf("vendored corpus matches its provenance (%s, vendored %s from %s)", prov.SHA256[:12], prov.VendoredAt, prov.UpstreamPath)
+}
+
+// TestTheVendoredCorpusHasNotDriftedFromTheSharedOne is the one test here that is allowed to skip, and
+// what it skips on is narrow and honest: whether the three teams' coordination folder is on this
+// machine. The CONTRACT is verified without it; what needs it is the question of whether our copy is
+// still the current one.
+//
+// It fails on any difference rather than reporting one, because the failure mode it guards is silent by
+// construction: a stale copy passes every other test in this file. Synaptum and Axonium were told this
+// trade-off when the copy was made.
+func TestTheVendoredCorpusHasNotDriftedFromTheSharedOne(t *testing.T) {
+	shared, err := os.ReadFile(sharedCorpusPath())
+	if err != nil {
+		t.Skipf("the shared contract folder is not on this machine (%v) — the vendored copy is still "+
+			"verified against its provenance and against this implementation; what cannot be checked "+
+			"here is whether upstream has moved", err)
+	}
+	vendored, err := os.ReadFile(corpusPath(t))
+	if err != nil {
+		t.Fatalf("reading the vendored corpus: %v", err)
+	}
+	if !bytes.Equal(shared, vendored) {
+		sharedSum := sha256.Sum256(shared)
+		vendoredSum := sha256.Sum256(vendored)
+		t.Fatalf("the vendored corpus has drifted from the shared contract.\n"+
+			" shared  %s (%d bytes) %s\n vendored %s (%d bytes) %s\n\n"+
+			"The shared file is the contract; this copy is not. Refresh it and its provenance together "+
+			"(see the `refresh` field in procedencia.json) and tell the other two teams what changed.",
+			hex.EncodeToString(sharedSum[:])[:12], len(shared), sharedCorpusPath(),
+			hex.EncodeToString(vendoredSum[:])[:12], len(vendored), corpusPath(t))
+	}
 }
 
 type goldenCase struct {
@@ -97,18 +213,30 @@ func TestGoldenCorpusMatchesRFCVectors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reading %s: %v", name, err)
 			}
-			wantHex, err := os.ReadFile(filepath.Join(root, "outhex", strings.TrimSuffix(name, ".json")+".txt"))
-			if err != nil {
-				t.Skipf("no expected output for %s", name)
+			// TWO FORMS OF THE SAME EXPECTATION, and reading both is what removed a skip rather
+			// than tolerating one. The library ships `outhex/<name>.txt` (the canonical bytes as
+			// hex) for nine vectors and `output/<name>` (the canonical JSON itself) for all ten:
+			// simpleString.json has only the second. The previous version looked for the hex alone
+			// and skipped with "no expected output for simpleString.json" — which read as the
+			// vector being unverifiable, when the expectation was in the next directory along.
+			// A skip whose stated reason is not the real one is the kind this repo keeps finding.
+			var want []byte
+			base := strings.TrimSuffix(name, ".json")
+			if wantHex, err := os.ReadFile(filepath.Join(root, "outhex", base+".txt")); err == nil {
+				want, err = hex.DecodeString(strings.Join(strings.Fields(string(wantHex)), ""))
+				if err != nil {
+					t.Fatalf("decoding expected hex for %s: %v", name, err)
+				}
+			} else if wantRaw, err := os.ReadFile(filepath.Join(root, "output", name)); err == nil {
+				want = wantRaw
+			} else {
+				t.Fatalf("%s has neither outhex/%s.txt nor output/%s — this vector cannot be "+
+					"verified, and the anchor of the corpus's credibility must not quietly shrink", name, base, name)
 			}
 
 			got, err := jcs.Transform(raw)
 			if err != nil {
 				t.Fatalf("canonicalizing %s: %v", name, err)
-			}
-			want, err := hex.DecodeString(strings.Join(strings.Fields(string(wantHex)), ""))
-			if err != nil {
-				t.Fatalf("decoding expected hex for %s: %v", name, err)
 			}
 			if string(got) != string(want) {
 				t.Errorf("canonicalization of %s does not match the RFC vector\n got: %q\nwant: %q", name, got, want)
@@ -120,9 +248,27 @@ func TestGoldenCorpusMatchesRFCVectors(t *testing.T) {
 }
 
 // rfcVectorDir locates the jcs module's testdata in the module cache.
+//
+// IT ASKS THE GO TOOLCHAIN instead of guessing, and the guess is why the anchor of this corpus's
+// whole chain of trust had never run anywhere but one laptop. The previous version read the
+// GOMODCACHE *environment variable* — which is empty on a normal machine, because GOMODCACHE is a
+// value `go env` COMPUTES — and fell back to $HOME/go/pkg/mod. On this laptop that is correct by
+// coincidence. In the golang:1.25-alpine image the integration target uses, GOPATH is /go, so the
+// cache is /go/pkg/mod and $HOME/go/pkg/mod does not exist at all: the test skipped with "the jcs
+// module's RFC testdata is not on this machine" while the testdata was sitting right there, measured
+// at /go/pkg/mod/github.com/gowebpki/jcs@v1.0.2/testdata/input.
+//
+// That mattered more than the skip count suggested. This test is what makes the corpus credible to
+// the other two teams — without it the chain starts at a library agreeing with itself — so the piece
+// of evidence Synaptum explicitly asked for was the one piece no automated target checked.
 func rfcVectorDir(t *testing.T) string {
 	t.Helper()
 	gomodcache := os.Getenv("GOMODCACHE")
+	if gomodcache == "" {
+		if out, err := exec.Command("go", "env", "GOMODCACHE").Output(); err == nil {
+			gomodcache = strings.TrimSpace(string(out))
+		}
+	}
 	if gomodcache == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
