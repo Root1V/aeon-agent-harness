@@ -157,6 +157,15 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   consecuencia no estaba escrita en ningún sitio: **el test de aceptación del contrato que compartimos
   con Synaptum y Axonium se salta en cualquier máquina que no sea esta.** Lo destapó
   `scripts/check_skips.py` al contar qué se salta con toda la infraestructura levantada.
+- **Y es peor de lo que decía esta entrada, medido el 2026-10-03:** se salta **también en este
+  portátil**, porque `make test-go-integration` corre los tests dentro de un contenedor que monta
+  `/repo` y nada más — `Victor/` queda fuera del montaje, así que el salto dice `no such file or
+  directory` sobre un fichero que existe a dos directorios de distancia. El fichero está ahí (11001
+  bytes) y el test **pasa** cuando se invoca `go test` directamente en el host: «verified 12 golden
+  case(s) from RFC 8785 (JCS)». O sea que **ningún target lo verifica**, ni el que parece más
+  exhaustivo, y la única forma de ejecutarlo es a mano fuera de los targets. Es la misma forma que los
+  tres huecos que destapó `CI-001`: el camino que uno correría para comprobarlo todo es el que no lo
+  comprueba.
 - **Fase objetivo:** cuando el corpus tenga un sitio que las tres partes puedan leer.
 - **Criterio de entrada:** acuerdo con Synaptum y Axonium sobre dónde vive. Hay dos salidas y **ninguna
   es copiarlo aquí sin decírselo**: publicarlo donde los tres CI lo alcancen, o vendorizar una copia
