@@ -217,6 +217,26 @@ toca este código: lo único que tiene que producir es el fichero.
   código nuestro: es una decisión de despliegue más un `sidecar`/`agent` que escriba el fichero.
 - **Coste:** S por nuestro lado (nada que cambiar), L por el del entorno.
 
+### `TestA2ATaskLifecycle` tiene una carrera: el run puede terminar antes de que llegue el cancel
+
+- **Descripción:** observado una vez en CI (run 37128354650, job `integration (go, ...)`):
+  `canceling_a_task_reaches_canceled_and_really_cancels_the_underlying_Aeon_run` falló con
+  `CancelTask: internal error` en 0.05s, mientras el subtest hermano pasaba. **No reprodujo** en el
+  run siguiente con los mismos contenedores, y no está en el camino de ningún cambio de `SEC-006` —
+  el test usa Temporal y Postgres reales más un ejecutor en-proceso, y los tres servicios que
+  `SEC-006` tocó no participan. El test espera `TaskStateWorking` y entonces cancela; si el bucle de
+  50 iteraciones termina en esa ventana, `Controller.Cancel` falla contra un workflow que ya no corre
+  y el SDK lo envuelve como `internal error`. O sea que el fallo es correcto y la **premisa** del test
+  es la que es frágil.
+- **Fase objetivo:** antes de que alguien aprenda a re-lanzar este job por costumbre, que es el coste
+  real de un test intermitente.
+- **Criterio de entrada:** ninguno; es nuestro. Lo que falta es decidir **qué** afirmar: o el grafo se
+  bloquea de verdad (un `pause`, como hace `run_controller_handlers_test.go`) en vez de depender de
+  que 50 iteraciones tarden lo suficiente, o cancelar un run ya terminado se considera un estado
+  válido y el test acepta `completed` como desenlace alternativo. Lo primero prueba la cancelación;
+  lo segundo deja de probarla.
+- **Coste:** S.
+
 ### El esquema de Postgres no tiene migraciones versionadas
 
 - **Descripción:** `store.Connect` llama a `Migrate()`, que aplica `schema.sql` idempotentemente bajo
