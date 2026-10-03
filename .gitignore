@@ -27,6 +27,9 @@ python/aeon_sdk/_gen/
 .env.*
 !.env.example
 *.local.yaml
+# SEC-006: the files deploy/compose/secrets.override.yml mounts as Docker secrets, written by
+# `make dev-secret-files`. Plaintext credentials, one per file, never committed.
+deploy/compose/secrets/
 
 # Editor / OS
 .DS_Store

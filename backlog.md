@@ -192,17 +192,30 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   dos veces.
 - **Coste:** S (borrarlo) / L (un chart de verdad).
 
-### Las claves de proveedor viajan en texto plano por el entorno del proceso
+### ~~Las claves de proveedor viajan en texto plano por el entorno del proceso~~ — CERRADA como `SEC-006` el 2026-10-03
 
-- **Descripción:** `.env` → entorno de compose → entorno del proceso de `aeon-modelgw`. El Secret
-  Broker (`SEC-002`) existe, está probado y **el Model Gateway no lo usa** (ya hay una entrada aparte
-  sobre eso). Lo que esta añade es el otro extremo: en un piloto, las claves de un tercero no deberían
-  estar en un fichero del host ni en `docker inspect`.
-- **Fase objetivo:** cuando el harness maneje credenciales que no sean nuestras.
-- **Criterio de entrada:** que exista un almacén de secretos en el entorno de despliegue (Vault, SOPS,
-  el de la nube que sea). `SEC-005` ya empuja en esta dirección: el bundle de callers guarda hashes y
-  no tokens, así que el patrón está establecido.
-- **Coste:** M.
+El criterio de entrada («que exista un almacén de secretos en el despliegue») se leyó al revés: no se
+puede traer Vault al repositorio, pero sí dejar de ser el motivo de que no sirviera. Todo almacén real
+acaba en «hay un fichero», así que `<NOMBRE>_FILE` es la costura. Ver la fila `SEC-006` del roadmap y
+`docs/secrets.md`; lo que destapó de paso (que `.env` no se leía para la interpolación de compose, y
+que la clave HMAC de `MEM-001`/`SEC-004` corría con el valor público commiteado aunque el operador
+hiciera lo que la documentación decía) vale más que la entrada original.
+
+**Lo que queda, dicho sin adorno:** `deploy/compose/secrets/` sigue siendo texto plano en el host
+(modo 600, gitignored), igual que `.env`. Lo que cambió es que ya no está en `docker inspect`, ni en
+`/proc/<pid>/environ`, ni en el entorno de los procesos hijos. Enchufar un almacén de verdad ya no
+toca este código: lo único que tiene que producir es el fichero.
+
+### El `.env` sigue siendo plano en el host, y nadie rota nada automáticamente
+
+- **Descripción:** `SEC-006` dejó la costura (`<NOMBRE>_FILE`) y un camino real (`secrets:` de compose,
+  `make dev-secrets`), pero el valor sigue naciendo de un fichero en el host que alguien escribió a
+  mano. No hay emisión, ni caducidad, ni rotación: `scripts/secret_files.sh` genera lo que es nuestro
+  (clave HMAC, token de caller) y para lo que no es nuestro dice que no lo es.
+- **Fase objetivo:** cuando el despliegue tenga un almacén real (Vault, SOPS, el de la nube que sea).
+- **Criterio de entrada:** existe ese almacén **y** alguien decide cuál. La parte que falta ya no es
+  código nuestro: es una decisión de despliegue más un `sidecar`/`agent` que escriba el fichero.
+- **Coste:** S por nuestro lado (nada que cambiar), L por el del entorno.
 
 ### El esquema de Postgres no tiene migraciones versionadas
 
