@@ -2,48 +2,156 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aeon.dev/schemas/graph_spec.schema.json",
   "title": "GraphNode",
-  "description": "A node in the Graph Runtime (RUN-002). Recursive: sequential/parallel/fan_in/conditional/loop/subgraph nodes contain child GraphNodes via 'children'/'if_true'/'if_false'/'body'/'graph'; tool_call is the only leaf kind. Evaluated by aeon_worker.graph.execute_graph inside a Temporal workflow (docs/adr/0001) — never call a model or tool outside this executor's Activity calls.",
+  "description": "A node in the Graph Runtime (RUN-002). Recursive: sequential/parallel/fan_in/conditional/loop/subgraph nodes contain child GraphNodes via 'children'/'if_true'/'if_false'/'body'/'graph'. There are TWO leaf kinds: 'tool_call', executed by a function registered in aeon-toolgw, and 'activity' (VRT-AEON-001), a named Temporal activity on a task queue served by a worker OUTSIDE Aeon. Evaluated by aeon_worker.graph.execute_graph inside a Temporal workflow (docs/adr/0001) — never call a model or tool outside this executor's Activity calls.",
   "type": "object",
-  "required": ["id", "kind"],
+  "required": [
+    "id",
+    "kind"
+  ],
   "properties": {
-    "id": { "type": "string", "description": "Unique within the graph; used as the idempotency key's node_id component for tool_call leaves and as the key into the run's node-result context for conditional/loop references." },
+    "id": {
+      "type": "string",
+      "description": "Unique within the graph; used as the idempotency key's node_id component for tool_call leaves and as the key into the run's node-result context for conditional/loop references."
+    },
     "kind": {
       "type": "string",
-      "enum": ["tool_call", "sequential", "parallel", "fan_in", "conditional", "loop", "subgraph"]
+      "enum": [
+        "tool_call",
+        "activity",
+        "sequential",
+        "parallel",
+        "fan_in",
+        "conditional",
+        "loop",
+        "subgraph"
+      ]
     },
-    "tool_name": { "type": "string", "description": "kind=tool_call only." },
-    "tool_args": { "type": "object", "description": "kind=tool_call only." },
-    "requires_approval": { "type": "boolean", "description": "kind=tool_call only (RUN-005). When true, execution blocks on a durable Temporal signal (approve/reject) bound to this exact node/tool/args via a SHA-256 hash (compute_tool_call_hash) — an approval granted for different parameters is rejected, not silently accepted." },
+    "tool_name": {
+      "type": "string",
+      "description": "kind=tool_call only."
+    },
+    "tool_args": {
+      "type": "object",
+      "description": "kind=tool_call only."
+    },
+    "requires_approval": {
+      "type": "boolean",
+      "description": "kind=tool_call or kind=activity (RUN-005). When true, execution blocks on a durable Temporal signal (approve/reject) bound to this exact node and its parameters by a SHA-256 hash — compute_tool_call_hash for a tool, compute_activity_call_hash for an activity, which includes the task_queue because the queue decides whose worker runs the work. An approval granted for different parameters is rejected, not silently accepted."
+    },
     "children": {
       "type": "array",
-      "items": { "$ref": "#" },
+      "items": {
+        "$ref": "#"
+      },
       "description": "kind=sequential (run in order) | parallel (run concurrently) | fan_in (run concurrently, then merge each child's 'result' field into a single list)."
     },
     "condition": {
       "type": "object",
       "description": "kind=conditional only. { node_ref: <id already executed>, path: dotted path into that node's result, equals|exists: comparator }.",
-      "required": ["node_ref", "path"],
+      "required": [
+        "node_ref",
+        "path"
+      ],
       "properties": {
-        "node_ref": { "type": "string" },
-        "path": { "type": "string" },
+        "node_ref": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
         "equals": {},
-        "exists": { "type": "boolean" }
+        "exists": {
+          "type": "boolean"
+        }
       }
     },
-    "if_true": { "$ref": "#", "description": "kind=conditional only." },
-    "if_false": { "$ref": "#", "description": "kind=conditional only; optional — if omitted and the condition is false, the conditional node is a no-op." },
-    "body": { "$ref": "#", "description": "kind=loop only. Re-executed up to max_iterations times; each iteration's node id is '<body.id>[<iteration index>]', which keeps idempotency keys distinct per iteration." },
-    "max_iterations": { "type": "integer", "minimum": 1, "description": "kind=loop only. Hard bound — the loop runtime does not support unbounded loops (a taste of RUN-003's hard budgets, ahead of the full budget system)." },
+    "if_true": {
+      "$ref": "#",
+      "description": "kind=conditional only."
+    },
+    "if_false": {
+      "$ref": "#",
+      "description": "kind=conditional only; optional — if omitted and the condition is false, the conditional node is a no-op."
+    },
+    "body": {
+      "$ref": "#",
+      "description": "kind=loop only. Re-executed up to max_iterations times; each iteration's node id is '<body.id>[<iteration index>]', which keeps idempotency keys distinct per iteration."
+    },
+    "max_iterations": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "kind=loop only. Hard bound — the loop runtime does not support unbounded loops (a taste of RUN-003's hard budgets, ahead of the full budget system)."
+    },
     "stop_condition": {
       "type": "object",
       "description": "kind=loop only, optional. { path: dotted path into the just-completed iteration's result, equals|exists: comparator }. When it matches after an iteration, the loop stops early with stopped_reason='condition_met' instead of running to max_iterations.",
-      "required": ["path"],
+      "required": [
+        "path"
+      ],
       "properties": {
-        "path": { "type": "string" },
+        "path": {
+          "type": "string"
+        },
         "equals": {},
-        "exists": { "type": "boolean" }
+        "exists": {
+          "type": "boolean"
+        }
       }
     },
-    "graph": { "$ref": "#", "description": "kind=subgraph only. Executed recursively via the same executor; the result is { node_id, kind: 'subgraph', graph_result: <inner graph's result> } — wrapped, not transparent, so the subgraph node's own id stays findable in the result tree." }
+    "graph": {
+      "$ref": "#",
+      "description": "kind=subgraph only. Executed recursively via the same executor; the result is { node_id, kind: 'subgraph', graph_result: <inner graph's result> } — wrapped, not transparent, so the subgraph node's own id stays findable in the result tree."
+    },
+    "activity_name": {
+      "type": "string",
+      "description": "kind=activity only. The Temporal activity type name the external worker registers. It is the Cedar resource name, evaluated as an ExternalActivity and never as a Tool: an activity named like a permitted tool is NOT authorized by that tool's permit (regression test: TestAnExternalActivityDoesNotInheritAToolPermit)."
+    },
+    "task_queue": {
+      "type": "string",
+      "description": "kind=activity only. REQUIRED alongside activity_name: it decides whose worker picks the work up, so a decision without it would authorize a name on any queue. Travels to Cedar as resource.task_queue so a bundle can constrain it, and is part of the approval hash."
+    },
+    "args": {
+      "type": "object",
+      "description": "kind=activity only. STATIC and serializable, by rule rather than as a v1 limitation: static args keep the Cedar resource and the approval hash determined by the graph, so the governance decision is computable before the activity is scheduled. Templating over earlier node results would be deterministic (conditional already reads them from history) but would move both to runtime data. Pass state by reference — the consumer keeps it in its own store and addresses it through these args."
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "kind=activity only. start_to_close_timeout for this node. Default 600. This is the half a tool_call cannot express: tool_call runs with a hardcoded 10s because it is a short request to a gateway we run, while an external activity is work measured in minutes on another machine."
+    },
+    "heartbeat_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "kind=activity only. Sets heartbeat_timeout. A CONTRACT WITH THE EXTERNAL WORKER: Temporal only EXPECTS a heartbeat, emitting one is the activity implementation's job. A node declaring 30s against a worker that never calls heartbeat() fails at 30s and not at timeout_seconds. Omitted means no heartbeat is expected, which is why there is no default."
+    },
+    "retry": {
+      "type": "object",
+      "description": "kind=activity only. Per-node Temporal RetryPolicy.",
+      "additionalProperties": false,
+      "properties": {
+        "maximum_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Default 3."
+        },
+        "initial_interval_seconds": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Default 1."
+        },
+        "backoff": {
+          "type": "number",
+          "minimum": 1,
+          "description": "backoff_coefficient. Default 2.0."
+        },
+        "non_retryable_errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Error type names Temporal must not retry — the external worker's own application error types, e.g. ItemIncomplete."
+        }
+      }
+    }
   }
 }

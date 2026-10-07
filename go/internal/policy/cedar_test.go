@@ -400,3 +400,83 @@ func TestDispositionComesFromTheBundleNotFromCode(t *testing.T) {
 		}
 	})
 }
+
+// TestAnExternalActivityDoesNotInheritAToolPermit is VRT-AEON-001's acceptance criterion 6, and I
+// asked for it in the channel because it is the one that would regress silently.
+//
+// A2A-002 measured the hole once already: `allow-deep-research-tools` lists NAMES, so a resource that
+// borrowed a tool's name inherited its permit. An external activity is the third kind of thing to pass
+// through this engine, and it is the one with the widest blast radius — a permitted `activity_name`
+// means a run can hand work to a worker process Aeon does not own, on a task queue it does not serve.
+//
+// Runs against the CHECKED-IN bundle, because what can regress is the bundle: someone tidying a `when`
+// clause removes `resource is Tool` and the leak comes back with every other test still green.
+func TestAnExternalActivityDoesNotInheritAToolPermit(t *testing.T) {
+	engine := loadRepoBundle(t)
+	const agent = "deep-research-general@0.1.0"
+
+	t.Run("an activity named exactly like a permitted tool is DENIED", func(t *testing.T) {
+		d := engine.IsAllowedToRunActivity(agent, "search.web", "some-queue")
+		if d.Allowed {
+			t.Errorf("an EXTERNAL ACTIVITY named %q was permitted by %q — scheduling work on somebody "+
+				"else's worker must be its own statement in the bundle, not a side effect of permitting "+
+				"a tool with the same name", "search.web", d.PolicyID)
+		}
+	})
+
+	t.Run("the tool permit still works, so the guard did not break authorization", func(t *testing.T) {
+		if d := engine.IsAllowed(agent, "search.web"); !d.Allowed {
+			t.Fatalf("search.web is no longer permitted (%+v) — negative control: if this fails, the "+
+				"test above proves nothing", d)
+		}
+	})
+
+	t.Run("a FORBID with no type guard still catches an activity, and that asymmetry is correct", func(t *testing.T) {
+		// `forbid-shell-for-everyone` matches on `resource.name like "shell.*"` with NO `resource is`
+		// guard. For a permit that would be the hole above; for a forbid it is the right breadth — a
+		// forbid that only covered tools would let `shell.exec` through as an activity name, which is
+		// the same effect by a different door. Fixed here so a future tidy-up does not "make the
+		// policies consistent" by adding a guard to the forbids.
+		d := engine.IsAllowedToRunActivity(agent, "shell.exec", "some-queue")
+		if d.Allowed {
+			t.Fatal("an activity named shell.exec was permitted")
+		}
+		if d.Disposition != DispositionTerminateRun {
+			t.Errorf("disposition = %q, want %q: the bundle declares terminate_run for shell, and an "+
+				"agent trying to get a shell through the activity door is the same decision",
+				d.Disposition, DispositionTerminateRun)
+		}
+	})
+
+	t.Run("and the mirror image: a TOOL does not inherit the activity permit", func(t *testing.T) {
+		// The bundle's `allow-test-external-activity` is guarded with `resource is ExternalActivity`.
+		// Without that guard it would also authorize a tool of the same name, which is the A2A-002
+		// hole pointing the other way — so both directions are fixed, not just the one that bit.
+		if d := engine.IsAllowed("activity-node-test@0.1.0", "aeon.test.external_activity"); d.Allowed {
+			t.Errorf("a TOOL named %q was permitted by %q — the activity permit is leaking the other way",
+				"aeon.test.external_activity", d.PolicyID)
+		}
+	})
+
+	t.Run("the task queue is a resource attribute a bundle can constrain", func(t *testing.T) {
+		e, err := LoadEngine(PolicyBundleDoc{Policies: []PolicyBundleItem{{
+			ID:     "allow-acme-online-only",
+			Effect: "permit",
+			CedarSource: `permit(principal == Agent::"p@1", action, resource) when {
+				resource is ExternalActivity &&
+				resource.name == "acme.process_item" &&
+				resource.task_queue == "acme-online"
+			};`,
+		}}})
+		if err != nil {
+			t.Fatalf("LoadEngine: %v", err)
+		}
+		if d := e.IsAllowedToRunActivity("p@1", "acme.process_item", "acme-online"); !d.Allowed {
+			t.Fatalf("the permitted queue was refused: %+v", d)
+		}
+		if d := e.IsAllowedToRunActivity("p@1", "acme.process_item", "acme-masivo"); d.Allowed {
+			t.Error("the same activity on a DIFFERENT queue was permitted — the queue decides whose " +
+				"worker picks the work up, so a bundle has to be able to say which one")
+		}
+	})
+}

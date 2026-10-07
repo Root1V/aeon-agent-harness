@@ -147,21 +147,52 @@ func (e *Engine) IsAllowedToDelegate(agentManifestRef, remoteAgentID string) Dec
 	return e.authorize("Agent", agentManifestRef, "RemoteAgent", remoteAgentID)
 }
 
+// IsAllowedToRunActivity evaluates whether agentManifestRef may have the run schedule a named
+// Temporal activity on a task queue served by a worker OUTSIDE Aeon (VRT-AEON-001). The resource is
+// an `ExternalActivity`, never a `Tool`, for the reason A2A-002 measured rather than argued: the
+// bundle's permits list NAMES, so a resource type is the only thing that stops a name from
+// inheriting a permit written for a different kind of thing. An activity called "search.web" must
+// not be authorized by a permit that meant the search tool.
+//
+// The task queue travels as a resource ATTRIBUTE rather than being folded into the name, so a policy
+// can say "this agent may run acme.process_item, but only on acme-online" with a `when` clause —
+// `resource.task_queue`. Folding it into the name would have made that policy a string pattern, and
+// the queue is what decides WHOSE worker picks the work up.
+func (e *Engine) IsAllowedToRunActivity(agentManifestRef, activityName, taskQueue string) Decision {
+	return e.authorize("Agent", agentManifestRef, "ExternalActivity", activityName, types.RecordMap{
+		types.String("task_queue"): types.String(taskQueue),
+	})
+}
+
 func (e *Engine) isAllowedFor(principalType, principalID, toolName string) Decision {
 	return e.authorize(principalType, principalID, "Tool", toolName)
 }
 
-func (e *Engine) authorize(principalType, principalID, resourceType, resourceName string) Decision {
+// authorize builds the Cedar request. extraAttrs adds resource attributes beyond `name`, which a
+// bundle can then constrain in a `when` clause; it is variadic so every existing call site stays
+// unchanged rather than growing a nil argument.
+func (e *Engine) authorize(principalType, principalID, resourceType, resourceName string, extraAttrs ...types.RecordMap) Decision {
 	principal := types.NewEntityUID(types.EntityType(principalType), types.String(principalID))
 	action := types.NewEntityUID(types.EntityType("Action"), types.String(resourceName))
 	resourceUID := types.NewEntityUID(types.EntityType(resourceType), types.String(resourceName))
 
+	attrs := types.RecordMap{types.String("name"): types.String(resourceName)}
+	for _, extra := range extraAttrs {
+		for k, v := range extra {
+			// `name` is not overridable: every forbid in a real bundle is written against it
+			// (`resource.name like "shell.*"`), so letting a caller-supplied attribute shadow it
+			// would let the caller choose which forbids apply to them.
+			if k == types.String("name") {
+				continue
+			}
+			attrs[k] = v
+		}
+	}
+
 	entities := types.EntityMap{
 		resourceUID: types.Entity{
-			UID: resourceUID,
-			Attributes: types.NewRecord(types.RecordMap{
-				types.String("name"): types.String(resourceName),
-			}),
+			UID:        resourceUID,
+			Attributes: types.NewRecord(attrs),
 		},
 	}
 

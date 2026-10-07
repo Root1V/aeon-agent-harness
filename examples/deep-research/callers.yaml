@@ -45,4 +45,15 @@ callers:
     tokenSHA256: "4167faa73aedad9589d46f41c47e5964fedca12b5e9fc3a54c7b174dbb892dbf"
     mayActAs:
       - deep-research-general@0.1.0
+      # VRT-AEON-001: the agent `allow-test-external-activity` in policy_bundle.yaml names. It has no
+      # manifest in the registry on purpose, so nothing can actually be started as it — the entry
+      # exists so the activity node's ALLOW path is exercised by a real caller against the real
+      # bundle instead of by a test that builds its own permissive identity.
+      #
+      # ENUMERATED HERE RATHER THAN WIDENED. The first run of those tests failed with
+      # `403 caller may not act as this agent`, which is SEC-005 doing exactly its job, and the
+      # tempting fix was a `*` in mayActAs. There is a test that fixes the absence of a wildcard
+      # (TestActsAsHasNoWildcard) precisely because a wildcard would be convenient, spread by habit,
+      # and restore the hole with the deployment still looking configured.
+      - activity-node-test@0.1.0
     mayApprove: true

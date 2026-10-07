@@ -5,7 +5,7 @@ it always needs and always reimplements badly: a durable execution loop, typed c
 verifiable evidence and citations, authorization enforced outside the model, hard budgets, OTel
 tracing, and eval gates — without locking you into one model provider or one agent framework.
 
-> **Status:** 100 features `DONE`, each with a named acceptance test that runs against real
+> **Status:** 101 features `DONE`, each with a named acceptance test that runs against real
 > infrastructure — real Postgres, real Temporal, real model providers, real money where the feature is
 > about money. [roadmap.md](roadmap.md) is the index; don't trust a feature is real until its row says
 > `DONE`, and that status is mechanically checked (`make roadmap-check`) against a test that exists.
@@ -24,6 +24,11 @@ tracing, and eval gates — without locking you into one model provider or one a
 >
 > **To run your own agent on it: [docs/your-first-use-case.md](docs/your-first-use-case.md)** — two
 > files and one HTTP call, no code in this repository changes.
+>
+> **To run your own platform's steps on it:** a `kind: activity` graph node schedules a named Temporal
+> activity on your task queue, served by your worker, with per-node timeout and retries — under Aeon's
+> Cedar policy, budgets, approvals and replay (`RUN-006`). Aeon is not in the data path there; what it
+> guarantees is that a governed run will not schedule work the bundle does not permit.
 
 ## Why
 

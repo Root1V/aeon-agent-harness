@@ -68,3 +68,15 @@ def test_graph_all_node_kinds_fixture_matches_schema():
     schema = json.loads((SCHEMAS_DIR / "graph_spec.schema.json").read_text())
     doc = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "graph_all_node_kinds.json").read_text())
     Draft202012Validator(schema).validate(doc)
+
+
+def test_graph_activity_node_fixture_matches_schema():
+    """VRT-AEON-001: the `activity` leaf, with every optional field populated.
+
+    A SECOND fixture and not new nodes in the one above, because that one is RUN-002's acceptance
+    fixture and test_graph_runtime executes it against a real Temporal with no external worker — an
+    activity node in it would park the run on a task queue nobody serves.
+    """
+    schema = json.loads((SCHEMAS_DIR / "graph_spec.schema.json").read_text())
+    doc = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "graph_activity_node.json").read_text())
+    Draft202012Validator(schema).validate(doc)
