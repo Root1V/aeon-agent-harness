@@ -31,6 +31,11 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 
+from aeon_worker.activities.activity_policy_activities import (
+    ActivityPolicyInput,
+    ActivityPolicyOutput,
+    check_activity_policy_activity,
+)
 from aeon_worker.activities.tool_activities import ExecuteToolInput, ExecuteToolOutput, execute_tool_activity
 
 _MISSING = object()
@@ -84,6 +89,11 @@ class BudgetPolicy:
     need to change when a real model_call node kind starts populating them."""
 
     max_tool_calls: int | None = None
+    # VRT-AEON-001: external activity nodes get their OWN limit and are not folded into
+    # max_tool_calls. An external activity is not a tool call — it is work handed to a worker this
+    # deployment does not own — and one counter meaning two things is the defect MDL-018 removed
+    # from the other end of this same run state (three zeros reported as measurements).
+    max_activity_calls: int | None = None
     max_depth: int | None = None
     deadline: Any | None = None  # an absolute workflow.now()-based datetime; see workflows/graph_run.py
 
@@ -93,6 +103,7 @@ class BudgetsConsumed:
     """Mirrors run_state.schema.json's `budgets_consumed` shape."""
 
     tool_calls: int = 0
+    activity_calls: int = 0  # VRT-AEON-001; see BudgetPolicy.max_activity_calls
     depth: int = 0  # the deepest subgraph nesting actually reached, not a cumulative count
     model_calls: int = 0
     tokens: int = 0
@@ -114,6 +125,22 @@ def compute_tool_call_hash(node_id: str, tool_name: str, tool_args: dict[str, An
     """RUN-005's parameter binding: an approval is only valid for the EXACT (node, tool, args) it
     was granted for. Canonical JSON (sorted keys) makes this stable regardless of dict ordering."""
     canonical = json.dumps({"node_id": node_id, "tool_name": tool_name, "tool_args": tool_args}, sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def compute_activity_call_hash(node_id: str, activity_name: str, task_queue: str, args: dict[str, Any]) -> str:
+    """RUN-005's parameter binding for an external activity (VRT-AEON-001).
+
+    THE TASK QUEUE IS IN THE HASH, and that is the whole reason this is a separate function rather
+    than a reuse of compute_tool_call_hash with the name slotted in. The queue decides WHICH worker
+    picks the work up, so two nodes identical but for the queue are two different effects on two
+    different machines. Leaving it out would make an approval granted for `acme-online` valid for
+    `acme-masivo`, which is exactly the class of substitution RUN-005 exists to refuse.
+    """
+    canonical = json.dumps(
+        {"node_id": node_id, "activity_name": activity_name, "task_queue": task_queue, "args": args},
+        sort_keys=True,
+    )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -204,6 +231,8 @@ async def execute_graph(node: dict[str, Any], state: GraphExecutionState, depth:
 
     if kind == "tool_call":
         result = await _execute_tool_call(node, state)
+    elif kind == "activity":
+        result = await _execute_activity(node, state)
     elif kind == "sequential":
         result = await _execute_sequential(node, state, depth)
     elif kind == "parallel":
@@ -265,6 +294,106 @@ async def _execute_tool_call(node: dict[str, Any], state: GraphExecutionState) -
         "deduplicated": output.deduplicated,
         "idempotency_key": output.idempotency_key,
         "result": output.result,
+    }
+
+
+async def _execute_activity(node: dict[str, Any], state: GraphExecutionState) -> dict[str, Any]:
+    """VRT-AEON-001: schedule a named Temporal activity on a task queue served by a worker OUTSIDE
+    Aeon, under Aeon's governance.
+
+    ORDER IS LOAD-BEARING: budget, then POLICY, then approval, then schedule.
+
+    Policy before approval, and not the other way round, because asking a person to approve
+    something the bundle forbids spends their attention on a decision that cannot be honoured — and
+    if they say yes and we then refuse, the audit line records a human approving an action that
+    never ran, which is worse than no line at all. Deny first, then ask.
+
+    THE EFFECT IS OUTSIDE OUR PERIMETER and the comment is here so nobody oversells it later. For a
+    tool, the gateway decides AND executes, so it is in the data path. Here the worker belongs to the
+    consumer: Aeon's boundary is that its own workflow will not schedule unauthorized work. It does
+    not stop that consumer's code from putting the same task on its own queue by itself.
+    """
+    node_id = node["id"]
+    activity_name = node.get("activity_name")
+    task_queue = node.get("task_queue")
+    if not activity_name or not task_queue:
+        raise GraphError(
+            f"node {node_id!r} is kind=activity and needs both activity_name and task_queue: "
+            "without the queue there is no statement about whose worker runs this"
+        )
+
+    # Checked BEFORE incrementing, like the tool counter: consumed.activity_calls must count work
+    # that actually ran, so the call that trips the limit is never counted as if it had.
+    if state.budgets.max_activity_calls is not None and state.consumed.activity_calls + 1 > state.budgets.max_activity_calls:
+        raise BudgetExceededError(
+            f"activity_calls would exceed max_activity_calls={state.budgets.max_activity_calls} at node {node_id!r}",
+            reason="activity_calls_exceeded",
+        )
+
+    args = node.get("args", {})
+    requires_approval = bool(node.get("requires_approval"))
+
+    decision: ActivityPolicyOutput = await workflow.execute_activity(
+        check_activity_policy_activity,
+        ActivityPolicyInput(
+            agent_manifest_ref=state.agent_manifest_ref,
+            activity_name=activity_name,
+            task_queue=task_queue,
+            requires_approval=requires_approval,
+        ),
+        start_to_close_timeout=timedelta(seconds=30),
+        retry_policy=RetryPolicy(maximum_attempts=5),
+    )
+
+    if requires_approval:
+        if state.await_approval is None:
+            raise GraphError(f"node {node_id!r} sets requires_approval but no approval mechanism is wired")
+        approval_hash = compute_activity_call_hash(node_id, activity_name, task_queue, args)
+        # Raises and never returns if the work must not proceed, so the counter below is only
+        # reached once a person has actually said yes.
+        await state.await_approval(node_id, approval_hash, state.approval_ttl_seconds)
+
+    state.consumed.activity_calls += 1
+
+    # TIMEOUTS AND RETRIES COME FROM THE NODE, which is the half of this feature that the hardcoded
+    # 10s/5-attempts of _execute_tool_call cannot express. A tool call is a short request to a
+    # gateway we run; an external activity is OCR or inference on somebody else's machine, measured
+    # in minutes.
+    timeout_seconds = int(node.get("timeout_seconds", 600))
+    retry = node.get("retry", {}) or {}
+    retry_policy = RetryPolicy(
+        maximum_attempts=int(retry.get("maximum_attempts", 3)),
+        initial_interval=timedelta(seconds=float(retry.get("initial_interval_seconds", 1))),
+        backoff_coefficient=float(retry.get("backoff", 2.0)),
+        non_retryable_error_types=list(retry.get("non_retryable_errors", []) or []),
+    )
+
+    # HEARTBEAT IS A CONTRACT WITH THE OTHER TEAM'S WORKER, not something Aeon can provide. Setting
+    # heartbeat_timeout only makes Temporal EXPECT a heartbeat; emitting one is the activity
+    # implementation's job. A node that declares 30s against a worker that never calls heartbeat()
+    # fails at 30s, not at timeout_seconds — so this is omitted unless the graph asks for it, rather
+    # than defaulted to a value that would turn a working long activity into a timing out one.
+    heartbeat_seconds = node.get("heartbeat_seconds")
+    heartbeat_timeout = timedelta(seconds=int(heartbeat_seconds)) if heartbeat_seconds else None
+
+    result = await workflow.execute_activity(
+        activity_name,
+        args,
+        task_queue=task_queue,
+        start_to_close_timeout=timedelta(seconds=timeout_seconds),
+        heartbeat_timeout=heartbeat_timeout,
+        retry_policy=retry_policy,
+    )
+
+    return {
+        "node_id": node_id,
+        "kind": "activity",
+        "activity_name": activity_name,
+        "task_queue": task_queue,
+        # The policy that permitted this, carried into the result so the run's own record says WHY
+        # it was allowed to hand work outside — the same reason a denial carries its policy id.
+        "policy_id": decision.policy_id,
+        "result": result,
     }
 
 

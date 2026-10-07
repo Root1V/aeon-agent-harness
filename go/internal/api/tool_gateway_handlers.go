@@ -56,6 +56,7 @@ type ToolGatewayHandlers struct {
 // Register mounts the tool gateway routes on mux.
 func (h *ToolGatewayHandlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /check-policy", h.checkPolicy)
+	mux.HandleFunc("POST /check-activity-policy", h.checkActivityPolicy)
 	mux.HandleFunc("POST /execute", h.execute)
 }
 
@@ -82,6 +83,65 @@ func (h *ToolGatewayHandlers) checkPolicy(w http.ResponseWriter, r *http.Request
 		return
 	}
 	decision := h.Policy.IsAllowed(body.AgentManifestRef, body.ToolName)
+	writeJSON(w, http.StatusOK, decision)
+}
+
+// activityPolicyRequest is VRT-AEON-001's question: may this agent have the run schedule this named
+// activity on this task queue?
+type activityPolicyRequest struct {
+	AgentManifestRef string `json:"agent_manifest_ref"`
+	ActivityName     string `json:"activity_name"`
+	TaskQueue        string `json:"task_queue"`
+}
+
+// checkActivityPolicy authorizes an external activity before the workflow schedules it.
+//
+// A SEPARATE ENDPOINT AND NOT A FIELD ON /check-policy. A flag would have made one request shape
+// mean two kinds of resource, and the failure mode is the one A2A-002 measured: a caller that omits
+// the discriminator gets the other kind's answer. Separate routes cannot be confused by omission.
+//
+// AND IT ENFORCES SEC-005, which /check-policy above does not — read that as the asymmetry it is.
+// /check-policy is advisory: the enforcement point for a tool is /execute, where this gateway both
+// decides AND executes, so a wrong answer to an advisory question changes nothing. For an external
+// activity there is no such endpoint and there cannot be: the worker that serves the activity
+// belongs to the consumer, so Aeon is not in the data path. The only thing Aeon controls is whether
+// its own workflow schedules the work — which makes THIS answer the decision, and a decision taken
+// on a principal the caller merely asserted is exactly what SEC-005 removed from /execute.
+//
+// The boundary that remains, stated plainly rather than oversold: this governs what an Aeon run will
+// schedule. It does not stop a consumer's own code from putting a task on its own queue by itself.
+// What it buys is that a governed run cannot be the thing that does it.
+func (h *ToolGatewayHandlers) checkActivityPolicy(w http.ResponseWriter, r *http.Request) {
+	var body activityPolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if body.ActivityName == "" || body.TaskQueue == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{
+			"error": "activity_name and task_queue are both required: the queue decides whose worker " +
+				"picks the work up, so a decision without it would authorize a name on any queue",
+		})
+		return
+	}
+
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: this gateway was reached without an authenticated caller (SEC-005)",
+		})
+		return
+	}
+	if !caller.ActsAs(body.AgentManifestRef) {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error":              "caller may not act as this agent (SEC-005)",
+			"caller_id":          caller.ID,
+			"agent_manifest_ref": body.AgentManifestRef,
+		})
+		return
+	}
+
+	decision := h.Policy.IsAllowedToRunActivity(body.AgentManifestRef, body.ActivityName, body.TaskQueue)
 	writeJSON(w, http.StatusOK, decision)
 }
 

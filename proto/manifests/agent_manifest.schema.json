@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aeon.dev/manifests/agent_manifest.schema.json",
   "title": "AgentManifest",
-  "description": "Config-as-code definition of an agent (FND-001/FND-003). Lives in Git; the UI reads, never the sole source of truth. Never names a concrete model \u2014 only a capability profile (see model_profile.schema.json).",
+  "description": "Config-as-code definition of an agent (FND-001/FND-003). Lives in Git; the UI reads, never the sole source of truth. Never names a concrete model — only a capability profile (see model_profile.schema.json).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -123,6 +123,11 @@
                   "type": "integer",
                   "minimum": 0,
                   "description": "MDL-018: prompt+completion tokens one run may spend. Enforced by the Model Gateway against the cost ledger's sum, before each call. Not redundant with costUsd: a deployment on local inference is never priced, so a cost ceiling cannot cap it."
+                },
+                "activityCalls": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "VRT-AEON-001: hard cap on kind=activity nodes per run — work handed to a worker this deployment does not own. SEPARATE from toolCalls and not folded into it: an external activity is not a tool call, and one counter meaning two things is the defect MDL-018 removed from budgets_consumed. Enforced in the Graph Runtime before the node is scheduled (aeon_worker.graph._execute_activity), so a run never does one unit of external work past its limit. Absent means unlimited."
                 }
               }
             }

@@ -12,7 +12,8 @@ go/internal/runcontroller (aeon-runcontroller). start/cancel/status/stream need 
 code at all — they're native Temporal client operations (StartWorkflow, CancelWorkflow,
 DescribeWorkflowExecution) the Run Controller calls directly.
 
-RUN-003 control surface: an optional `request["budgets"]` dict — `max_tool_calls`, `max_depth`,
+RUN-003 control surface: an optional `request["budgets"]` dict — `max_tool_calls`,
+`max_activity_calls` (VRT-AEON-001), `max_depth`,
 `deadline_seconds` — becomes a graph.BudgetPolicy enforced by execute_graph itself (hard stop: a
 limit crossed raises BudgetExceededError, which Temporal surfaces as a FAILED run). The
 `budgets_consumed` query exposes the running counts, including after a budget-triggered failure —
@@ -81,6 +82,11 @@ def _budget_policy_from_request(budgets_req: dict[str, Any]) -> BudgetPolicy:
         deadline = workflow.now() + timedelta(seconds=budgets_req["deadline_seconds"])
     return BudgetPolicy(
         max_tool_calls=budgets_req.get("max_tool_calls"),
+        # VRT-AEON-001: its own key, mirroring spec.runtime.budgets.activityCalls. Absent means
+        # unlimited, like every other dimension here — and absent is NOT zero: a run whose manifest
+        # says nothing about external activities is unconstrained on that axis, whereas zero would
+        # forbid them outright, which is a different statement somebody has to make on purpose.
+        max_activity_calls=budgets_req.get("max_activity_calls"),
         max_depth=budgets_req.get("max_depth"),
         deadline=deadline,
     )
@@ -143,9 +149,9 @@ class GraphRunWorkflow:
         consumer that sees `cost_usd` missing has to go and ask rather than believe a zero.
         """
         if self._state is None:
-            return {"tool_calls": 0, "depth": 0}
+            return {"tool_calls": 0, "activity_calls": 0, "depth": 0}
         c = self._state.consumed
-        return {"tool_calls": c.tool_calls, "depth": c.depth}
+        return {"tool_calls": c.tool_calls, "activity_calls": c.activity_calls, "depth": c.depth}
 
     async def _record_approval_wait(
         self, node_id: str, approval_id: str, tool_call_hash: str, outcome: str, waited_ms: int | None = None

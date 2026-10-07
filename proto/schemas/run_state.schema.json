@@ -5,12 +5,39 @@
   "description": "Durable state of an AgentRun workflow (RUN-001/RUN-004). This is the shape checkpointed by Temporal at each superstep; it must remain serializable and must never contain a chain-of-thought field.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["run_id", "agent_manifest_ref", "status", "graph_cursor", "budgets_consumed", "created_at"],
+  "required": [
+    "run_id",
+    "agent_manifest_ref",
+    "status",
+    "graph_cursor",
+    "budgets_consumed",
+    "created_at"
+  ],
   "properties": {
-    "run_id": { "type": "string", "format": "uuid" },
-    "tenant_id": { "type": "string" },
-    "agent_manifest_ref": { "type": "string", "description": "name@version of the AgentManifest driving this run." },
-    "status": { "type": "string", "enum": ["PENDING", "RUNNING", "PAUSED", "PAUSED_FOR_APPROVAL", "SUCCEEDED", "FAILED", "CANCELLED"], "description": "PAUSED is an operator-initiated pause (RUN-001, Run Controller); PAUSED_FOR_APPROVAL is a run blocked on a specific approval decision (RUN-005) — distinct because only the latter carries pending_approval." },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tenant_id": {
+      "type": "string"
+    },
+    "agent_manifest_ref": {
+      "type": "string",
+      "description": "name@version of the AgentManifest driving this run."
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PENDING",
+        "RUNNING",
+        "PAUSED",
+        "PAUSED_FOR_APPROVAL",
+        "SUCCEEDED",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "description": "PAUSED is an operator-initiated pause (RUN-001, Run Controller); PAUSED_FOR_APPROVAL is a run blocked on a specific approval decision (RUN-005) — distinct because only the latter carries pending_approval."
+    },
     "graph_cursor": {
       "type": "object",
       "description": "Position in the graph runtime (RUN-002): which node(s) are active/pending per branch.",
@@ -20,23 +47,65 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "model_calls": { "type": "integer", "minimum": 0 },
-        "tool_calls": { "type": "integer", "minimum": 0 },
-        "tokens": { "type": "integer", "minimum": 0 },
-        "cost_usd": { "type": "number", "minimum": 0 },
-        "depth": { "type": "integer", "minimum": 0 }
+        "model_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cost_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "depth": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activity_calls": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "VRT-AEON-001: kind=activity nodes that actually ran. Counted after policy and approval, so a node refused by either is never counted as if it had run."
+        }
       }
     },
     "pending_approval": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "approval_id": { "type": "string", "format": "uuid" },
-        "tool_call_hash": { "type": "string", "description": "Hash of bound parameters; an approval only applies if this matches at execution time." },
-        "expires_at": { "type": "string", "format": "date-time" }
+        "approval_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "tool_call_hash": {
+          "type": "string",
+          "description": "Hash of bound parameters; an approval only applies if this matches at execution time."
+        },
+        "expires_at": {
+          "type": "string",
+          "format": "date-time"
+        }
       }
     },
-    "no_progress_counter": { "type": "integer", "minimum": 0, "description": "Consecutive supersteps without new evidence/state change; hard-stops runaway loops." },
-    "created_at": { "type": "string", "format": "date-time" },
-    "updated_at": { "type": "string", "format": "date-time" }
+    "no_progress_counter": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Consecutive supersteps without new evidence/state change; hard-stops runaway loops."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
   }
 }

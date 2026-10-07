@@ -1,0 +1,42 @@
+{
+  "id": "root",
+  "kind": "sequential",
+  "children": [
+    {
+      "id": "fan",
+      "kind": "fan_in",
+      "children": [
+        {
+          "id": "p0",
+          "kind": "activity",
+          "activity_name": "aeon.test.external_activity",
+          "task_queue": "test-external",
+          "args": { "item_id": "item-0" },
+          "timeout_seconds": 600,
+          "heartbeat_seconds": 30,
+          "retry": {
+            "maximum_attempts": 3,
+            "initial_interval_seconds": 5,
+            "backoff": 2.0,
+            "non_retryable_errors": ["ItemIncomplete"]
+          }
+        },
+        {
+          "id": "p1",
+          "kind": "activity",
+          "activity_name": "aeon.test.external_activity",
+          "task_queue": "test-external",
+          "args": { "item_id": "item-1" }
+        }
+      ]
+    },
+    {
+      "id": "gated",
+      "kind": "activity",
+      "activity_name": "aeon.test.external_activity",
+      "task_queue": "test-external",
+      "args": { "item_id": "summary" },
+      "requires_approval": true
+    }
+  ]
+}

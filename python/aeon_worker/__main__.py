@@ -30,6 +30,7 @@ from aeon_worker.activities.framework_adapter_activities import (
 )
 from aeon_worker.activities.memory_activities import reflect_activity, write_memory_candidates_activity
 from aeon_worker.activities.model_activities import decide_activity
+from aeon_worker.activities.activity_policy_activities import check_activity_policy_activity
 from aeon_worker.activities.tool_activities import execute_tool_activity
 from aeon_observability import init_tracing
 from aeon_worker import outbound, secretref
@@ -95,6 +96,10 @@ async def main() -> None:
         workflows=WORKFLOWS,
         activities=[
             execute_tool_activity,
+            # VRT-AEON-001: the policy check that runs before an `activity` node is scheduled. It is
+            # served by THIS worker, on Aeon's own task queue — only the external work itself goes
+            # to the consumer's queue.
+            check_activity_policy_activity,
             decide_activity,
             plan_research_activity,
             research_subtask_activity,

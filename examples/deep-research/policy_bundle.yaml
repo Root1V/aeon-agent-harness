@@ -94,3 +94,28 @@ policies:
         resource is Tool &&
         resource.name == "artifact.write"
       };
+
+  # VRT-AEON-001: an ExternalActivity permit, here so the acceptance test runs against the SHIPPED
+  # bundle and not a copy — the same rule A2A-002's regression test follows, because what can regress
+  # is this file.
+  #
+  # SCOPED TO AN AGENT THAT IS DELIBERATELY NOT IN THE REGISTRY. `activity-node-test@0.1.0` has no
+  # manifest and cannot be started, so this permit cannot widen anything a real run does; it exists so
+  # the allow path is exercised by something other than a fixture. The development caller tokens in
+  # callers.yaml beside this file are public for the same kind of reason, and say so.
+  #
+  # `resource is ExternalActivity` is the guard that matters. Without it this permit would also
+  # authorize a TOOL named aeon.test.external_activity — the mirror image of the hole A2A-002
+  # measured, and there is a test for both directions.
+  - id: allow-test-external-activity
+    effect: permit
+    cedarSource: |
+      permit(
+        principal == Agent::"activity-node-test@0.1.0",
+        action,
+        resource
+      ) when {
+        resource is ExternalActivity &&
+        resource.name == "aeon.test.external_activity" &&
+        resource.task_queue == "test-external"
+      };
