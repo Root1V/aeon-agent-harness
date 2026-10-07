@@ -83,6 +83,7 @@ def main() -> int:
         return 1
 
     failures: list[str] = []
+    seen_ids: dict[str, str] = {}
     checked = 0
 
     for line in ROADMAP.read_text().splitlines():
@@ -101,6 +102,22 @@ def main() -> int:
                 )
             continue
         feature_id, feature, status, criterio, _pr = m.groups()
+        # A DUPLICATE ID IS CHECKED BEFORE ANYTHING ELSE AND REGARDLESS OF STATUS, because this file
+        # is the index Synaptum, Axonium and Veritium cite BY ID. Found on 2026-10-07 with two
+        # `MDL-017` rows and two `DX-003` rows: every one of the four was DONE and verified, so
+        # nothing failed and the only symptom was that a citation could mean two features. The usual
+        # way in is promoting a backlog entry and handing it an id that is already taken, which is
+        # exactly how the DX-003 pair happened.
+        if feature_id not in ("ID", "---"):
+            if feature_id in seen_ids:
+                failures.append(
+                    f"{feature_id}: appears more than once (first as {seen_ids[feature_id]!r}, again "
+                    f"as {feature!r}). This index is cited by id across teams, so one id names one "
+                    "feature. Renumber the newer row and say so in its own cell."
+                )
+            else:
+                seen_ids[feature_id] = feature
+
         if feature_id in ("ID", "---") or status not in {"DONE"}:
             continue
 

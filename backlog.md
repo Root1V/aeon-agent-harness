@@ -239,6 +239,22 @@ toca este código: lo único que tiene que producir es el fichero.
   lo segundo deja de probarla.
 - **Coste:** S.
 
+### Los puertos del stack colisionan con otros proyectos del ecosistema, y MinIO es el peor caso
+
+- **Descripción:** señalado por Veritium (`VRT-AEON-002`, pregunta 4) y confirmado peor de lo que
+  decían. Publicamos 7233 y 8080, que argus también usa. Y **publicamos MinIO en el 9000 del host**,
+  que es exactamente el puerto que nuestro propio `.env.example` documenta para
+  `PROMETHEUS_AUTH_URL=http://127.0.0.1:9000` — levantar este compose y la plataforma Prometheus en
+  la misma máquina colisiona, y el servicio que colisiona es el que esta misma lista registra como
+  **sin ningún consumidor**. Además publicamos en `0.0.0.0` mientras argus se ata a `127.0.0.1`, que
+  es lo que `SEC-005` anotó al descubrir que quien alcanzara el 9404 podía aprobar runs.
+- **Fase objetivo:** antes de que dos stacks del ecosistema convivan en una máquina que no sea la del
+  dueño del proyecto.
+- **Criterio de entrada:** ninguno para la parte nuestra (dejar de publicar MinIO, atar a loopback,
+  hacer overridables los puertos de Temporal y su UI). La **convención** de bandas por stack sí
+  necesita acuerdo de ARG/PRM/SYN/VRT — propuesta puesta en el canal, sin respuesta todavía.
+- **Coste:** S lo nuestro; la convención es coordinación.
+
 ### El esquema de Postgres no tiene migraciones versionadas
 
 - **Descripción:** `store.Connect` llama a `Migrate()`, que aplica `schema.sql` idempotentemente bajo
