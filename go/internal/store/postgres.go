@@ -1,18 +1,14 @@
 // Package store is the control plane's persistence layer: the Agent Registry (FND-001) and Tool
-// Registry (TOOL-001) tables, backed by Postgres. See schema.sql for the DDL, embedded here so
-// the binary carries its own schema and Migrate() can apply it idempotently at startup.
+// Registry (TOOL-001) tables, backed by Postgres. The DDL lives in migrations/, embedded so the
+// binary carries its own schema and Migrate() brings a database up to the version it knows.
 package store
 
 import (
 	"context"
-	_ "embed"
 	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-//go:embed schema.sql
-var schemaSQL string
 
 // Store wraps a Postgres connection pool and exposes the registries built on top of it.
 type Store struct {
@@ -37,14 +33,19 @@ func Connect(ctx context.Context, dsn string) (*Store, error) {
 
 // migrationLockID is a fixed Postgres advisory lock key serializing schema application. Without
 // it, many processes calling Connect() concurrently (routine under `go test ./...`, which runs
-// each package's tests as a separate process against the same real Postgres) can run schema.sql's
+// each package's tests as a separate process against the same real Postgres) can run the migrations's
 // DDL — CREATE TABLE and, since MEM-005, ALTER TABLE ADD COLUMN with a self-referencing FOREIGN
 // KEY — at the same time and deadlock (observed directly: SQLSTATE 40P01 from concurrent Migrate
-// calls). The lock makes every Connect() apply schema.sql one at a time instead.
+// calls). The lock makes every Connect() apply the migrations one at a time instead.
 const migrationLockID = 727272727001
 
-// Migrate applies schema.sql. Idempotent (CREATE TABLE/ADD COLUMN IF NOT EXISTS throughout) and
-// safe under concurrent callers — see migrationLockID.
+// Migrate brings the database up to the migration version this binary carries (migrations.go).
+//
+// Idempotent in the sense that now matters: an already-applied migration is skipped because the
+// ledger says it ran, not because the DDL happens to be a no-op when repeated. That difference is
+// the whole point of the change — a destructive migration is not a no-op when repeated, and the old
+// mechanism had no way to know it had already run. Safe under concurrent callers; see
+// migrationLockID.
 func (s *Store) Migrate(ctx context.Context) error {
 	conn, err := s.pool.Acquire(ctx)
 	if err != nil {
@@ -57,8 +58,15 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	defer conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, int64(migrationLockID))
 
-	if _, err := conn.Exec(ctx, schemaSQL); err != nil {
-		return fmt.Errorf("store: migrate: %w", err)
+	// VRT-AEON-005: ordered, recorded migrations instead of one idempotent file. Loaded and
+	// validated BEFORE touching the database, so a malformed set (a gap, a duplicate version, a file
+	// that is not named NNNN_name.sql) stops the service rather than applying a partial history.
+	pending, err := loadMigrations()
+	if err != nil {
+		return err
+	}
+	if err := applyMigrations(ctx, conn, pending); err != nil {
+		return err
 	}
 	return nil
 }

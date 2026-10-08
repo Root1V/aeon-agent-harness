@@ -1,7 +1,14 @@
--- Aeon control-plane schema (FND-001 Agent Registry, TOOL-001 Tool Registry).
--- Applied idempotently at controlplane startup (see postgres.go Migrate). A real migration
--- framework (golang-migrate or similar) is TODO if/when this schema needs versioned migrations;
--- for now CREATE TABLE IF NOT EXISTS is sufficient since the schema has no history yet.
+-- 0001 · Aeon control-plane schema (FND-001 Agent Registry, TOOL-001 Tool Registry).
+--
+-- THIS WAS schema.sql UNTIL 2026-10-07 and its contents are unchanged, deliberately. It is the
+-- first entry in a versioned history (migrations.go) rather than a rewrite, because it is already
+-- fully idempotent — every statement is CREATE TABLE/INDEX IF NOT EXISTS — so applying it to a
+-- database that already has these tables is a no-op. That is what lets an existing deployment adopt
+-- the migration runner without a data step: 0001 runs, changes nothing, and gets recorded.
+--
+-- Its old header said "for now CREATE TABLE IF NOT EXISTS is sufficient since the schema has no
+-- history yet". That stopped being true with VRT-AEON-005, whose tenant isolation needs PRIMARY KEY
+-- changes on seven tables — which this mechanism cannot express and would skip in silence.
 
 CREATE TABLE IF NOT EXISTS agents (
     name            TEXT NOT NULL,

@@ -13,7 +13,7 @@ import (
 )
 
 // Checkpointer is the Postgres-backed implementation of INT-009's durability seam
-// (checkpoint.Checkpointer). See go/internal/checkpoint for the contract and schema.sql for the DDL.
+// (checkpoint.Checkpointer). See go/internal/checkpoint for the contract and migrations/ for the DDL.
 type Checkpointer struct {
 	pool *pgxpool.Pool
 }
