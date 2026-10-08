@@ -168,9 +168,20 @@ func TestA2ATaskLifecycle(t *testing.T) {
 	})
 
 	t.Run("canceling a task reaches canceled and really cancels the underlying Aeon run", func(t *testing.T) {
-		// A loop the real graph runtime will run for a while, giving the test time to cancel it
-		// before it would otherwise complete — same technique run_controller_handlers_test.go
-		// uses (pause) but for a real in-flight cancellation instead.
+		// THE RUN IS PAUSED BEFORE THE CANCEL, and the previous version of this test was a race that
+		// went red twice in CI (2026-10-07) with `CancelTask: internal error`.
+		//
+		// It relied on a 50-iteration loop taking longer than the round trip from "observed working"
+		// to "cancel sent". When the loop won, Controller.Cancel addressed a workflow that had
+		// already completed, Temporal said so, and the SDK surfaced it as an internal error. The
+		// failure was correct and the PREMISE was what was fragile — exactly the thing a timing
+		// assumption does: it holds on the machine it was written on.
+		//
+		// Pause removes the timing entirely. A paused run is parked in workflow.wait_condition, so it
+		// is genuinely in flight and genuinely cannot complete, which is the state this test needs.
+		// The old comment said it wanted "a real in-flight cancellation" rather than the pause
+		// technique — but a paused workflow IS running; what the test actually needs is only that it
+		// has not finished, and pause is the one way to guarantee that without waiting for anything.
 		graph := map[string]any{
 			"id": "root", "kind": "loop", "max_iterations": 50,
 			"body": simpleGraph("a2a-cancel-test.txt"),
@@ -187,6 +198,12 @@ func TestA2ATaskLifecycle(t *testing.T) {
 		task := result.(*sdka2a.Task)
 
 		waitForTaskState(t, c, task.ID, sdka2a.TaskStateWorking, 5*time.Second)
+
+		// Same workflow id the executor addresses, derived the same way (workflowIDFor).
+		controller := runcontroller.New(testTemporalClient(t), "")
+		if err := controller.Pause(ctx, workflowIDFor(string(task.ID))); err != nil {
+			t.Fatalf("Pause: %v — the run has to be held before the cancel, or this test is a race", err)
+		}
 
 		if _, err := c.CancelTask(ctx, &sdka2a.TaskIDParams{ID: task.ID}); err != nil {
 			t.Fatalf("CancelTask: %v", err)
