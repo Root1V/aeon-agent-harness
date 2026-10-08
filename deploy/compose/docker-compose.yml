@@ -101,34 +101,29 @@ services:
       timeout: 5s
       retries: 20
 
-  # ---- Artifact / observation store (offload target, CTX-003) ---------------------------
-  minio:
-    image: minio/minio:latest
-    profiles: ["core", "obs", "local-llm", "full"]
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: aeon
-      MINIO_ROOT_PASSWORD: aeon-dev-secret
-    # NO PUBLICA PUERTOS, y es el arreglo más barato de una colisión real (VRT-ARG-001 punto 4).
-    #
-    # Publicaba 9000 y 9001 en el host, y 9000 es exactamente el puerto que nuestro propio
-    # `.env.example` documenta para `PROMETHEUS_AUTH_URL=http://127.0.0.1:9000`. Levantar este compose
-    # y la plataforma Prometheus en la misma máquina colisionaba — y el servicio que colisionaba es el
-    # que `backlog.md` tiene registrado como **sin un solo consumidor** («MinIO corre en el stack de
-    # referencia y nadie le habla»: ni una línea de Go o de Python lo usa).
-    #
-    # El servicio se queda, porque quitarlo depende de una decisión que esa entrada del backlog aún
-    # tiene abierta (implementar el ObservationStore sobre S3 o borrarlo). Lo que no se sostiene es
-    # ocupar dos puertos del host para nadie. Dentro de la red sigue alcanzable como `minio:9000`, que
-    # es como lo alcanzaría el primer cliente que exista.
-    volumes:
-      - minio-data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
+  # ---- Artifact / observation store ------------------------------------------------------
+  #
+  # MINIO WAS HERE AND IS GONE (2026-10-08, GOV-001g). The backlog entry that stood over it asked for
+  # a decision — implement the ObservationStore over S3, or delete the service — and the decision is
+  # delete, for three measured reasons rather than because it is cheaper:
+  #
+  #   1. Nothing called it, and not just the service: `FilesystemObservationStore`, the Protocol
+  #      implementation MinIO was supposedly the production half of, has NO caller outside tests
+  #      either. An S3 backend would have been a second implementation of an interface nothing uses.
+  #   2. Object storage would not have fixed the thing that actually mattered. The artifact store's
+  #      isolation defect was its NAMING, not its medium: ids are
+  #      `uuid5(FIXED_NAMESPACE, "<run_id>/<name>")` in one flat namespace, so a flat bucket with the
+  #      same keys has exactly the same hole. "Implement" was never the safer branch — it would have
+  #      carried the defect into a new backend at cost M.
+  #   3. Its entry criterion ("when artifacts must survive the host or be shared between machines")
+  #      is still not met: nothing shares artifacts between machines today.
+  #
+  # What the question was standing in front of IS fixed: artifacts are now parked per tenant
+  # (<AEON_ARTIFACT_ROOT>/<tenant>/<id>) and `artifact.read` opens a per-tenant os.Root, so another
+  # tenant's report is outside the root the tool can address rather than something it declines.
+  #
+  # The day artifacts really must outlive the host, the Protocol is still the seam to implement
+  # against — with per-tenant key prefixes, which is the part this change makes non-optional.
   # ---- Observability (OBS-001, A4: OTel GenAI semantic conventions) ----------------------
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
@@ -507,7 +502,6 @@ services:
 volumes:
   temporal-db-data:
   postgres-data:
-  minio-data:
   tempo-data:
   prometheus-metrics-data:
   grafana-data:

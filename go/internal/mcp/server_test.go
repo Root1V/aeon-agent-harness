@@ -119,7 +119,7 @@ func newRealToolGatewayServer(t *testing.T) *httptest.Server {
 	// no search provider now gets "unknown tool" rather than a successful-looking empty answer. The
 	// double belongs in the test that needs it.
 	executor := toolexec.NewExecutor()
-	executor.Register("search.web", func(args map[string]any) (map[string]any, error) {
+	executor.Register("search.web", func(_ string, args map[string]any) (map[string]any, error) {
 		return map[string]any{"status": "executed", "tool": "search.web", "args": args}, nil
 	})
 

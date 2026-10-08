@@ -11,9 +11,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +36,10 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/tracing"
 	"github.com/aeon-ai/aeon/go/internal/websearch/searxng"
 )
+
+// tenantDirPattern is auth's own tenant shape. A tenant name becomes a PATH COMPONENT of the
+// artifact store, so this is the line between a name and a path — `..` is not a tenant.
+var tenantDirPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 func main() {
 	if p := os.Getenv("AEON_TOOLGW_PORT"); p != "" {
@@ -144,13 +151,31 @@ func main() {
 		if err := os.MkdirAll(artifactRoot, 0o755); err != nil {
 			log.Fatalf("aeon-toolgw: AEON_ARTIFACT_ROOT=%s cannot be created: %v", artifactRoot, err)
 		}
-		root, err := os.OpenRoot(artifactRoot)
-		if err != nil {
+		if _, err := os.OpenRoot(artifactRoot); err != nil {
 			log.Fatalf("aeon-toolgw: AEON_ARTIFACT_ROOT=%s is not an openable directory: %v", artifactRoot, err)
 		}
-		defer root.Close()
-		toolexec.RegisterArtifactReadTool(executor, root, artifactRoot)
-		log.Printf("aeon-toolgw: artifact.read live over %s (read-only, contained by os.Root)", artifactRoot)
+		// ONE os.Root PER TENANT, resolved per call (GOV-001g). The store is <root>/<tenant>/<id>,
+		// which is what the writer produces, and the containment does the isolation: another tenant's
+		// artifact is not something the tool declines to open, it is outside the root it can address.
+		//
+		// Opened per call rather than cached at startup because the set of tenants is not known then —
+		// a tenant's directory appears the first time one of its runs parks something. The cost is one
+		// openat per artifact.read, which is nothing next to reading the file.
+		//
+		// A tenant with no directory yet gets an os.OpenRoot error, which the tool reports as a failed
+		// read rather than an empty one: "this tenant has parked nothing" and "that id is not here"
+		// are both correct answers to a missing file, and neither is worth inventing a directory for.
+		rootFor := func(tenant string) (*os.Root, error) {
+			if !tenantDirPattern.MatchString(tenant) {
+				// Belt and braces over effectiveTenant, which already validates the header against the
+				// same shape. A tenant that reached here malformed would be a path component, and this
+				// is the line between "a tenant name" and "a path".
+				return nil, fmt.Errorf("%q is not a tenant name", tenant)
+			}
+			return os.OpenRoot(filepath.Join(artifactRoot, tenant))
+		}
+		toolexec.RegisterArtifactReadTool(executor, rootFor, artifactRoot)
+		log.Printf("aeon-toolgw: artifact.read live over %s/<tenant> (read-only, contained by a per-tenant os.Root)", artifactRoot)
 	} else {
 		log.Println("aeon-toolgw: artifact.read not registered (set AEON_ARTIFACT_ROOT)")
 	}

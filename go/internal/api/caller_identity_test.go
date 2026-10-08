@@ -56,7 +56,7 @@ func TestTheDeploymentRefusesCallersItCannotIdentify(t *testing.T) {
 	// A real executor with one inert tool registered, for the same reason newTestServer does it: this
 	// test is about identity, and a permitted call has to be able to reach something.
 	executor := toolexec.NewExecutor()
-	executor.Register("search.web", func(args map[string]any) (map[string]any, error) {
+	executor.Register("search.web", func(_ string, args map[string]any) (map[string]any, error) {
 		return map[string]any{"status": "executed"}, nil
 	})
 	mux := http.NewServeMux()

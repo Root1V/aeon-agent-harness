@@ -22,7 +22,7 @@ const defaultWebSearchTopK = 5
 // network. Both are facts about where a run's evidence came from, and neither can be reconstructed
 // later from configuration that has since changed.
 func RegisterWebSearchTool(e *Executor, searcher websearch.Searcher) {
-	e.Register("search.web", func(args map[string]any) (map[string]any, error) {
+	e.Register("search.web", func(_ string, args map[string]any) (map[string]any, error) {
 		query, _ := args["query"].(string)
 		if query == "" {
 			return nil, fmt.Errorf("toolexec: search.web: missing required string arg %q", "query")

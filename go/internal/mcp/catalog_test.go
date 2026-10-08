@@ -16,7 +16,7 @@ import (
 // what happens when one runs — that is TestToolGatewayServerEndToEndWithRealAdapter's job.
 type fakeExecutor struct{}
 
-func (fakeExecutor) Execute(string, map[string]any) (map[string]any, error) {
+func (fakeExecutor) Execute(_, _ string, _ map[string]any) (map[string]any, error) {
 	return map[string]any{"status": "ok"}, nil
 }
 

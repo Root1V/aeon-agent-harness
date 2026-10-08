@@ -27,7 +27,7 @@ type countingTool struct {
 }
 
 func (c *countingTool) register(e *toolexec.Executor, name string) {
-	e.Register(name, func(args map[string]any) (map[string]any, error) {
+	e.Register(name, func(_ string, args map[string]any) (map[string]any, error) {
 		n := c.runs.Add(1)
 		if n <= c.failFor {
 			return nil, fmt.Errorf("simulated transient failure on attempt %d", n)
@@ -202,7 +202,7 @@ func TestToolExecutionIsDeduplicatedByIdempotencyKey(t *testing.T) {
 		entered := make(chan struct{}, 1)
 		executor := toolexec.NewExecutor()
 		var runs atomic.Int64
-		executor.Register(toolName, func(args map[string]any) (map[string]any, error) {
+		executor.Register(toolName, func(_ string, args map[string]any) (map[string]any, error) {
 			runs.Add(1)
 			entered <- struct{}{}
 			<-release

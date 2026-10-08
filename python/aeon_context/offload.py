@@ -27,9 +27,18 @@ class ObservationStore(Protocol):
 
 @dataclass
 class FilesystemObservationStore:
-    """Real, not a mock: writes to local disk. A production deployment points this at MinIO/S3
-    instead (same Protocol, see deploy/compose/docker-compose.yml's minio service) — this
-    implementation is what a dev/test environment uses without that infra running."""
+    """Real, not a mock: writes to local disk.
+
+    IT USED TO SAY a production deployment points this at "MinIO/S3 instead (same Protocol, see
+    deploy/compose/docker-compose.yml's minio service)". That service is GONE since 2026-10-08
+    (`GOV-001g`), and the sentence was pointing at a container nothing ever connected to — this
+    Protocol has no caller outside tests either, so there was no production half to be the
+    production half of.
+
+    The Protocol is still the right seam for the day artifacts have to outlive the host. What that
+    implementation must NOT do is what the directory version had to be fixed for: one flat namespace
+    for every tenant, with ids derived deterministically from a run id. Keys have to carry the
+    tenant, or an object store reproduces the defect exactly."""
 
     root: Path
 

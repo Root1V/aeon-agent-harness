@@ -4,7 +4,7 @@ WHY A WRITER SHIPS WITH THE READER. `artifact.read` reads artifacts, so implemen
 have produced a reader over an empty store — both ends built and the wire never run, which is the
 defect this project has found in its own work three times this week (OBS-003b's cost columns, MEM-003's
 reflection, DR-001's pipeline). Nothing in the deployment produced an artifact before this module: the
-CTX-003 offload store is a Python module with no caller, and MinIO runs in the reference stack while
+CTX-003 offload store is a Python module with no caller, and MinIO used to run in the reference stack while
 not one line of Go or Python talks to it.
 
 SO WHAT IS AN ARTIFACT. Content a run produced and parked OUTSIDE its own context and outside
@@ -19,6 +19,7 @@ every replay, and the workflow can carry it in its result without having to wait
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -34,6 +35,11 @@ _ARTIFACT_NAMESPACE = uuid.UUID("6f1a5d0e-0b4c-4a7e-9a1f-2c8d3b5e7a90")
 # REPORTED and not silently skipped: a run whose report was never parked anywhere must not look like one
 # whose report was parked successfully (the same rule TOOL-004 applies to a missing tool gateway).
 ARTIFACT_ROOT = os.environ.get("AEON_ARTIFACT_ROOT", "")
+
+# auth's own tenant shape (go/internal/auth.tenantPattern), repeated here because the tenant becomes
+# a directory name. Kept strict rather than sanitised: a name that does not match is refused, not
+# rewritten into something that does.
+_TENANT_DIR = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
 
 def artifact_id(run_id: str, name: str) -> str:
@@ -51,6 +57,20 @@ class WriteArtifactInput:
     run_id: str
     name: str
     content: str
+    # GOV-001g: the tenant of the RUN, which decides WHICH artifact store this is parked in.
+    #
+    # It is not an attribution field. The store is <root>/<tenant>/<id>, and the gateway's
+    # `artifact.read` opens a per-tenant os.Root, so the directory IS the isolation. Before this,
+    # every tenant's artifacts shared one flat directory and an id is
+    # `uuid5(FIXED_NAMESPACE, "<run_id>/<name>")` — deterministic, with the namespace a constant in
+    # this repository and the name a literal ("report.md"). A tenant that had seen another tenant's
+    # run id could compute the id of its finished report and read it. Measured through the real
+    # gateway before the fix.
+    #
+    # Empty means the run's tenant is unknown (a run started before the memo existed), and the
+    # artifact is NOT written: a report parked where nobody will look for it is worse than one the
+    # output says was not parked. The reason travels in `note`.
+    tenant: str = ""
 
 
 @dataclass
@@ -77,8 +97,18 @@ async def write_artifact_activity(inp: WriteArtifactInput) -> WriteArtifactOutpu
     aid = artifact_id(inp.run_id, inp.name)
     if not ARTIFACT_ROOT:
         return WriteArtifactOutput(artifact_id=aid, note="AEON_ARTIFACT_ROOT is not set, so there is nowhere to park artifacts")
+    if not _TENANT_DIR.match(inp.tenant):
+        # REFUSED AND REPORTED rather than written to the root (GOV-001g). Writing it one level up
+        # would put it exactly where the shared directory used to be — readable by every tenant —
+        # and the run's output would say it was parked successfully. A tenant name is also a path
+        # component here, so this is the line between a name and a path: `..` is not a tenant.
+        return WriteArtifactOutput(
+            artifact_id=aid,
+            note=f"the run's tenant is {inp.tenant!r}, which is not a tenant name, so there is no "
+            "per-tenant artifact store to park this in",
+        )
 
-    root = Path(ARTIFACT_ROOT)
+    root = Path(ARTIFACT_ROOT) / inp.tenant
     target = root / aid
     try:
         root.mkdir(parents=True, exist_ok=True)

@@ -46,7 +46,11 @@ type Catalog struct {
 // An interface rather than the concrete type so a test can supply a double without a real executor, and
 // so this file does not widen what a catalogue is allowed to do to the tools it lists.
 type ToolExecutor interface {
-	Execute(name string, args map[string]any) (map[string]any, error)
+	// The tenant is the first argument since GOV-001g. This package passes "" because an external
+	// MCP caller (INT-003) shares one Cedar principal and is not a run, so there is no run tenant —
+	// and the tenant-scoped tools refuse an empty one rather than fall back to a deployment-wide
+	// store, which is the behaviour that let a caller read artifacts somebody else's run produced.
+	Execute(tenant, name string, args map[string]any) (map[string]any, error)
 }
 
 // CatalogChange reports what one Apply did. Returned rather than logged from inside, because the caller

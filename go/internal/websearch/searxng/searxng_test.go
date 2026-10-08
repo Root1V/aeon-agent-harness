@@ -176,12 +176,12 @@ func TestSearchWebReturnsRealResults(t *testing.T) {
 		executor := toolexec.NewExecutor()
 
 		// Before registration the tool does not exist at all — the property that replaced the stub.
-		if _, err := executor.Execute("search.web", map[string]any{"query": "algo"}); err == nil {
+		if _, err := executor.Execute("", "search.web", map[string]any{"query": "algo"}); err == nil {
 			t.Fatal("search.web ran without a configured provider — the stub is still there")
 		}
 
 		toolexec.RegisterWebSearchTool(executor, searxng.New(srv.URL))
-		out, err := executor.Execute("search.web", map[string]any{"query": "algo"})
+		out, err := executor.Execute("", "search.web", map[string]any{"query": "algo"})
 		if err != nil {
 			t.Fatalf("Execute: %v", err)
 		}
@@ -201,7 +201,7 @@ func TestSearchWebReturnsRealResults(t *testing.T) {
 		executor := toolexec.NewExecutor()
 		toolexec.RegisterWebSearchTool(executor, searxng.New("http://unused.invalid"))
 
-		if _, err := executor.Execute("search.web", map[string]any{}); err == nil {
+		if _, err := executor.Execute("", "search.web", map[string]any{}); err == nil {
 			t.Fatal("a call with no query was accepted")
 		}
 	})

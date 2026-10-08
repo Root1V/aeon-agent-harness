@@ -203,7 +203,7 @@ func TestAStepOfARunIsJudgedAndBilledAgainstTheRunsTenant(t *testing.T) {
 		// for the reason denied_outcome_test.go gives: a journal entry describing a call that actually
 		// happened is worse than no entry.
 		executor := toolexec.NewExecutor()
-		executor.Register("shell.exec", func(map[string]any) (map[string]any, error) {
+		executor.Register("shell.exec", func(string, map[string]any) (map[string]any, error) {
 			t.Error("the executor ran a tool the policy denied — the journal record would be a lie")
 			return map[string]any{}, nil
 		})

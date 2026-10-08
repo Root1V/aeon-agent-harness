@@ -154,7 +154,29 @@ datos, llega como solicitud aparte.
 >
 > Ver la fila `DX-006`.
 
-### MinIO corre en el stack de referencia y nadie le habla
+### ~~MinIO corre en el stack de referencia y nadie le habla~~ — DECIDIDA el 2026-10-08: **se quita**
+
+> **Su criterio de entrada era «una decisión primero», y la decisión es borrarlo.** Tres motivos
+> medidos, no el de que sea más barato:
+>
+> 1. **No lo llamaba nada, y no solo el servicio.** `FilesystemObservationStore` —la
+>    implementación del `Protocol` del que MinIO iba a ser la mitad de producción— **tampoco tiene
+>    llamante fuera de tests**. Un backend S3 habría sido una segunda implementación de una
+>    interfaz que nadie usa.
+> 2. **El almacenamiento de objetos no habría arreglado lo que de verdad importaba.** El defecto
+>    del almacén de artefactos era su **nombrado**, no su medio: los ids son
+>    `uuid5(NAMESPACE_FIJO, "<run_id>/<nombre>")` en un namespace plano, así que **un bucket plano
+>    con las mismas claves tiene exactamente el mismo agujero**. «Implementarlo» no era la rama
+>    segura: habría llevado el defecto a un backend nuevo, a coste M.
+> 3. **Su criterio de fase sigue sin cumplirse**: nada comparte artefactos entre máquinas hoy.
+>
+> **Y la pregunta estaba tapando una lectura entre tenants**, que es lo que salió al tomarla en
+> serio y está arreglado en `GOV-001g`: artefactos por tenant y un `os.Root` por tenant en
+> `artifact.read`. El día que los artefactos tengan que sobrevivir al host, el `Protocol` sigue
+> siendo la costura — con prefijo de tenant en la clave, que es la parte que este cambio deja de
+> ser opcional.
+
+### MinIO corría en el stack de referencia y nadie le hablaba — descripción original
 
 - **Descripción:** el servicio `minio` está en los cuatro perfiles de `deploy/compose` y **ni una línea
   de Go o de Python lo usa**. El único sitio donde aparece es un comentario en

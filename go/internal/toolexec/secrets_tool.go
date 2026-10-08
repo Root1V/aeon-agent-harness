@@ -19,7 +19,7 @@ import (
 // happened (a different secret produces a different fingerprint) without being reversible to the
 // raw value.
 func RegisterSecretsTool(e *Executor, broker *secrets.Broker) {
-	e.Register("secrets.whoami", func(args map[string]any) (map[string]any, error) {
+	e.Register("secrets.whoami", func(_ string, args map[string]any) (map[string]any, error) {
 		ref, ok := args["secret_ref"].(string)
 		if !ok || ref == "" {
 			return nil, fmt.Errorf("toolexec: secrets.whoami: missing required string arg %q", "secret_ref")

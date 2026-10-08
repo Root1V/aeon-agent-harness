@@ -50,7 +50,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	// deployment with no search provider cannot answer a search call. The double belongs here, in
 	// the test that needs it, and not in the binary.
 	executor := toolexec.NewExecutor()
-	executor.Register("search.web", func(args map[string]any) (map[string]any, error) {
+	executor.Register("search.web", func(_ string, args map[string]any) (map[string]any, error) {
 		return map[string]any{"status": "executed", "tool": "search.web", "args": args}, nil
 	})
 
