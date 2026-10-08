@@ -276,7 +276,15 @@ type Model struct {
 	Modality string
 }
 
-// ListModels returns the platform catalog.
+// ListModels returns the models THIS CLIENT'S TOKEN IS SCOPED FOR — not the platform catalogue,
+// despite the endpoint's name.
+//
+// Measured 2026-10-08: narrowing the requested scope narrows the result (0, 1 and 2 models for
+// `inference:read`, plus one and two `model:<id>` grants), and it returned the same content as
+// ListMyModels in every probe. ADR-0004 documented the opposite — "public, every active model on
+// the gateway, regardless of who's authorized" — and that sentence is why we read two text-only
+// models as "this deployment has no vision model" instead of "none is granted to us". A caller
+// cannot enumerate what the deployment hosts; only the operator can say.
 func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 	sdk, err := c.client()
 	if err != nil {

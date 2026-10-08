@@ -65,8 +65,16 @@ providers/prometheus_inference/):
   it and a real `chat/completions` call against it succeed. `PROMETHEUS_SCOPE` in `.env` must
   therefore list every `model:<id>` this adapter instance will ever request, not just the general
   capability scopes. `GET /v1/models/mine` (Bearer-authenticated, reflects the CURRENT token's
-  scope) is the live way to check what a specific token actually got, separate from
-  `GET /v1/models` (public, every active model on the gateway, regardless of who's authorized).
+  scope) is the live way to check what a specific token actually got.
+  - **`GET /v1/models` is NOT a public catalogue, and this bullet claimed it was**: "public, every
+    active model on the gateway, regardless of who's authorized". Measured 2026-10-08 by narrowing
+    the requested scope and calling it three times — it returned **0, 1 and 2 models** for
+    `inference:read`, `inference:read model:gpt-oss-20b-mxfp4`, and that plus `model:qwen3-0.6b`.
+    Both endpoints returned identical content in every probe. So **a client cannot enumerate what
+    the deployment hosts**, only what it was granted. That is a reasonable thing for an operator to
+    want; the defect was the documentation, and it had a consequence: it made us conclude from two
+    text-only models that the deployment has no vision-capable model, when what we had measured is
+    that none is granted to us. Asking the operator is the only way to know.
 - **`POST /v1/chat/completions` is genuinely OpenAI-compatible** — same request shape (`model`,
   `messages[]`, `stream`, `max_tokens`, `temperature`, `tools`/`tool_choice`) and response shape
   (`choices[].message`, `usage`).

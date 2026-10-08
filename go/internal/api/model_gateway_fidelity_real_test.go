@@ -210,17 +210,32 @@ func TestAdapterFidelityAgainstRealPrometheus(t *testing.T) {
 		// platform answered 200 with content "" (measured). A caller asking about an image got a
 		// successful, empty answer; nothing anywhere said the image had been dropped.
 		//
-		// The deployment we have exposes two models and BOTH are modality=text (GET /v1/models/mine,
-		// measured the same day), so there is no vision-capable model here to answer a question about
-		// an image. That is a property of the deployment, not of this mapping, and we do not get to
-		// assert past it: a double would be the only way to "pass" a vision assertion, and a double
-		// proves nothing about fidelity.
+		// NO VISION-CAPABLE MODEL IS GRANTED TO THIS CLIENT, and the wording matters — an earlier
+		// version of this comment said the DEPLOYMENT has none, which is not something we can see.
+		// Measured 2026-10-08: GET /v1/models returns exactly the models in the token's granted
+		// scope (0, 1 and 2 models as the requested scope was narrowed), so it is not a catalogue of
+		// what exists. ADR-0004 called it "public, every active model on the gateway, regardless of
+		// who's authorized" — corrected there. Both models we are granted report modality=text, and
+		// whether a vision model exists unatttributed is a question for the platform's operator.
+		//
+		// Either way we do not get to assert past it: a double would be the only way to "pass" a
+		// vision assertion, and a double proves nothing about fidelity.
 		//
 		// What CAN be verified against the real platform is strictly stronger than a happy answer: the
 		// platform's refusal names the modality, which it can only do because it RECEIVED an image. A
 		// request with the image dropped does not get refused — it succeeds. So the refusal is the
 		// evidence, and the subtest below fails if the call quietly succeeds.
-		const onePixelPNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+		// A 64x64 PNG, GREEN top half and RED bottom half, 133 bytes.
+		//
+		// It replaced a 1x1 TRANSPARENT pixel, and that swap is the difference between a test that
+		// can prove something and one that cannot. With a transparent pixel the only available
+		// assertion is the refusal, because not even a real vision model can name a colour that is
+		// not there — so on the day a vision model is granted, the old image would have made the
+		// success branch assert "it answered something", which a model hallucinating about an image
+		// it never received also satisfies. Two specific colours are the cheapest assertion that
+		// DISCRIMINATES: guessing both is unlikely, and naming them is within reach of the smallest
+		// VLM, which is all this test needs (it measures transport, not model quality).
+		const greenOverRedPNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAATElEQVR42u3PMQ0AAAgDsPk3DRp2EprUQJPJbQICAgICAgICAgICAgICAgICAgICAgIC7wgICAgICAgICAgICAgICAgICAgICAgI1BaxZPDi2L1X8gAAAABJRU5ErkJggg=="
 
 		t.Run("a text-only parts array is read, not just accepted", func(t *testing.T) {
 			// The prompt asks for a WORD THAT ONLY APPEARS IN THE PART, so the assertion separates
@@ -259,22 +274,27 @@ func TestAdapterFidelityAgainstRealPrometheus(t *testing.T) {
 		t.Run("an image part arrives at the platform", func(t *testing.T) {
 			status, body := decideReal(t, map[string]any{
 				"messages": []any{map[string]any{"role": "user", "content": []any{
-					map[string]any{"type": "text", "text": "What colour is this image?"},
-					map[string]any{"type": "image_url", "image_url": map[string]any{"url": onePixelPNG}},
+					map[string]any{"type": "text", "text": "Name the two colours in this image, in English, " +
+						"one word each."},
+					map[string]any{"type": "image_url", "image_url": map[string]any{"url": greenOverRedPNG}},
 				}}},
-				"max_tokens": 64,
+				"max_tokens": 400,
 			})
 			if status == http.StatusOK {
 				content, _ := firstMessage(t, body)["content"].(string)
-				// Two ways to get here. Either the deployment gained a vision-capable model, in which
-				// case this is a pass and the skip below should be revisited — or the image was
-				// dropped again and a text model answered about nothing, which is the defect.
-				if strings.TrimSpace(content) == "" {
-					t.Fatalf("the platform answered a vision request with empty content — the image " +
-						"was dropped on the way out")
+				// A vision-capable model is now serving this profile, so the assertion stops being the
+				// refusal and becomes the answer — and it has to be an assertion the image actually
+				// decides. "It answered something" is also what a model hallucinating about an image it
+				// never received produces, which is precisely the failure this whole subtest exists to
+				// detect.
+				lowered := strings.ToLower(content)
+				if !strings.Contains(lowered, "green") || !strings.Contains(lowered, "red") {
+					t.Fatalf("a vision-capable model answered %q without naming both colours in the "+
+						"image (green over red) — either the image was dropped and the model is "+
+						"guessing, or it arrived degraded", content)
 				}
-				t.Logf("a vision-capable model answered: %q — the deployment is no longer text-only, "+
-					"and this subtest can assert the answer rather than the refusal", content)
+				t.Logf("a vision-capable model named both colours: %q — transport confirmed by the "+
+					"answer rather than by the refusal", content)
 				return
 			}
 			// The expected outcome on a text-only deployment, and the one that proves transport.
