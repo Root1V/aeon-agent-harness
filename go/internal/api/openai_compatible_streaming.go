@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,7 +28,8 @@ import (
 // terminal SSE error event. A client that ignores that event sees a truncated stream, which is the
 // same thing every OpenAI-compatible server does for the same reason.
 func (h *OpenAICompatibleHandlers) streamChatCompletions(
-	w http.ResponseWriter, r *http.Request, candidates []modelgateway.Candidate, body map[string]any, dataSensitivity string,
+	w http.ResponseWriter, r *http.Request, candidates []modelgateway.Candidate, body map[string]any,
+	dataSensitivity, runID, agentRef string, governance map[string]any,
 ) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -34,10 +37,22 @@ func (h *OpenAICompatibleHandlers) streamChatCompletions(
 		return
 	}
 
+	// VRT-AEON-003 A-3: an SSE body has nowhere to carry the `aeon` object the non-streamed path
+	// returns, so the same facts go in headers — and they must be set BEFORE the first chunk, since
+	// that is when WriteHeader happens and headers stop being writable. The ceiling itself was
+	// already checked by the caller, before this function and before any provider call.
+	for key, value := range governanceHeaders(governance) {
+		w.Header().Set(key, value)
+	}
+
 	ctx := r.Context()
 	id := "chatcmpl-" + uuid.NewString()
 	created := time.Now().Unix()
 	headersSent := false
+	// The usage a streamed call reports arrives in a CHUNK, not in a return value — StreamResult
+	// carries no Output — so the last one seen is kept for the ledger write below.
+	var streamedUsage *providers.Usage
+	var streamedModel string
 
 	yield := func(chunk providers.Chunk) error {
 		// Checked before writing, not after: once the client is gone there is no point producing
@@ -58,6 +73,12 @@ func (h *OpenAICompatibleHandlers) streamChatCompletions(
 		// OpenAI-compatible client expects, so it is not put on the wire. The events are Aeon's internal
 		// vocabulary and this endpoint's whole purpose is being unsurprising to clients that know only
 		// OpenAI's shape — emitting empty `data:` frames at them would be extending someone else's format.
+		if chunk.Usage != nil {
+			streamedUsage = chunk.Usage
+		}
+		if chunk.Model != "" {
+			streamedModel = chunk.Model
+		}
 		if !chunk.CarriesWireContent() {
 			return nil
 		}
@@ -87,6 +108,8 @@ func (h *OpenAICompatibleHandlers) streamChatCompletions(
 	if result != nil && !result.Streamed {
 		w.Header().Set("X-Aeon-Streamed", "false")
 	}
+
+	h.recordStreamedCost(r, result, streamedUsage, streamedModel, runID, agentRef)
 
 	if _, err := fmt.Fprint(w, "data: [DONE]\n\n"); err == nil {
 		flusher.Flush()
@@ -152,4 +175,75 @@ func writeSSEData(w http.ResponseWriter, payload map[string]any) error {
 	}
 	_, err = fmt.Fprintf(w, "data: %s\n\n", encoded)
 	return err
+}
+
+// recordStreamedCost writes this streamed call's cost to the ledger, through the SAME recordCost
+// /decide and the non-streamed path use.
+//
+// WHAT IT CANNOT CARRY, stated rather than left to be discovered: a streamed response has no
+// provider_request_id, no served_by_instance and no idempotent_replay_of, because those arrive in
+// response HEADERS of a single-shot call and a stream has none. So the entry is the usage and the
+// price, and the fields that cannot be known are absent rather than invented.
+//
+// A stream that reported NO usage is still recorded, with the counters nil. That is OBS-008's rule
+// applied here: a call that leaves no row cannot be audited, and an audit cannot tell it from a call
+// that never happened. It also makes the ceiling work for streams — model_calls counts even when
+// tokens do not.
+func (h *OpenAICompatibleHandlers) recordStreamedCost(
+	r *http.Request, result *modelgateway.StreamResult, usage *providers.Usage, servedModel, runID, agentRef string,
+) {
+	if h.Governance == nil || result == nil {
+		return
+	}
+	output := map[string]any{}
+	if usage != nil {
+		block := map[string]any{}
+		// Each counter copied only when the provider reported it (MDL-014): a nil written as 0 here
+		// would become a measured zero in the ledger, which is the one thing this column must not say.
+		if usage.PromptTokens != nil {
+			block["prompt_tokens"] = *usage.PromptTokens
+		}
+		if usage.CompletionTokens != nil {
+			block["completion_tokens"] = *usage.CompletionTokens
+		}
+		if usage.ReasoningTokens != nil {
+			block["reasoning_tokens"] = *usage.ReasoningTokens
+		}
+		output["usage"] = block
+	}
+	if servedModel != "" {
+		output["model"] = servedModel
+	}
+	// recordCost reads the decision through this shape, so a StreamResult is adapted to it rather
+	// than the ledger-write logic being duplicated for streams.
+	decision := &modelgateway.DecisionResult{
+		ProviderUsed: result.ProviderUsed,
+		Model:        result.Model,
+		Output:       output,
+		Attempts:     result.Attempts,
+	}
+	// The response map is discarded: the bytes are already on the wire, so there is nowhere left to
+	// report cost for a stream. The LEDGER is the point here, and the headers above already told the
+	// caller whether this call was governed at all.
+	h.Governance.recordCost(r, decision, runID, agentRef, map[string]any{})
+}
+
+// governanceHeaders projects the governance report onto the SSE surface's only available carrier.
+func governanceHeaders(governance map[string]any) map[string]string {
+	headers := map[string]string{}
+	if governance == nil {
+		return headers
+	}
+	if governed, ok := governance["governed"].(bool); ok {
+		headers["X-Aeon-Governed"] = strconv.FormatBool(governed)
+	}
+	if reasons, ok := governance["ungoverned_reasons"].([]string); ok && len(reasons) > 0 {
+		// Joined with "; " and not newline-separated: a header value with a newline in it is a
+		// response-splitting bug, and net/http would reject it outright.
+		headers["X-Aeon-Ungoverned-Reason"] = strings.Join(reasons, "; ")
+	}
+	if runID, ok := governance["run_id"].(string); ok && runID != "" {
+		headers[RunIDHeader] = runID
+	}
+	return headers
 }

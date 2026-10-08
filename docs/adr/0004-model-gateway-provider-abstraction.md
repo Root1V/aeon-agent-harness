@@ -69,12 +69,25 @@ providers/prometheus_inference/):
   `GET /v1/models` (public, every active model on the gateway, regardless of who's authorized).
 - **`POST /v1/chat/completions` is genuinely OpenAI-compatible** — same request shape (`model`,
   `messages[]`, `stream`, `max_tokens`, `temperature`, `tools`/`tool_choice`) and response shape
-  (`choices[].message`, `usage`). No translation layer needed in `Adapter.Decide` beyond defaulting
-  `model` when the caller didn't set one.
+  (`choices[].message`, `usage`).
+  - **The sentence that used to end this bullet was false, and it is why a defect lived for weeks.**
+    It read: "No translation layer needed in `Adapter.Decide` beyond defaulting `model` when the
+    caller didn't set one." There *is* a translation layer — `chatRequestFrom` — and it was an
+    allowlist that had stopped at four fields, so `tools`, `tool_choice`, `response_format`,
+    `chat_template_kwargs`, a `content` array of parts, `role=tool`/`tool_call_id` and an
+    assistant's `tool_calls` were all dropped on the way out, silently, because the platform answers
+    200 to the narrowed request that leaves. This bullet *named* `tools`/`tool_choice` as part of
+    the shape while the adapter was discarding them, and the ADR is the document anyone would read
+    to decide whether a mapping was needed. Fixed in `MDL-020` (`VRT-AEON-003` A-2); the adapter now
+    maps them explicitly and the acceptance test runs against the real platform, because a double
+    passes against both versions of that code.
 - **Base URLs are operator-specific**, not fixed dev/staging domains — this is self-hosted
   infrastructure. The dev instance used to confirm this (`http://127.0.0.1:8020` gateway,
   `http://127.0.0.1:9000` auth-service) initially had zero models registered; once the user
-  registered `gpt-oss-20b-mxfp4` and `qwen3vl-32B-Q4` and granted the `aeon-ai` client's
+  registered `gpt-oss-20b-mxfp4` and `qwen3vl-32B-Q4` (**stale as of 2026-10-08**: `GET
+  /v1/models/mine` now returns exactly two models, `gpt-oss-20b-mxfp4` and `qwen3-0.6b`, and BOTH
+  report `modality=text` — the vision-capable model this line names is no longer on the deployment,
+  so nothing here can be verified against an image today) and granted the `aeon-ai` client's
   `model:gpt-oss-20b-mxfp4` scope, a full live round-trip succeeded through the real Go adapter:
   token → `GET /v1/models/mine` → `POST /v1/chat/completions`, all real, no fake server. The
   adapter's automated CI test still runs against a `httptest` fake server implementing this exact

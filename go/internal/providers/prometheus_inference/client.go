@@ -338,9 +338,11 @@ func chatRequestFrom(body map[string]any, idempotencyKey string) (axonium.ChatRe
 		if !ok {
 			return req, fmt.Errorf("prometheus_inference: message %d is not an object", i)
 		}
-		role, _ := m["role"].(string)
-		content, _ := m["content"].(string)
-		req.Messages = append(req.Messages, axonium.TextMessage(role, content))
+		msg, err := messageFrom(m)
+		if err != nil {
+			return req, fmt.Errorf("prometheus_inference: message %d: %w", i, err)
+		}
+		req.Messages = append(req.Messages, msg)
 	}
 	if len(req.Messages) == 0 {
 		return req, fmt.Errorf("prometheus_inference: no messages in the rendered context")
@@ -352,7 +354,100 @@ func chatRequestFrom(body map[string]any, idempotencyKey string) (axonium.ChatRe
 	if t, ok := body["temperature"].(float64); ok {
 		req.Temperature = &t
 	}
+	if t, ok := body["top_p"].(float64); ok {
+		req.TopP = &t
+	}
+	if v, ok := asInt(body["seed"]); ok {
+		req.Seed = &v
+	}
+
+	// VRT-AEON-003 A-2: the fields an agent with native tool calling, structured output or vision
+	// cannot work without. The narrowing above is still an allowlist — that part was right — but the
+	// list had stopped at four fields while the contract underneath carried twelve, so any agent
+	// using tools, a json_schema or an image was silently served a request with the constraint
+	// removed. Veritium reported it; the comment at the top of this function already recorded that
+	// Synaptum had lost an afternoon to exactly this with response_format.
+	if tools, ok := body["tools"].([]any); ok && len(tools) > 0 {
+		req.Tools = tools
+	}
+	if tc, ok := body["tool_choice"]; ok && tc != nil {
+		req.ToolChoice = tc
+	}
+	// response_format and chat_template_kwargs travel through Extra, which the SDK merges into the
+	// encoded object (ChatRequest.MarshalJSON) — they are gateway-level fields it does not model, and
+	// forwarding them verbatim is right precisely because we do not interpret them.
+	for _, passthrough := range []string{"response_format", "chat_template_kwargs"} {
+		if v, ok := body[passthrough]; ok && v != nil {
+			if req.Extra == nil {
+				req.Extra = map[string]any{}
+			}
+			req.Extra[passthrough] = v
+		}
+	}
 	return req, nil
+}
+
+// messageFrom maps one rendered message onto the SDK's typed message.
+//
+// CONTENT IS `any`, not a string, and that is the whole vision half of A-2: the OpenAI shape allows
+// content to be an ARRAY OF PARTS (`{"type":"text"}` / `{"type":"image_url"}`), and the previous
+// version did `content, _ := m["content"].(string)` — a type assertion that fails silently on an
+// array, so a vision call arrived at the platform with its image gone and its text gone too, as a
+// message with empty content. A model answering a question about an image it was never shown is the
+// worst available failure: it answers.
+//
+// A `role=tool` message carries tool_call_id, and an assistant message can carry tool_calls. Both
+// are required to continue a conversation after a tool ran: without the id the platform cannot pair
+// the result with the call, and without the calls the assistant's own turn is missing from the
+// history it is asked to continue.
+func messageFrom(m map[string]any) (axonium.Message, error) {
+	role, _ := m["role"].(string)
+	if role == "" {
+		return axonium.Message{}, fmt.Errorf("no role")
+	}
+	msg := axonium.Message{Role: role}
+
+	switch content := m["content"].(type) {
+	case nil:
+		// Legal: an assistant turn that only called tools has no content. Left nil rather than set
+		// to "", so "said nothing" and "said the empty string" stay distinguishable on the wire.
+	case string:
+		msg.Content = content
+	case []any:
+		msg.Content = content
+	default:
+		return axonium.Message{}, fmt.Errorf("content is %T, want a string or an array of parts", content)
+	}
+
+	if id, ok := m["tool_call_id"].(string); ok && id != "" {
+		msg.ToolCallID = id
+	}
+	if reasoning, ok := m["reasoning_content"].(string); ok && reasoning != "" {
+		msg.ReasoningContent = reasoning
+	}
+	if rawCalls, ok := m["tool_calls"].([]any); ok {
+		for _, rc := range rawCalls {
+			c, ok := rc.(map[string]any)
+			if !ok {
+				return axonium.Message{}, fmt.Errorf("tool_calls holds a %T, want objects", rc)
+			}
+			call := axonium.ToolCall{}
+			call.ID, _ = c["id"].(string)
+			call.Type, _ = c["type"].(string)
+			if call.Type == "" {
+				// The only value the gateway forwards today, and the field exists so it can grow —
+				// defaulted rather than demanded, because a caller replaying an assistant turn it
+				// received from us should not have to know this.
+				call.Type = "function"
+			}
+			if fn, ok := c["function"].(map[string]any); ok {
+				call.Function.Name, _ = fn["name"].(string)
+				call.Function.Arguments, _ = fn["arguments"].(string)
+			}
+			msg.ToolCalls = append(msg.ToolCalls, call)
+		}
+	}
+	return msg, nil
 }
 
 // asInt accepts a real int (in-process callers) or a float64 (anything that went through JSON).

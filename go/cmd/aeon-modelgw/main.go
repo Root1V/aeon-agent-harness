@@ -101,11 +101,20 @@ func main() {
 	// that has quietly stopped capping spend is the worst of the three.
 	if agents != nil && ledger != nil {
 		log.Println("aeon-modelgw: cost ceiling live (spec.runtime.budgets from the agent registry; a call naming a run and an agent is capped)")
+		log.Printf("aeon-modelgw: /v1/chat/completions is governed too (VRT-AEON-003): send %s and %s to be "+
+			"capped and attributed, and %s to be charged once across retries; a call that sends none still "+
+			"works and says so in its response",
+			api.RunIDHeader, api.AgentManifestRefHeader, api.IdempotencyKeyHeader)
 	} else {
 		log.Println("aeon-modelgw: cost ceiling NOT enforced (needs AEON_PG_DSN for both the agent registry and the cost ledger)")
 	}
-	(&api.ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger, Agents: agents}).Register(mux)
-	(&api.OpenAICompatibleHandlers{Gateway: gw, Bundle: bundle}).Register(mux)
+	governance := &api.ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger, Agents: agents}
+	governance.Register(mux)
+	// VRT-AEON-003 A-3: the SAME handler instance, not a second one configured alike. The defect this
+	// closes is that /v1/chat/completions had Aeon's routing and none of its governance — a deployment
+	// with a governed door and an ungoverned one, where the ungoverned one is the one documented as
+	// needing no code change. Sharing the instance is what makes it impossible for the two to drift.
+	(&api.OpenAICompatibleHandlers{Gateway: gw, Bundle: bundle, Governance: governance}).Register(mux)
 	if ledger != nil {
 		(&api.FinOpsHandlers{Ledger: ledger}).Register(mux)
 	}
