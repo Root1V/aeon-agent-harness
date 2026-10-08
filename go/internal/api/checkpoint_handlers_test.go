@@ -22,8 +22,8 @@ func newCheckpointTestServer(t *testing.T) *httptest.Server {
 	t.Cleanup(s.Close)
 
 	mux := http.NewServeMux()
-	(&CheckpointHandlers{Checkpointer: s.Checkpointer()}).Register(mux)
-	srv := httptest.NewServer(mux)
+	(&CheckpointHandlers{Store: s}).Register(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 	return srv
 }

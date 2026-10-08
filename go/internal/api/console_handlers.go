@@ -36,7 +36,7 @@ func (h *ConsoleHandlers) showRun(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("run_id")
 	ctx := r.Context()
 
-	status, err := h.Controller.Status(ctx, workflowID(runID))
+	status, err := h.Controller.Status(ctx, workflowID(runID), callerTenantOrEmpty(ctx))
 	if err != nil {
 		writeError(w, http.StatusNotFound, fmt.Errorf("run %q: %w", runID, err))
 		return

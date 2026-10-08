@@ -42,7 +42,8 @@ type ToolRecord struct {
 
 // ToolRegistry is the Postgres-backed CRUD store for ToolDescriptors.
 type ToolRegistry struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	tenant string
 }
 
 // Create registers a new tool version. Enforces the roadmap A-adjacent rule that any tool with a
@@ -61,9 +62,9 @@ func (r *ToolRegistry) Create(ctx context.Context, descriptor map[string]any) (*
 	}
 
 	_, err = r.pool.Exec(ctx,
-		`INSERT INTO tools (tool_id, version, name, side_effect, risk, descriptor)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		toolID, version, name, sideEffect, risk, descriptorJSON,
+		`INSERT INTO tools (tenant_id, tool_id, version, name, side_effect, risk, descriptor)
+		 VALUES ($7, $1, $2, $3, $4, $5, $6)`,
+		toolID, version, name, sideEffect, risk, descriptorJSON, r.tenant,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -78,8 +79,8 @@ func (r *ToolRegistry) Create(ctx context.Context, descriptor map[string]any) (*
 func (r *ToolRegistry) Get(ctx context.Context, toolID, version string) (*ToolRecord, error) {
 	row := r.pool.QueryRow(ctx,
 		`SELECT tool_id, version, name, side_effect, risk, descriptor, created_at, updated_at
-		 FROM tools WHERE tool_id = $1 AND version = $2`,
-		toolID, version,
+		 FROM tools WHERE tenant_id = $3 AND tool_id = $1 AND version = $2`,
+		toolID, version, r.tenant,
 	)
 	return scanToolRow(row)
 }
@@ -88,7 +89,7 @@ func (r *ToolRegistry) Get(ctx context.Context, toolID, version string) (*ToolRe
 func (r *ToolRegistry) List(ctx context.Context) ([]*ToolRecord, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT tool_id, version, name, side_effect, risk, descriptor, created_at, updated_at
-		 FROM tools ORDER BY created_at DESC`,
+		 FROM tools WHERE tenant_id = $1 ORDER BY created_at DESC`, r.tenant,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: list tools: %w", err)

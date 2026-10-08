@@ -63,10 +63,10 @@ func newEnforcementSeamServer(t *testing.T, checkpointer bool) *httptest.Server 
 			t.Fatalf("connect: %v", err)
 		}
 		t.Cleanup(s.Close)
-		handlers.Checkpointer = s.Checkpointer()
+		handlers.Checkpointer = s
 		// The journal is mounted alongside so the test reads records back the way the framework does — over
 		// HTTP, which is the only way the Python loop can reach them.
-		(&CheckpointHandlers{Checkpointer: s.Checkpointer()}).Register(mux)
+		(&CheckpointHandlers{Store: s}).Register(mux)
 	}
 	handlers.Register(mux)
 	// The SHIPPED bundle on the local shape too, not this package's own test caller. The remote shape of

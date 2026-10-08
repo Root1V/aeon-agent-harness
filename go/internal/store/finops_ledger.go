@@ -75,7 +75,8 @@ type ModelTotal struct {
 
 // FinOpsLedger is the Postgres-backed cost ledger (OBS-003).
 type FinOpsLedger struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	tenant string
 }
 
 // Record writes one real cost event. A nil RunID/AgentManifestRef in entry is stored as SQL NULL,
@@ -102,10 +103,11 @@ func (l *FinOpsLedger) Record(ctx context.Context, entry CostEntry) error {
 		replayOf = &entry.IdempotentReplayOf
 	}
 	_, err := l.pool.Exec(ctx,
-		`INSERT INTO model_gateway_costs (provider, model, cost_model, prompt_tokens, completion_tokens, cost_usd, run_id, agent_manifest_ref, cache_read_tokens, cache_write_tokens, reasoning_tokens, provider_request_id, idempotent_replay_of, served_model, served_by_instance)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		`INSERT INTO model_gateway_costs (provider, model, cost_model, prompt_tokens, completion_tokens, cost_usd, run_id, agent_manifest_ref, cache_read_tokens, cache_write_tokens, reasoning_tokens, provider_request_id, idempotent_replay_of, served_model, served_by_instance, tenant_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 		entry.Provider, entry.Model, entry.CostModel, entry.PromptTokens, entry.CompletionTokens, entry.CostUSD, runID, agentRef,
 		entry.CacheReadTokens, entry.CacheWriteTokens, entry.ReasoningTokens, requestID, replayOf, nullable(entry.ServedModel), nullable(entry.ServedByInstance),
+		l.tenant,
 	)
 	if err != nil {
 		return fmt.Errorf("store: recording model gateway cost: %w", err)
@@ -123,8 +125,9 @@ func (l *FinOpsLedger) TotalsByModel(ctx context.Context) ([]ModelTotal, error) 
 		        coalesce(sum(cache_read_tokens), 0), coalesce(sum(cache_write_tokens), 0),
 		        coalesce(sum(reasoning_tokens), 0)
 		 FROM model_gateway_costs
+		 WHERE tenant_id = $1
 		 GROUP BY provider, model, cost_model
-		 ORDER BY sum(cost_usd) DESC NULLS LAST`,
+		 ORDER BY sum(cost_usd) DESC NULLS LAST`, l.tenant,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: aggregating model gateway costs: %w", err)
@@ -180,10 +183,11 @@ func (l *FinOpsLedger) totalsByAttribution(ctx context.Context, column string) (
 		        count(DISTINCT (provider, model)),
 		        coalesce(sum(prompt_tokens), 0), coalesce(sum(completion_tokens), 0)
 		 FROM model_gateway_costs
+		 WHERE tenant_id = $1
 		 GROUP BY `+column+`
 		 -- NULLS LAST on the GROUP key as well as the sum: the unattributed group is reported, and it
 		 -- belongs at the bottom rather than sorted in among named runs as if it were one of them.
-		 ORDER BY sum(cost_usd) DESC NULLS LAST, `+column+` NULLS LAST`,
+		 ORDER BY sum(cost_usd) DESC NULLS LAST, `+column+` NULLS LAST`, l.tenant,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: aggregating model gateway costs by %s: %w", column, err)
@@ -241,9 +245,9 @@ func (l *FinOpsLedger) RowsWithProviderRequestID(ctx context.Context, provider s
 	rows, err := l.pool.Query(ctx,
 		`SELECT provider, model, prompt_tokens, completion_tokens, cost_usd, provider_request_id, coalesce(idempotent_replay_of, ''), coalesce(served_model, ''), coalesce(served_by_instance, '')
 		   FROM model_gateway_costs
-		  WHERE provider = $1 AND provider_request_id IS NOT NULL
+		  WHERE tenant_id = $3 AND provider = $1 AND provider_request_id IS NOT NULL
 		  ORDER BY id DESC
-		  LIMIT $2`, provider, limit)
+		  LIMIT $2`, provider, limit, l.tenant)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading reconcilable cost rows: %w", err)
 	}
@@ -275,9 +279,9 @@ func (l *FinOpsLedger) RowsForModel(ctx context.Context, provider, model string,
 		        coalesce(provider_request_id, ''), coalesce(idempotent_replay_of, ''),
 		        coalesce(served_model, ''), coalesce(served_by_instance, '')
 		   FROM model_gateway_costs
-		  WHERE provider = $1 AND model = $2
+		  WHERE tenant_id = $4 AND provider = $1 AND model = $2
 		  ORDER BY id DESC
-		  LIMIT $3`, provider, model, limit)
+		  LIMIT $3`, provider, model, limit, l.tenant)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading cost rows for %s/%s: %w", provider, model, err)
 	}
@@ -338,7 +342,7 @@ func (l *FinOpsLedger) SpendForRun(ctx context.Context, runID string) (RunSpend,
 		        count(*) FILTER (WHERE cost_usd IS NULL), count(*),
 		        coalesce(sum(coalesce(prompt_tokens, 0) + coalesce(completion_tokens, 0)), 0),
 		        count(*) FILTER (WHERE prompt_tokens IS NULL AND completion_tokens IS NULL)
-		 FROM model_gateway_costs WHERE run_id = $1`, runID,
+		 FROM model_gateway_costs WHERE tenant_id = $2 AND run_id = $1`, runID, l.tenant,
 	).Scan(&sum, &s.PricedCalls, &s.UnpricedCalls, &s.ModelCalls, &s.Tokens, &s.UnreportedUsageCalls)
 	if err != nil {
 		return RunSpend{}, fmt.Errorf("store: summing spend for run %s: %w", runID, err)

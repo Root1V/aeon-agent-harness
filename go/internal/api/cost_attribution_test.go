@@ -35,7 +35,8 @@ import (
 func TestCostIsAttributedToRunAndAgent(t *testing.T) {
 	ctx := context.Background()
 	s := newAPITestStore(t)
-	ledger := s.FinOpsLedger()
+	ledgerStore := s
+	ledger := s.FinOpsLedgerFor("default")
 
 	// Own model name per test run: these aggregations are global, and a fixed name would make the
 	// assertions depend on how many times the suite had been run against this database before.
@@ -51,9 +52,9 @@ func TestCostIsAttributedToRunAndAgent(t *testing.T) {
 	gw.RegisterProvider("fake-token", &finOpsFakeProvider{costModel: "token_based"})
 
 	mux := http.NewServeMux()
-	(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger}).Register(mux)
-	(&FinOpsHandlers{Ledger: ledger}).Register(mux)
-	srv := httptest.NewServer(mux)
+	(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledgerStore}).Register(mux)
+	(&FinOpsHandlers{Ledger: ledgerStore}).Register(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 
 	// 1000 prompt + 500 completion at $10/$30 per million = $0.025 per call.

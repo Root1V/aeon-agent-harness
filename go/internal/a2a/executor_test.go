@@ -56,7 +56,7 @@ func testAgentRecord(t *testing.T, name string) *store.AgentRecord {
 		"metadata": map[string]any{"name": name, "version": "1.0.0"},
 		"spec":     map[string]any{"tools": map[string]any{"allow": []any{"artifact.write"}}},
 	}
-	rec, err := s.AgentRegistry().Create(ctx, manifest, "a2a-test")
+	rec, err := s.AgentRegistryFor("default").Create(ctx, manifest, "a2a-test")
 	if err != nil {
 		t.Fatalf("register agent: %v", err)
 	}

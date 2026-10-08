@@ -52,8 +52,8 @@ func TestAnthropicCacheTokensReachTheLedger(t *testing.T) {
 			{Provider: anthropic.Name, Model: model, CostModel: "token_based", InputPerMillionUSD: 10, OutputPerMillionUSD: 30},
 		})
 		mux := http.NewServeMux()
-		(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: s.FinOpsLedger()}).Register(mux)
-		srv := httptest.NewServer(mux)
+		(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: s}).Register(mux)
+		srv := httptest.NewServer(authWrap(t, mux))
 		t.Cleanup(srv.Close)
 		return srv
 	}
@@ -152,7 +152,7 @@ func TestAnthropicCacheTokensReachTheLedger(t *testing.T) {
 		decide(t, srv, model)
 
 		s := newAPITestStore(t)
-		totals, err := s.FinOpsLedger().TotalsByModel(context.Background())
+		totals, err := s.FinOpsLedgerFor("default").TotalsByModel(context.Background())
 		if err != nil {
 			t.Fatalf("totals: %v", err)
 		}

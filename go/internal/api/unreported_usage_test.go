@@ -60,10 +60,11 @@ func TestUnreportedUsageIsNotRecordedAsZero(t *testing.T) {
 			Provider: "oc", Model: model, CostModel: "token_based",
 			InputPerMillionUSD: 10, OutputPerMillionUSD: 30,
 		}})
-		ledger := newAPITestStore(t).FinOpsLedger()
+		ledgerStore := newAPITestStore(t)
+		ledger := ledgerStore.FinOpsLedgerFor("default")
 		mux := http.NewServeMux()
-		(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger}).Register(mux)
-		srv := httptest.NewServer(mux)
+		(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledgerStore}).Register(mux)
+		srv := httptest.NewServer(authWrap(t, mux))
 		t.Cleanup(srv.Close)
 
 		status, body := postDecide(t, srv, decideRequest{

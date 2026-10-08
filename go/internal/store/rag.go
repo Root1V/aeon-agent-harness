@@ -12,12 +12,19 @@ import (
 
 // RagStore is TOOL-006's retrieval store: real passages from real documents, in pgvector.
 type RagStore struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	tenant string
 }
 
 // RagStore returns the TOOL-006 handle.
-func (s *Store) RagStore() *RagStore {
-	return &RagStore{pool: s.pool}
+// RagStoreFor returns the handle SCOPED TO ONE TENANT (VRT-AEON-005 T-4).
+//
+// The tenant is a CONSTRUCTOR argument, not a method parameter, and that is the seam: slice 2 found
+// the Memory Store's isolation implemented route by route — four routes read the tenant from the
+// request and five checked none at all — because every method was a separate chance to forget. A
+// handle that cannot exist without a tenant makes the compiler answer that once, here.
+func (s *Store) RagStoreFor(tenant string) *RagStore {
+	return &RagStore{pool: s.pool, tenant: tenant}
 }
 
 // Chunk is one indexable piece of a document, carrying the locator that makes it citable.
@@ -70,14 +77,14 @@ func (r *RagStore) Index(ctx context.Context, corpus, embeddingModel string, chu
 
 	for i, chunk := range chunks {
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO rag_chunks (corpus, source_path, chunk_index, byte_start, byte_end, content, embedding_model, embedding)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::vector)
-			 ON CONFLICT (corpus, source_path, chunk_index) DO UPDATE
+			`INSERT INTO rag_chunks (tenant_id, corpus, source_path, chunk_index, byte_start, byte_end, content, embedding_model, embedding)
+			 VALUES ($9, $1, $2, $3, $4, $5, $6, $7, $8::vector)
+			 ON CONFLICT (tenant_id, corpus, source_path, chunk_index) DO UPDATE
 			   SET byte_start = EXCLUDED.byte_start, byte_end = EXCLUDED.byte_end,
 			       content = EXCLUDED.content, embedding_model = EXCLUDED.embedding_model,
 			       embedding = EXCLUDED.embedding, indexed_at = now()`,
 			corpus, chunk.SourcePath, chunk.ChunkIndex, chunk.ByteStart, chunk.ByteEnd, chunk.Content,
-			embeddingModel, vectorLiteral(embeddings[i]),
+			embeddingModel, vectorLiteral(embeddings[i]), r.tenant,
 		); err != nil {
 			return fmt.Errorf("store: indexing chunk %d of %s: %w", chunk.ChunkIndex, chunk.SourcePath, err)
 		}
@@ -97,7 +104,7 @@ func (r *RagStore) Search(ctx context.Context, corpus, embeddingModel string, qu
 
 	var indexedModel string
 	err := r.pool.QueryRow(ctx,
-		`SELECT embedding_model FROM rag_chunks WHERE corpus = $1 LIMIT 1`, corpus,
+		`SELECT embedding_model FROM rag_chunks WHERE tenant_id = $2 AND corpus = $1 LIMIT 1`, corpus, r.tenant,
 	).Scan(&indexedModel)
 	if err != nil {
 		if strings.Contains(err.Error(), "no rows") {
@@ -111,10 +118,10 @@ func (r *RagStore) Search(ctx context.Context, corpus, embeddingModel string, qu
 
 	rows, err := r.pool.Query(ctx,
 		`SELECT source_path, chunk_index, byte_start, byte_end, content, 1 - (embedding <=> $2::vector)
-		   FROM rag_chunks WHERE corpus = $1
+		   FROM rag_chunks WHERE tenant_id = $4 AND corpus = $1
 		  ORDER BY embedding <=> $2::vector
 		  LIMIT $3`,
-		corpus, vectorLiteral(query), topK,
+		corpus, vectorLiteral(query), topK, r.tenant,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: searching corpus %q: %w", corpus, err)

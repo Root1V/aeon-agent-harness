@@ -77,18 +77,36 @@ func (s *Store) Close() {
 }
 
 // AgentRegistry returns a registry handle for agents (FND-001).
-func (s *Store) AgentRegistry() *AgentRegistry {
-	return &AgentRegistry{pool: s.pool}
+// AgentRegistryFor returns the handle SCOPED TO ONE TENANT (VRT-AEON-005 T-4).
+//
+// The tenant is a CONSTRUCTOR argument, not a method parameter, and that is the seam: slice 2 found
+// the Memory Store's isolation implemented route by route — four routes read the tenant from the
+// request and five checked none at all — because every method was a separate chance to forget. A
+// handle that cannot exist without a tenant makes the compiler answer that once, here.
+func (s *Store) AgentRegistryFor(tenant string) *AgentRegistry {
+	return &AgentRegistry{pool: s.pool, tenant: tenant}
 }
 
 // ToolRegistry returns a registry handle for tools (TOOL-001).
-func (s *Store) ToolRegistry() *ToolRegistry {
-	return &ToolRegistry{pool: s.pool}
+// ToolRegistryFor returns the handle SCOPED TO ONE TENANT (VRT-AEON-005 T-4).
+//
+// The tenant is a CONSTRUCTOR argument, not a method parameter, and that is the seam: slice 2 found
+// the Memory Store's isolation implemented route by route — four routes read the tenant from the
+// request and five checked none at all — because every method was a separate chance to forget. A
+// handle that cannot exist without a tenant makes the compiler answer that once, here.
+func (s *Store) ToolRegistryFor(tenant string) *ToolRegistry {
+	return &ToolRegistry{pool: s.pool, tenant: tenant}
 }
 
 // FinOpsLedger returns a handle for the real model-gateway cost ledger (OBS-003).
-func (s *Store) FinOpsLedger() *FinOpsLedger {
-	return &FinOpsLedger{pool: s.pool}
+// FinOpsLedgerFor returns the handle SCOPED TO ONE TENANT (VRT-AEON-005 T-2).
+//
+// The tenant is a CONSTRUCTOR argument, not a method parameter, and that is the seam: slice 2 found
+// the Memory Store's isolation implemented route by route — four routes read the tenant from the
+// request and five checked none at all — because every method was a separate chance to forget. A
+// handle that cannot exist without a tenant makes the compiler answer that once, here.
+func (s *Store) FinOpsLedgerFor(tenant string) *FinOpsLedger {
+	return &FinOpsLedger{pool: s.pool, tenant: tenant}
 }
 
 // QualityScores returns a handle for MDL-002's quality score store. threshold is the score below
@@ -99,6 +117,12 @@ func (s *Store) QualityScores(threshold float64) *QualityScoreStore {
 
 // Checkpointer returns a handle for INT-009's durability seam — the run journal the Synaptum
 // framework appends to. See go/internal/checkpoint.
-func (s *Store) Checkpointer() *Checkpointer {
-	return &Checkpointer{pool: s.pool}
+// CheckpointerFor returns the handle SCOPED TO ONE TENANT (VRT-AEON-005 T-3).
+//
+// The tenant is a CONSTRUCTOR argument, not a method parameter, and that is the seam: slice 2 found
+// the Memory Store's isolation implemented route by route — four routes read the tenant from the
+// request and five checked none at all — because every method was a separate chance to forget. A
+// handle that cannot exist without a tenant makes the compiler answer that once, here.
+func (s *Store) CheckpointerFor(tenant string) *Checkpointer {
+	return &Checkpointer{pool: s.pool, tenant: tenant}
 }

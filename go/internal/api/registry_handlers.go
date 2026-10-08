@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/store"
 )
 
@@ -30,7 +31,26 @@ func (h *RegistryHandlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /tools/{tool_id}/{version}", h.getTool)
 }
 
+// registryFor resolves the tenant from the CREDENTIAL and returns that tenant's registries
+// (VRT-AEON-005 T-4). Before migration 0002 the agent key was (name, version) and the tool key
+// (tool_id, version), so two tenants could not use the same manifest name and either could list the
+// other's. Both are now scoped, and the handle cannot be built without a tenant.
+func (h *RegistryHandlers) tenantFor(w http.ResponseWriter, r *http.Request) (string, bool) {
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: the registries are scoped to the caller's tenant (SEC-005/VRT-AEON-005)",
+		})
+		return "", false
+	}
+	return caller.Tenant, true
+}
+
 func (h *RegistryHandlers) createAgent(w http.ResponseWriter, r *http.Request) {
+	tenant, ok := h.tenantFor(w, r)
+	if !ok {
+		return
+	}
 	var body struct {
 		Manifest map[string]any `json:"manifest"`
 		Owner    string         `json:"owner"`
@@ -39,7 +59,7 @@ func (h *RegistryHandlers) createAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	rec, err := h.Store.AgentRegistry().Create(r.Context(), body.Manifest, body.Owner)
+	rec, err := h.Store.AgentRegistryFor(tenant).Create(r.Context(), body.Manifest, body.Owner)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -48,7 +68,11 @@ func (h *RegistryHandlers) createAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RegistryHandlers) listAgents(w http.ResponseWriter, r *http.Request) {
-	recs, err := h.Store.AgentRegistry().List(r.Context())
+	tenant, ok := h.tenantFor(w, r)
+	if !ok {
+		return
+	}
+	recs, err := h.Store.AgentRegistryFor(tenant).List(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -57,7 +81,11 @@ func (h *RegistryHandlers) listAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RegistryHandlers) getAgent(w http.ResponseWriter, r *http.Request) {
-	rec, err := h.Store.AgentRegistry().Get(r.Context(), r.PathValue("name"), r.PathValue("version"))
+	tenant, ok := h.tenantFor(w, r)
+	if !ok {
+		return
+	}
+	rec, err := h.Store.AgentRegistryFor(tenant).Get(r.Context(), r.PathValue("name"), r.PathValue("version"))
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -66,6 +94,10 @@ func (h *RegistryHandlers) getAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RegistryHandlers) transitionAgent(w http.ResponseWriter, r *http.Request) {
+	tenant, ok := h.tenantFor(w, r)
+	if !ok {
+		return
+	}
 	var body struct {
 		Target string `json:"target"`
 		// ReleaseGate is EVAL-003's verdict — computed elsewhere (aeon_evalops.release_gate) and
@@ -81,7 +113,7 @@ func (h *RegistryHandlers) transitionAgent(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	gate := store.ReleaseGateDecision{Allowed: body.ReleaseGate.Allowed, Reason: body.ReleaseGate.Reason}
-	rec, err := h.Store.AgentRegistry().TransitionLifecycle(r.Context(), r.PathValue("name"), r.PathValue("version"), body.Target, gate)
+	rec, err := h.Store.AgentRegistryFor(tenant).TransitionLifecycle(r.Context(), r.PathValue("name"), r.PathValue("version"), body.Target, gate)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -90,12 +122,16 @@ func (h *RegistryHandlers) transitionAgent(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *RegistryHandlers) createTool(w http.ResponseWriter, r *http.Request) {
+	tenant, ok := h.tenantFor(w, r)
+	if !ok {
+		return
+	}
 	var descriptor map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&descriptor); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	rec, err := h.Store.ToolRegistry().Create(r.Context(), descriptor)
+	rec, err := h.Store.ToolRegistryFor(tenant).Create(r.Context(), descriptor)
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -104,7 +140,11 @@ func (h *RegistryHandlers) createTool(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RegistryHandlers) listTools(w http.ResponseWriter, r *http.Request) {
-	recs, err := h.Store.ToolRegistry().List(r.Context())
+	tenant, ok := h.tenantFor(w, r)
+	if !ok {
+		return
+	}
+	recs, err := h.Store.ToolRegistryFor(tenant).List(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -113,7 +153,11 @@ func (h *RegistryHandlers) listTools(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RegistryHandlers) getTool(w http.ResponseWriter, r *http.Request) {
-	rec, err := h.Store.ToolRegistry().Get(r.Context(), r.PathValue("tool_id"), r.PathValue("version"))
+	tenant, ok := h.tenantFor(w, r)
+	if !ok {
+		return
+	}
+	rec, err := h.Store.ToolRegistryFor(tenant).Get(r.Context(), r.PathValue("tool_id"), r.PathValue("version"))
 	if err != nil {
 		writeStoreError(w, err)
 		return

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/circuitbreaker"
 	"github.com/aeon-ai/aeon/go/internal/secrets"
 	"github.com/aeon-ai/aeon/go/internal/store"
@@ -20,7 +21,8 @@ import (
 // finishes (see backlog.md) — this is the real breaker/enforcement surface, wiring a live run's
 // completion to report here is separate integration work.
 type CircuitBreakerHandlers struct {
-	Registry *store.AgentRegistry
+	// VRT-AEON-005: the store; the registry handle is derived per request from the caller's tenant.
+	Registry *store.Store
 	Breaker  *circuitbreaker.Breaker
 	Secrets  *secrets.Broker // optional; nil disables credential revocation on trip
 }
@@ -43,6 +45,14 @@ type recordOutcomeRequest struct {
 }
 
 func (h *CircuitBreakerHandlers) recordOutcome(w http.ResponseWriter, r *http.Request) {
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: the agent registry is scoped to the caller's tenant (VRT-AEON-005)",
+		})
+		return
+	}
+	tenant := caller.Tenant
 	name, version := r.PathValue("name"), r.PathValue("version")
 	var body recordOutcomeRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -56,7 +66,7 @@ func (h *CircuitBreakerHandlers) recordOutcome(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	rec, err := h.applyQuarantine(r.Context(), name, version, verdict.Reason)
+	rec, err := h.applyQuarantine(r.Context(), tenant, name, version, verdict.Reason)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("circuit breaker tripped but applying quarantine failed: %w", err))
 		return
@@ -72,6 +82,14 @@ type quarantineRequest struct {
 // gives. Real, not a formality — it's the exact same store.AgentRegistry.Quarantine call an
 // automatic trip makes.
 func (h *CircuitBreakerHandlers) quarantine(w http.ResponseWriter, r *http.Request) {
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: the agent registry is scoped to the caller's tenant (VRT-AEON-005)",
+		})
+		return
+	}
+	tenant := caller.Tenant
 	name, version := r.PathValue("name"), r.PathValue("version")
 	var body quarantineRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -83,7 +101,7 @@ func (h *CircuitBreakerHandlers) quarantine(w http.ResponseWriter, r *http.Reque
 		reason = "manual kill switch"
 	}
 
-	rec, err := h.applyQuarantine(r.Context(), name, version, reason)
+	rec, err := h.applyQuarantine(r.Context(), tenant, name, version, reason)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, store.ErrNotFound) {
@@ -98,8 +116,16 @@ func (h *CircuitBreakerHandlers) quarantine(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *CircuitBreakerHandlers) unquarantine(w http.ResponseWriter, r *http.Request) {
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: the agent registry is scoped to the caller's tenant (VRT-AEON-005)",
+		})
+		return
+	}
+	tenant := caller.Tenant
 	name, version := r.PathValue("name"), r.PathValue("version")
-	rec, err := h.Registry.Unquarantine(r.Context(), name, version)
+	rec, err := h.Registry.AgentRegistryFor(tenant).Unquarantine(r.Context(), name, version)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, store.ErrNotFound) {
@@ -117,8 +143,8 @@ func (h *CircuitBreakerHandlers) unquarantine(w http.ResponseWriter, r *http.Req
 // identity — the real "hot credential revocation" A5 promises. The registry update is the
 // authoritative, durable part; the credential revocation follows it best-effort (a Secrets-less
 // deployment still gets a correct quarantine, just without the revocation side effect).
-func (h *CircuitBreakerHandlers) applyQuarantine(ctx context.Context, name, version, reason string) (*store.AgentRecord, error) {
-	rec, err := h.Registry.Quarantine(ctx, name, version, reason)
+func (h *CircuitBreakerHandlers) applyQuarantine(ctx context.Context, tenant, name, version, reason string) (*store.AgentRecord, error) {
+	rec, err := h.Registry.AgentRegistryFor(tenant).Quarantine(ctx, name, version, reason)
 	if err != nil {
 		return nil, err
 	}

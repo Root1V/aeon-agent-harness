@@ -50,7 +50,7 @@ func testStore(t *testing.T) *store.RagStore {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(s.Close)
-	return s.RagStore()
+	return s.RagStoreFor("default")
 }
 
 func realEmbedder(t *testing.T) *prometheusinference.Embedder {

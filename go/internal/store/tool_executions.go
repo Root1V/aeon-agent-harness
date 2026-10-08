@@ -13,7 +13,8 @@ import (
 // ToolExecutions is TOOL-005: the execution dedupe table the Tool Gateway consults before running
 // anything with effects. See migrations/0001_initial_schema.sql for the DDL and why the state has three values.
 type ToolExecutions struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	tenant string
 }
 
 // ErrExecutionInFlight means another caller holds this idempotency key and has not finished. It is
@@ -41,8 +42,20 @@ type ClaimResult struct {
 }
 
 // ToolExecutions returns the TOOL-005 dedupe handle.
-func (s *Store) ToolExecutions() *ToolExecutions {
-	return &ToolExecutions{pool: s.pool}
+// ToolExecutionsFor returns the dedupe handle SCOPED TO ONE TENANT (VRT-AEON-005 T-3).
+//
+// THE TENANT IS A CONSTRUCTOR ARGUMENT AND NOT A METHOD PARAMETER, and that is the seam this
+// feature is built on rather than a style choice. Slice 2 found the Memory Store's isolation
+// implemented route by route: four routes took the tenant from the request and five checked none at
+// all, because every one of them was a separate opportunity to forget. A handle that cannot exist
+// without a tenant turns "did this query remember?" into something the compiler answers once, here.
+//
+// Before migration 0002 the idempotency key WAS the whole primary key, so the same key in two
+// tenants was one row — and the second tenant's call came back "already executed" carrying the
+// first tenant's recorded result. That is the worst shape available: not a disclosure, a skipped
+// side effect plus somebody else's answer.
+func (s *Store) ToolExecutionsFor(tenant string) *ToolExecutions {
+	return &ToolExecutions{pool: s.pool, tenant: tenant}
 }
 
 // Claim atomically takes ownership of an idempotency key, or reports why the caller cannot have it.
@@ -62,11 +75,11 @@ func (e *ToolExecutions) Claim(ctx context.Context, key, toolName, agentRef stri
 
 	var claimed bool
 	err = e.pool.QueryRow(ctx,
-		`INSERT INTO tool_executions (idempotency_key, tool_name, agent_manifest_ref, args)
-		 VALUES ($1, $2, $3, $4::jsonb)
-		 ON CONFLICT (idempotency_key) DO NOTHING
+		`INSERT INTO tool_executions (tenant_id, idempotency_key, tool_name, agent_manifest_ref, args)
+		 VALUES ($5, $1, $2, $3, $4::jsonb)
+		 ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
 		 RETURNING true`,
-		key, toolName, agentRef, string(encodedArgs),
+		key, toolName, agentRef, string(encodedArgs), e.tenant,
 	).Scan(&claimed)
 	switch {
 	case err == nil:
@@ -82,8 +95,8 @@ func (e *ToolExecutions) Claim(ctx context.Context, key, toolName, agentRef stri
 	var failedAttempts int
 	if err := e.pool.QueryRow(ctx,
 		`SELECT result, state, args IS NOT DISTINCT FROM $2::jsonb, failed_attempts
-		   FROM tool_executions WHERE idempotency_key = $1`,
-		key, string(encodedArgs),
+		   FROM tool_executions WHERE tenant_id = $3 AND idempotency_key = $1`,
+		key, string(encodedArgs), e.tenant,
 	).Scan(&result, &state, &sameArgs, &failedAttempts); err != nil {
 		return ClaimResult{}, fmt.Errorf("store: reading existing execution: %w", err)
 	}
@@ -99,9 +112,9 @@ func (e *ToolExecutions) Claim(ctx context.Context, key, toolName, agentRef stri
 		var reclaimed bool
 		err := e.pool.QueryRow(ctx,
 			`UPDATE tool_executions SET state = 'in_flight', claimed_at = now()
-			   WHERE idempotency_key = $1 AND state = 'released'
+			   WHERE tenant_id = $2 AND idempotency_key = $1 AND state = 'released'
 			 RETURNING true`,
-			key,
+			key, e.tenant,
 		).Scan(&reclaimed)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return out, ErrExecutionInFlight
@@ -124,8 +137,8 @@ func (e *ToolExecutions) Complete(ctx context.Context, key string, result map[st
 	}
 	if _, err := e.pool.Exec(ctx,
 		`UPDATE tool_executions SET result = $2::jsonb, state = 'completed', completed_at = now()
-		   WHERE idempotency_key = $1`,
-		key, string(encoded),
+		   WHERE tenant_id = $3 AND idempotency_key = $1`,
+		key, string(encoded), e.tenant,
 	); err != nil {
 		return fmt.Errorf("store: completing execution: %w", err)
 	}
@@ -143,8 +156,8 @@ func (e *ToolExecutions) Release(ctx context.Context, key string) error {
 	if _, err := e.pool.Exec(ctx,
 		`UPDATE tool_executions
 		    SET state = 'released', failed_attempts = failed_attempts + 1, result = NULL, completed_at = NULL
-		  WHERE idempotency_key = $1`,
-		key,
+		  WHERE tenant_id = $2 AND idempotency_key = $1`,
+		key, e.tenant,
 	); err != nil {
 		return fmt.Errorf("store: releasing execution claim: %w", err)
 	}

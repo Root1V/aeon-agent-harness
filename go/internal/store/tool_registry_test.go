@@ -26,7 +26,7 @@ func testToolDescriptor(toolID, version, sideEffect, risk string, idempotencyFie
 // manifest criterion for TOOL-001/SEC-001 additionally needs the Cedar Policy Engine, still TODO).
 func TestToolRegistryCRUDAndRiskClassification(t *testing.T) {
 	s := newTestStore(t)
-	registry := s.ToolRegistry()
+	registry := s.ToolRegistryFor("default")
 	ctx := context.Background()
 
 	toolID := "search.web." + randSuffix(t)

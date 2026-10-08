@@ -32,7 +32,7 @@ func newModelGatewayTestServer(t *testing.T, fail bool) *httptest.Server {
 	gw.RegisterProvider("fake", &fakeDecideProvider{fail: fail})
 	mux := http.NewServeMux()
 	(&ModelGatewayHandlers{Gateway: gw}).Register(mux)
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 	return srv
 }

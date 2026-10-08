@@ -135,7 +135,7 @@ func newEgressFixture(t *testing.T, maxInFlight int) *egressFixture {
 	// value; the proxy resolves it per call and revokes the lease immediately.
 	broker := secrets.NewBroker(map[string]string{remoteCredential: "s3cr3t-remote-token"})
 
-	if _, err := s.RemoteAgents().Declare(context.Background(), store.RemoteAgentRecord{
+	if _, err := s.RemoteAgentsFor("default").Declare(context.Background(), store.RemoteAgentRecord{
 		AgentID: allowedRemote, URL: remoteSrv.URL, Risk: store.RiskHigh,
 		Description: "A2A-002 acceptance test destination", CredentialSecretName: remoteCredential,
 	}); err != nil {
@@ -143,24 +143,24 @@ func newEgressFixture(t *testing.T, maxInFlight int) *egressFixture {
 	}
 	// A declared destination that policy does NOT permit. Declared on purpose: it separates "nobody
 	// declared this" from "policy refused this", which are the two refusals that look alike from outside.
-	if _, err := s.RemoteAgents().Declare(context.Background(), store.RemoteAgentRecord{
+	if _, err := s.RemoteAgentsFor("default").Declare(context.Background(), store.RemoteAgentRecord{
 		AgentID: "unpermitted-partner", URL: remoteSrv.URL, Risk: store.RiskCritical,
 	}); err != nil {
 		t.Fatalf("declaring the unpermitted remote agent: %v", err)
 	}
 
 	handlers := &A2AEgressHandlers{
-		Policy: engine, RemoteAgents: s.RemoteAgents(), Delegations: s.A2ADelegations(),
+		Policy: engine, RemoteAgents: s.RemoteAgentsFor("default"), Delegations: s.A2ADelegationsFor("default"),
 		Broker: broker, MaxInFlightPerRun: maxInFlight, InFlightStaleAfter: time.Hour,
 	}
 	mux := http.NewServeMux()
 	handlers.Register(mux)
-	proxy := httptest.NewServer(mux)
+	proxy := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(proxy.Close)
 
 	return &egressFixture{
 		proxy: proxy, remote: remote, remoteURL: remoteSrv.URL,
-		delegations: s.A2ADelegations(), handlers: handlers,
+		delegations: s.A2ADelegationsFor("default"), handlers: handlers,
 	}
 }
 
@@ -182,7 +182,7 @@ func (f *egressFixture) delegate(t *testing.T, remoteID, runID, method string, h
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(authorize(req))
 	if err != nil {
 		t.Fatalf("POST through the proxy: %v", err)
 	}
@@ -309,7 +309,8 @@ func TestRemoteDelegationIsGovernedAtEgress(t *testing.T) {
 		// path obeys — the failure this endpoint exists to prevent, arriving through the endpoint itself.
 		f := newEgressFixture(t, 0)
 		body := []byte(`{"jsonrpc":"2.0","id":1,"method":"message/send","params":{}}`)
-		resp, err := http.Post(f.proxy.URL+"/a2a/egress/"+allowedRemote, "application/json", bytes.NewReader(body))
+		resp := postJSONAuthed(t, f.proxy.URL+"/a2a/egress/"+allowedRemote, body)
+		var err error
 		if err != nil {
 			t.Fatalf("POST: %v", err)
 		}
@@ -498,7 +499,7 @@ func TestRemoteDelegationIsGovernedAtEgress(t *testing.T) {
 				req, _ := http.NewRequest(http.MethodPost, f.proxy.URL+"/a2a/egress/"+allowedRemote, bytes.NewReader(body))
 				req.Header.Set(a2a.HeaderAgentManifestRef, egressAgent)
 				req.Header.Set(a2a.HeaderRunID, runID)
-				resp, err := http.DefaultClient.Do(req)
+				resp, err := http.DefaultClient.Do(authorize(req))
 				if err != nil {
 					t.Errorf("caller %d: %v", i, err)
 					return
@@ -579,7 +580,7 @@ func TestRemoteDelegationIsGovernedAtEgress(t *testing.T) {
 		sent := []byte(`{"jsonrpc":"2.0","id":1,"method":"message/send","params":{"big":9007199254740993,"z":1,"a":2}}`)
 		req, _ := http.NewRequest(http.MethodPost, f.proxy.URL+"/a2a/egress/"+allowedRemote, bytes.NewReader(sent))
 		req.Header.Set(a2a.HeaderAgentManifestRef, egressAgent)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := http.DefaultClient.Do(authorize(req))
 		if err != nil {
 			t.Fatalf("POST: %v", err)
 		}

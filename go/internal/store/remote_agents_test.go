@@ -18,7 +18,7 @@ import (
 // other side there is a model deciding, and it can change without telling us.
 func TestRemoteAgentMustBeDeclaredWithRisk(t *testing.T) {
 	ctx := context.Background()
-	reg := newTestStore(t).RemoteAgents()
+	reg := newTestStore(t).RemoteAgentsFor("default")
 	id := fmt.Sprintf("remote-%d", time.Now().UnixNano())
 
 	t.Run("a destination with no declared risk is refused", func(t *testing.T) {

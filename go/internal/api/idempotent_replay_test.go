@@ -89,12 +89,13 @@ func TestIdempotentReplayIsNotBilledTwice(t *testing.T) {
 	})
 
 	t.Run("a replay is recorded at zero cost, naming the generation that was billed", func(t *testing.T) {
-		ledger := newAPITestStore(t).FinOpsLedger()
+		ledgerStore := newAPITestStore(t)
+		ledger := ledgerStore.FinOpsLedgerFor("default")
 		pricing := finops.NewPricingTable([]finops.Rate{{
 			Provider: prometheusinference.Name, Model: model, CostModel: "token_based",
 			InputPerMillionUSD: 0.2, OutputPerMillionUSD: 0.6,
 		}})
-		srv := realPrometheusDecideServer(t, client, model, pricing, ledger)
+		srv := realPrometheusDecideServer(t, client, model, pricing, ledgerStore)
 
 		key := "aeon-obs006-ledger-" + randSuffix(t)
 		firstBody := decideWithKey(t, srv, model, key)
@@ -217,13 +218,13 @@ func chatWithKey(ctx context.Context, client *prometheusinference.Client, model,
 
 // realPrometheusDecideServer wires the real handler against the real adapter, so the path under test
 // is recordCost's own on a real replay.
-func realPrometheusDecideServer(t *testing.T, client *prometheusinference.Client, model string, pricing *finops.PricingTable, ledger *store.FinOpsLedger) *httptest.Server {
+func realPrometheusDecideServer(t *testing.T, client *prometheusinference.Client, model string, pricing *finops.PricingTable, ledgerStore *store.Store) *httptest.Server {
 	t.Helper()
 	gw := modelgateway.New()
 	gw.RegisterProvider(prometheusinference.Name, &prometheusinference.Adapter{Client: client, Model: model})
 	mux := http.NewServeMux()
-	(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger}).Register(mux)
-	srv := httptest.NewServer(mux)
+	(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledgerStore}).Register(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 	return srv
 }

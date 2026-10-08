@@ -184,14 +184,25 @@ func main() {
 		// TOOL-005: the execution dedupe table. Without it a request carrying an idempotency_key is
 		// refused rather than executed — a caller that asked for protection must not silently get an
 		// effect instead.
-		handlers.Executions = s.ToolExecutions()
+		handlers.Executions = s // VRT-AEON-005: the handle is derived per request from the caller's tenant
 		log.Println("aeon-toolgw: execution deduplication live (idempotency_key honoured on /execute)")
 
 		// INT-011: a policy denial is journalled as a known outcome of the step, so a run suspended on a
 		// refusal can be resumed instead of looking like a step whose fate nobody knows. Without a DSN the
 		// denial still denies — it just answers journalled=false, which is a reported gap and not a silent
 		// one.
-		handlers.Checkpointer = s.Checkpointer()
+		// VRT-AEON-005: the surfaces below are NOT per-request — the tool executor and the MCP
+		// catalog are built once at startup — so the tenant cannot come from a caller and has to be
+		// declared. AEON_TENANT_ID is that declaration, defaulting to the "default" the migration
+		// backfilled and the shipped caller bundles name. A deployment serving several tenants from
+		// one gateway needs these two to be per-request too, which is a separate change and is said
+		// here rather than discovered: a single-tenant gateway is correct today, a multi-tenant one
+		// would index and expose one tenant's catalog to all of them.
+		deploymentTenant := os.Getenv("AEON_TENANT_ID")
+		if deploymentTenant == "" {
+			deploymentTenant = "default"
+		}
+		handlers.Checkpointer = s
 		log.Println("aeon-toolgw: policy denials journalled as known outcomes (INT-011)")
 
 		// A2A-002: governed A2A egress as a data-plane proxy. A framework points its A2A client at
@@ -203,8 +214,8 @@ func main() {
 		// inventing a bound rather than enforcing one they chose.
 		egress := &api.A2AEgressHandlers{
 			Policy:             engine,
-			RemoteAgents:       s.RemoteAgents(),
-			Delegations:        s.A2ADelegations(),
+			RemoteAgents:       s.RemoteAgentsFor(deploymentTenant),
+			Delegations:        s.A2ADelegationsFor(deploymentTenant),
 			Broker:             broker,
 			MaxInFlightPerRun:  intFromEnv("AEON_A2A_MAX_INFLIGHT_PER_RUN", 0),
 			InFlightStaleAfter: time.Duration(intFromEnv("AEON_A2A_INFLIGHT_STALE_SECONDS", 3600)) * time.Second,
@@ -225,13 +236,13 @@ func main() {
 			if corpus == "" {
 				corpus = "default"
 			}
-			toolexec.RegisterRagTool(executor, s.RagStore(), embedder, corpus)
+			toolexec.RegisterRagTool(executor, s.RagStoreFor(deploymentTenant), embedder, corpus)
 			log.Printf("aeon-toolgw: search.rag live over corpus %q using embedding model %q", corpus, embedder.Model())
 		} else {
 			log.Println("aeon-toolgw: search.rag not registered (set AEON_EMBEDDING_MODEL and the Prometheus credentials)")
 		}
 
-		tools, err := s.ToolRegistry().List(context.Background())
+		tools, err := s.ToolRegistryFor(deploymentTenant).List(context.Background())
 		if err != nil {
 			log.Fatalf("aeon-toolgw: listing the Tool Registry for the MCP server: %v", err)
 		}
@@ -251,7 +262,7 @@ func main() {
 		// unchanged catalogue sends no notification at all.
 		refresh := time.Duration(intFromEnv("AEON_MCP_CATALOG_REFRESH_SECONDS", 30)) * time.Second
 		if refresh > 0 {
-			go catalog.Watch(context.Background(), s.ToolRegistry(), refresh)
+			go catalog.Watch(context.Background(), s.ToolRegistryFor(deploymentTenant), refresh)
 			log.Printf("aeon-toolgw: MCP catalog refreshing every %s (AEON_MCP_CATALOG_REFRESH_SECONDS=0 disables)", refresh)
 		} else {
 			log.Println("aeon-toolgw: MCP catalog refresh DISABLED — a tool registered after now stays invisible until restart")

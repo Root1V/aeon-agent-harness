@@ -32,8 +32,10 @@ import (
 func TestARunIsStoppedWhenItsManifestSaysEnough(t *testing.T) {
 	ctx := context.Background()
 	s := newAPITestStore(t)
-	ledger := s.FinOpsLedger()
-	agents := s.AgentRegistry()
+	ledgerStore := s
+	ledger := s.FinOpsLedgerFor("default")
+	agentsStore := s
+	agents := s.AgentRegistryFor("default")
 
 	model := "ceiling-test-model-" + randSuffix(t)
 	// $0.025 a call: 1000 prompt + 500 completion at $10/$30 per million (finOpsFakeProvider).
@@ -57,7 +59,7 @@ func TestARunIsStoppedWhenItsManifestSaysEnough(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger, Agents: agents}).Register(mux)
+	(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledgerStore, Agents: agentsStore}).Register(mux)
 	srv := httptest.NewServer(authWrap(t, mux, agentRef))
 	t.Cleanup(srv.Close)
 
@@ -128,7 +130,7 @@ func TestARunIsStoppedWhenItsManifestSaysEnough(t *testing.T) {
 			t.Fatalf("registering: %v", err)
 		}
 		mux2 := http.NewServeMux()
-		(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger, Agents: agents}).Register(mux2)
+		(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledgerStore, Agents: agentsStore}).Register(mux2)
 		srv2 := httptest.NewServer(authWrap(t, mux2, otherRef))
 		t.Cleanup(srv2.Close)
 
@@ -211,8 +213,10 @@ func TestARunIsStoppedWhenItsManifestSaysEnough(t *testing.T) {
 func TestATokenCeilingStopsARunThatIsNeverPriced(t *testing.T) {
 	ctx := context.Background()
 	s := newAPITestStore(t)
-	ledger := s.FinOpsLedger()
-	agents := s.AgentRegistry()
+	ledgerStore := s
+	ledger := s.FinOpsLedgerFor("default")
+	agentsStore := s
+	agents := s.AgentRegistryFor("default")
 
 	// A compute_based model: real token usage, NO price. finOpsFakeProvider reports 1000 + 500.
 	model := "token-ceiling-" + randSuffix(t)
@@ -235,7 +239,7 @@ func TestATokenCeilingStopsARunThatIsNeverPriced(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger, Agents: agents}).Register(mux)
+	(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledgerStore, Agents: agentsStore}).Register(mux)
 	srv := httptest.NewServer(authWrap(t, mux, agentRef))
 	t.Cleanup(srv.Close)
 
@@ -297,7 +301,7 @@ func TestATokenCeilingStopsARunThatIsNeverPriced(t *testing.T) {
 func TestRunStatusStopsReportingZeroCostForRunsThatSpent(t *testing.T) {
 	ctx := context.Background()
 	s := newAPITestStore(t)
-	ledger := s.FinOpsLedger()
+	ledger := s.FinOpsLedgerFor("default")
 
 	runID := "status-spend-" + randSuffix(t)
 	cost := 1.25

@@ -33,7 +33,7 @@ var runControllerTracer = otel.Tracer("aeon-runcontroller")
 // pre-A5 behavior).
 type RunControllerHandlers struct {
 	Controller *runcontroller.Controller
-	Registry   *store.AgentRegistry
+	Registry   *store.Store
 	// Checkpointer journals a person's approval decision as a known outcome (INT-011).
 	//
 	// THE HARNESS WRITES THIS, not the loop, and that is the accepted contract consequence rather than a
@@ -41,7 +41,7 @@ type RunControllerHandlers struct {
 	// witness. Registering a fact is not deciding anything, which is what keeps the seam's promise intact.
 	//
 	// Optional. Without it a decision still takes effect — the response says it was not journalled.
-	Checkpointer checkpoint.Checkpointer
+	Checkpointer *store.Store
 }
 
 // Register mounts the run controller routes on mux.
@@ -107,7 +107,7 @@ func (h *RunControllerHandlers) start(w http.ResponseWriter, r *http.Request) {
 	))
 	defer span.End()
 
-	if err := checkNotQuarantined(ctx, h.Registry, body.AgentManifestRef); err != nil {
+	if err := checkNotQuarantined(ctx, registryForCaller(h.Registry, ctx), body.AgentManifestRef); err != nil {
 		span.SetStatus(codes.Error, "quarantined")
 		writeJSON(w, http.StatusForbidden, map[string]any{"error": err.Error()})
 		return
@@ -125,7 +125,7 @@ func (h *RunControllerHandlers) start(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RunControllerHandlers) status(w http.ResponseWriter, r *http.Request) {
-	status, err := h.Controller.Status(r.Context(), workflowID(r.PathValue("run_id")))
+	status, err := h.Controller.Status(r.Context(), workflowID(r.PathValue("run_id")), callerTenantOrEmpty(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -294,7 +294,7 @@ func (h *RunControllerHandlers) journalApproval(
 	}
 
 	stepID := checkpoint.ApprovalStep(decision.ApprovalID)
-	res, err := h.Checkpointer.Append(ctx, checkpoint.Entry{
+	res, err := h.Checkpointer.CheckpointerFor(callerTenantOrEmpty(ctx)).Append(ctx, checkpoint.Entry{
 		RunID: runID, StepID: stepID, Phase: checkpoint.PhaseCompleted, Payload: payload,
 	})
 	if err != nil {
@@ -335,7 +335,7 @@ func (h *RunControllerHandlers) stream(w http.ResponseWriter, r *http.Request) {
 	defer ticker.Stop()
 
 	for {
-		status, err := h.Controller.Status(r.Context(), wfID)
+		status, err := h.Controller.Status(r.Context(), wfID, callerTenantOrEmpty(r.Context()))
 		if err != nil {
 			fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
 			flusher.Flush()
@@ -365,4 +365,27 @@ func isTerminal(status string) bool {
 	default:
 		return false
 	}
+}
+
+// callerTenantOrEmpty is the tenant from the credential, or "" when there is no caller.
+//
+// EMPTY RATHER THAN A DEFAULT, and the receiving side treats empty as "no ledger lookup" rather than
+// as a tenant name. A default here would attribute one tenant's spend to another on any path where
+// the middleware was not mounted, which is the quiet version of the defect slice 2 found.
+func callerTenantOrEmpty(ctx context.Context) string {
+	caller, ok := auth.CallerFrom(ctx)
+	if !ok {
+		return ""
+	}
+	return caller.Tenant
+}
+
+// registryForCaller is nil when there is no registry OR no caller, which keeps checkNotQuarantined's
+// existing nil-means-skip contract and refuses to guess a tenant.
+func registryForCaller(s *store.Store, ctx context.Context) *store.AgentRegistry {
+	tenant := callerTenantOrEmpty(ctx)
+	if s == nil || tenant == "" {
+		return nil
+	}
+	return s.AgentRegistryFor(tenant)
 }

@@ -34,11 +34,13 @@ var toolGatewayTracer = otel.Tracer("aeon-toolgw")
 type ToolGatewayHandlers struct {
 	Policy   *policy.Engine
 	Executor *toolexec.Executor
-	// Executions is TOOL-005's dedupe table. Optional only in the sense that a deployment may not
-	// configure it — a request that ASKS for deduplication and finds it missing is refused rather
-	// than executed, because silently running an effect the caller asked to have deduplicated is
-	// the failure this table exists to prevent.
-	Executions *store.ToolExecutions
+	// Executions is the STORE, not a dedupe handle, since VRT-AEON-005: the handle is derived per
+	// request from the caller's tenant (store.ToolExecutionsFor), because a handle built once at
+	// startup would be one tenant's for every caller. Optional only in the sense that a deployment
+	// may not configure it — a request that ASKS for deduplication and finds it missing is refused
+	// rather than executed, because silently running an effect the caller asked to have
+	// deduplicated is the failure this table exists to prevent.
+	Executions *store.Store
 	// Checkpointer journals a policy denial as a KNOWN OUTCOME of the step (INT-011).
 	//
 	// The gateway writes it rather than the caller, and that placement is the feature. A caller that
@@ -50,7 +52,8 @@ type ToolGatewayHandlers struct {
 	// has nothing to journal AGAINST, and a deployment may have no journal at all. Neither is allowed to
 	// turn a denial into an error — but neither is allowed to look like a recorded denial either, which
 	// is why the response says which of the three happened.
-	Checkpointer checkpoint.Checkpointer
+	// VRT-AEON-005: the store; the journal handle is derived per request from the caller's tenant.
+	Checkpointer *store.Store
 }
 
 // Register mounts the tool gateway routes on mux.
@@ -283,7 +286,20 @@ func (h *ToolGatewayHandlers) executeDeduplicated(
 		return
 	}
 
-	claim, err := h.Executions.Claim(r.Context(), body.IdempotencyKey, body.ToolName, body.AgentManifestRef, body.Args)
+	// The tenant comes from the credential, never from the request (T-1). A dedupe table keyed
+	// without it meant the same idempotency key in two tenants was one row, so the second tenant's
+	// call came back "already executed" carrying the first tenant's recorded result.
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		span.SetStatus(codes.Error, "unauthenticated")
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: deduplication is scoped to the caller's tenant (SEC-005/VRT-AEON-005)",
+		})
+		return
+	}
+	executions := h.Executions.ToolExecutionsFor(caller.Tenant)
+
+	claim, err := executions.Claim(r.Context(), body.IdempotencyKey, body.ToolName, body.AgentManifestRef, body.Args)
 	if claim.ArgsDiverged {
 		span.SetStatus(codes.Error, "idempotency key reused with different arguments")
 		writeJSON(w, http.StatusConflict, map[string]any{
@@ -327,7 +343,7 @@ func (h *ToolGatewayHandlers) executeDeduplicated(
 
 	result, execErr := h.Executor.Execute(body.ToolName, body.Args)
 	if execErr != nil {
-		if relErr := h.Executions.Release(r.Context(), body.IdempotencyKey); relErr != nil {
+		if relErr := executions.Release(r.Context(), body.IdempotencyKey); relErr != nil {
 			log.Printf("aeon-toolgw: releasing idempotency key after a failed execution: %v", relErr)
 		}
 		span.RecordError(execErr)
@@ -335,7 +351,7 @@ func (h *ToolGatewayHandlers) executeDeduplicated(
 		writeError(w, http.StatusNotFound, execErr)
 		return
 	}
-	if err := h.Executions.Complete(r.Context(), body.IdempotencyKey, result); err != nil {
+	if err := executions.Complete(r.Context(), body.IdempotencyKey, result); err != nil {
 		// The effect already happened. Failing the request now would invite a retry that cannot be
 		// deduplicated, so the honest answer is the result plus the fact that it is unprotected.
 		log.Printf("aeon-toolgw: recording a completed execution: %v", err)
@@ -393,7 +409,7 @@ func (h *ToolGatewayHandlers) journalDenial(
 	if err != nil {
 		return denialResult{Reason: err.Error()}
 	}
-	res, err := h.Checkpointer.Append(ctx, checkpoint.Entry{
+	res, err := h.Checkpointer.CheckpointerFor(callerTenantOrEmpty(ctx)).Append(ctx, checkpoint.Entry{
 		RunID: body.RunID, StepID: body.StepID, Phase: checkpoint.PhaseCompleted, Payload: payload,
 	})
 	if err != nil {

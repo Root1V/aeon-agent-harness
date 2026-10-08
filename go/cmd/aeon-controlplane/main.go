@@ -91,13 +91,13 @@ func main() {
 	// Secret Broker (SEC-002) lives in a different process, and nothing yet plumbs a cross-process
 	// "revoke this agent's leases" call from here to there (see backlog.md) — quarantine still
 	// applies durably to the registry and blocks new runs regardless.
-	breakerHandlers := &api.CircuitBreakerHandlers{Registry: s.AgentRegistry(), Breaker: circuitbreaker.New(circuitbreaker.DefaultThresholds)}
+	breakerHandlers := &api.CircuitBreakerHandlers{Registry: s, Breaker: circuitbreaker.New(circuitbreaker.DefaultThresholds)}
 	breakerHandlers.Register(mux)
 
 	// INT-009: the durability seam. It lives here rather than in aeon-runcontroller because the
 	// journal is persistence, and this is the process that owns Postgres — but note the consequence:
 	// a framework using the seam talks to the control plane, not to the run controller.
-	checkpointHandlers := &api.CheckpointHandlers{Checkpointer: s.Checkpointer()}
+	checkpointHandlers := &api.CheckpointHandlers{Store: s}
 	checkpointHandlers.Register(mux)
 
 	// SEC-005: every route but /healthz and /readyz is behind this. Fatal when unconfigured — see

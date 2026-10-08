@@ -76,7 +76,8 @@ type AgentRecord struct {
 
 // AgentRegistry is the Postgres-backed CRUD + lifecycle store for AgentManifests.
 type AgentRegistry struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	tenant string
 }
 
 // Create registers a new AgentManifest version. Fails with ErrAlreadyExists if (name, version)
@@ -93,8 +94,8 @@ func (r *AgentRegistry) Create(ctx context.Context, manifest map[string]any, own
 	}
 
 	_, err = r.pool.Exec(ctx,
-		`INSERT INTO agents (name, version, owner, lifecycle, manifest) VALUES ($1, $2, $3, $4, $5)`,
-		name, version, owner, LifecycleDraft, manifestJSON,
+		`INSERT INTO agents (tenant_id, name, version, owner, lifecycle, manifest) VALUES ($6, $1, $2, $3, $4, $5)`,
+		name, version, owner, LifecycleDraft, manifestJSON, r.tenant,
 	)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -109,8 +110,8 @@ func (r *AgentRegistry) Create(ctx context.Context, manifest map[string]any, own
 func (r *AgentRegistry) Get(ctx context.Context, name, version string) (*AgentRecord, error) {
 	row := r.pool.QueryRow(ctx,
 		`SELECT name, version, owner, lifecycle, manifest, created_at, updated_at, quarantined, quarantine_reason
-		 FROM agents WHERE name = $1 AND version = $2`,
-		name, version,
+		 FROM agents WHERE tenant_id = $3 AND name = $1 AND version = $2`,
+		name, version, r.tenant,
 	)
 	return scanAgentRow(row)
 }
@@ -119,7 +120,7 @@ func (r *AgentRegistry) Get(ctx context.Context, name, version string) (*AgentRe
 func (r *AgentRegistry) List(ctx context.Context) ([]*AgentRecord, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT name, version, owner, lifecycle, manifest, created_at, updated_at, quarantined, quarantine_reason
-		 FROM agents ORDER BY created_at DESC`,
+		 FROM agents WHERE tenant_id = $1 ORDER BY created_at DESC`, r.tenant,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: list agents: %w", err)
@@ -162,8 +163,8 @@ func (r *AgentRegistry) TransitionLifecycle(ctx context.Context, name, version, 
 	}
 
 	_, err = r.pool.Exec(ctx,
-		`UPDATE agents SET lifecycle = $1, updated_at = now() WHERE name = $2 AND version = $3`,
-		target, name, version,
+		`UPDATE agents SET lifecycle = $1, updated_at = now() WHERE tenant_id = $4 AND name = $2 AND version = $3`,
+		target, name, version, r.tenant,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: transition lifecycle: %w", err)
@@ -186,8 +187,8 @@ func (r *AgentRegistry) Quarantine(ctx context.Context, name, version, reason st
 		return nil, fmt.Errorf("%w: %s@%s is %s", ErrNotReleased, name, version, current.Lifecycle)
 	}
 	_, err = r.pool.Exec(ctx,
-		`UPDATE agents SET quarantined = TRUE, quarantine_reason = $1, updated_at = now() WHERE name = $2 AND version = $3`,
-		reason, name, version,
+		`UPDATE agents SET quarantined = TRUE, quarantine_reason = $1, updated_at = now() WHERE tenant_id = $4 AND name = $2 AND version = $3`,
+		reason, name, version, r.tenant,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: quarantine: %w", err)
@@ -202,8 +203,8 @@ func (r *AgentRegistry) Unquarantine(ctx context.Context, name, version string) 
 		return nil, err
 	}
 	_, err := r.pool.Exec(ctx,
-		`UPDATE agents SET quarantined = FALSE, quarantine_reason = NULL, updated_at = now() WHERE name = $1 AND version = $2`,
-		name, version,
+		`UPDATE agents SET quarantined = FALSE, quarantine_reason = NULL, updated_at = now() WHERE tenant_id = $3 AND name = $1 AND version = $2`,
+		name, version, r.tenant,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: unquarantine: %w", err)
