@@ -283,8 +283,13 @@ type Model struct {
 // `inference:read`, plus one and two `model:<id>` grants), and it returned the same content as
 // ListMyModels in every probe. ADR-0004 documented the opposite — "public, every active model on
 // the gateway, regardless of who's authorized" — and that sentence is why we read two text-only
-// models as "this deployment has no vision model" instead of "none is granted to us". A caller
-// cannot enumerate what the deployment hosts; only the operator can say.
+// models as "this deployment has no vision model" instead of "none is granted to us".
+//
+// TO DISCOVER WHAT THIS CLIENT HOLDS, ask for a token with no `scope` parameter: the response's own
+// `scope` field carries the full granted scope. Measured 2026-10-09 — it returned six models where
+// this endpoint had been showing two, three of them modality=vision. A scope-filtered catalogue
+// cannot reveal a grant whose model id you have not already guessed, so the token is the only
+// discovery path. What the DEPLOYMENT hosts remains invisible; only its operator can say.
 func (c *Client) ListModels(ctx context.Context) ([]Model, error) {
 	sdk, err := c.client()
 	if err != nil {
