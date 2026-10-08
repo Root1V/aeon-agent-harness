@@ -11,7 +11,7 @@ import (
 )
 
 // ToolExecutions is TOOL-005: the execution dedupe table the Tool Gateway consults before running
-// anything with effects. See schema.sql for the DDL and why the state has three values.
+// anything with effects. See migrations/0001_initial_schema.sql for the DDL and why the state has three values.
 type ToolExecutions struct {
 	pool *pgxpool.Pool
 }

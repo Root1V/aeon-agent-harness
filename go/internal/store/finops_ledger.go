@@ -25,7 +25,7 @@ type CostEntry struct {
 	AgentManifestRef string // optional — empty when the caller didn't supply one
 	// CacheReadTokens is the subset of PromptTokens served from cache, and CacheWriteTokens what
 	// was written to it (MDL-012). Both nil when the provider reported no cache accounting at all —
-	// see schema.sql for why that is not the same as zero.
+	// see migrations/0001_initial_schema.sql for why that is not the same as zero.
 	CacheReadTokens  *int
 	CacheWriteTokens *int
 	// ReasoningTokens is the slice of the output spent thinking (MDL-016). Nil when the provider

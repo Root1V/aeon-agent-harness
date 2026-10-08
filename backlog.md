@@ -255,17 +255,18 @@ toca este código: lo único que tiene que producir es el fichero.
   necesita acuerdo de ARG/PRM/SYN/VRT — propuesta puesta en el canal, sin respuesta todavía.
 - **Coste:** S lo nuestro; la convención es coordinación.
 
-### El esquema de Postgres no tiene migraciones versionadas
+### ~~El esquema de Postgres no tiene migraciones versionadas~~ — CERRADA el 2026-10-07
 
-- **Descripción:** `store.Connect` llama a `Migrate()`, que aplica `schema.sql` idempotentemente bajo
-  un advisory lock. Para cambios aditivos funciona y está probado. Lo que no existe es historia para
-  un cambio **destructivo** —renombrar una columna, estrechar un tipo— ni forma de saber qué versión
-  tiene una base de datos, ni rollback.
-- **Fase objetivo:** antes del primer cambio de esquema sobre datos que importen.
-- **Criterio de entrada:** ninguno especial, pero **sí una decisión**: una herramienta de migraciones
-  (golang-migrate, atlas) o un `schema_version` propio. Lo segundo parece más barato y es cómo se
-  acaba teniendo una herramienta de migraciones peor.
-- **Coste:** M.
+Su criterio de entrada era *«antes del primer cambio de esquema sobre datos que importen»*, y ese
+cambio llegó: `VRT-AEON-005` (multi-tenencia) necesita cambios de **clave primaria** en siete de las
+nueve tablas, y `CREATE TABLE IF NOT EXISTS` no altera una tabla existente — la **salta en silencio**.
+Ver la fila `GOV-002b` del roadmap.
+
+La entrada también advertía que un `schema_version` propio *«parece más barato y es cómo se acaba
+teniendo una herramienta de migraciones peor»*. Sigue siendo el riesgo, y lo que lo contiene no es la
+lista de cosas que hace sino la de cosas que **rechaza**: una migración ya aplicada que cambió en
+disco, una base de datos por delante del binario, un hueco o un duplicado en las versiones, un
+fichero mal nombrado. Sin `down`, a propósito.
 
 ### La deriva de `step_seq` es invisible para Temporal, y no sabemos si es inofensiva (`RUN-004`)
 
