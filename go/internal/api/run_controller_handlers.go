@@ -45,6 +45,41 @@ type RunControllerHandlers struct {
 }
 
 // Register mounts the run controller routes on mux.
+
+// ownedRun resolves the workflow id for this request AND refuses when the run belongs to another
+// tenant (VRT-AEON-005 T-6), writing the refusal itself.
+//
+// 404 AND NEVER 403, which is T-7 applied to runs: a forbidden answer confirms the run exists, and
+// across a tenant boundary the answer has to be the one a run that never existed would give. Inside
+// the tenant the 403s stay — "you may not approve" and "no such run" are different facts.
+//
+// EVERY BY-ID ROUTE GOES THROUGH THIS, and the enforcement is a test over all of them rather than
+// the compiler, because a path value cannot be made un-forgettable the way a store handle can. That
+// test is the reason this is one function: slice 2 found an isolation implemented route by route,
+// and this is the same hazard with the mitigation stated.
+func (h *RunControllerHandlers) ownedRun(w http.ResponseWriter, r *http.Request) (string, bool) {
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: a run is reachable only by its own tenant (SEC-005/VRT-AEON-005)",
+		})
+		return "", false
+	}
+	wfID := workflowID(r.PathValue("run_id"))
+	owner, err := h.Controller.TenantOf(r.Context(), wfID)
+	if err != nil {
+		// An unknown run and a cross-tenant one answer the same way, which is the point: the error
+		// here is almost always "no such workflow", and distinguishing it would leak existence.
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such run"})
+		return "", false
+	}
+	if owner != caller.Tenant {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "no such run"})
+		return "", false
+	}
+	return wfID, true
+}
+
 func (h *RunControllerHandlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /runs", h.start)
 	mux.HandleFunc("GET /runs/{run_id}", h.status)
@@ -113,7 +148,7 @@ func (h *RunControllerHandlers) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := h.Controller.Start(ctx, body.RunID, body.Graph, body.Budgets, body.AgentManifestRef)
+	info, err := h.Controller.Start(ctx, body.RunID, body.Graph, body.Budgets, body.AgentManifestRef, callerTenantOrEmpty(ctx))
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -125,7 +160,11 @@ func (h *RunControllerHandlers) start(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RunControllerHandlers) status(w http.ResponseWriter, r *http.Request) {
-	status, err := h.Controller.Status(r.Context(), workflowID(r.PathValue("run_id")), callerTenantOrEmpty(r.Context()))
+	wfID, ok := h.ownedRun(w, r)
+	if !ok {
+		return
+	}
+	status, err := h.Controller.Status(r.Context(), wfID, callerTenantOrEmpty(r.Context()))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err)
 		return
@@ -134,7 +173,11 @@ func (h *RunControllerHandlers) status(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RunControllerHandlers) cancel(w http.ResponseWriter, r *http.Request) {
-	if err := h.Controller.Cancel(r.Context(), workflowID(r.PathValue("run_id"))); err != nil {
+	wfID, ok := h.ownedRun(w, r)
+	if !ok {
+		return
+	}
+	if err := h.Controller.Cancel(r.Context(), wfID); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -142,7 +185,11 @@ func (h *RunControllerHandlers) cancel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RunControllerHandlers) pause(w http.ResponseWriter, r *http.Request) {
-	if err := h.Controller.Pause(r.Context(), workflowID(r.PathValue("run_id"))); err != nil {
+	wfID, ok := h.ownedRun(w, r)
+	if !ok {
+		return
+	}
+	if err := h.Controller.Pause(r.Context(), wfID); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -150,7 +197,11 @@ func (h *RunControllerHandlers) pause(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RunControllerHandlers) resume(w http.ResponseWriter, r *http.Request) {
-	if err := h.Controller.Resume(r.Context(), workflowID(r.PathValue("run_id"))); err != nil {
+	wfID, ok := h.ownedRun(w, r)
+	if !ok {
+		return
+	}
+	if err := h.Controller.Resume(r.Context(), wfID); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -200,7 +251,11 @@ func (h *RunControllerHandlers) approve(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	decision, err := h.Controller.Approve(r.Context(), workflowID(r.PathValue("run_id")), body.ToolCallHash)
+	wfID, ok := h.ownedRun(w, r)
+	if !ok {
+		return
+	}
+	decision, err := h.Controller.Approve(r.Context(), wfID, body.ToolCallHash)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -222,7 +277,11 @@ func (h *RunControllerHandlers) reject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	decision, err := h.Controller.Reject(r.Context(), workflowID(r.PathValue("run_id")), body.ToolCallHash)
+	wfID, ok := h.ownedRun(w, r)
+	if !ok {
+		return
+	}
+	decision, err := h.Controller.Reject(r.Context(), wfID, body.ToolCallHash)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -320,9 +379,14 @@ type approvalJournalResult struct {
 // subscribing to Temporal's own event stream — sufficient for RUN-001's acceptance bar and keeps
 // this handler decoupled from Temporal's history API.
 func (h *RunControllerHandlers) stream(w http.ResponseWriter, r *http.Request) {
-	wfID := workflowID(r.PathValue("run_id"))
-	flusher, ok := w.(http.Flusher)
+	// Gated before the stream opens, not inside the loop: once the headers are flushed the only way
+	// left to refuse is to close the connection, which a client reads as a network fault.
+	wfID, ok := h.ownedRun(w, r)
 	if !ok {
+		return
+	}
+	flusher, canFlush := w.(http.Flusher)
+	if !canFlush {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("streaming unsupported"))
 		return
 	}

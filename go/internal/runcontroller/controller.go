@@ -13,9 +13,22 @@ import (
 
 	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/converter"
 
 	"github.com/aeon-ai/aeon/go/internal/store"
 )
+
+// TenantMemoKey is the workflow memo field carrying the run's tenant (VRT-AEON-005 T-6).
+const TenantMemoKey = "aeon_tenant"
+
+// DefaultTenant is what a run with NO tenant memo is treated as belonging to.
+//
+// Chosen rather than invented: it is exactly what migration 0002 did with every pre-existing row, so
+// the statement is the same one — the data and the runs that predate tenancy belong to `default`,
+// which on a single-tenant deployment is true. The alternatives were worse in both directions:
+// treating an un-memoed run as visible to everyone is the fallback defect this whole feature
+// removes, and treating it as visible to nobody would break every run already in flight.
+const DefaultTenant = "default"
 
 const (
 	// DefaultTaskQueue matches aeon_worker.__main__'s AEON_TASK_QUEUE default.
@@ -61,7 +74,7 @@ type RunInfo struct {
 // idempotency key, docs/adr/0001) and part of the Temporal workflow ID. budgets is optional
 // (RUN-003) — pass nil for no limits — and is shaped like {"max_tool_calls": int,
 // "max_depth": int, "deadline_seconds": int}; see graph_run.py's _budget_policy_from_request.
-func (c *Controller) Start(ctx context.Context, runID string, graph map[string]any, budgets map[string]any, agentManifestRef string) (*RunInfo, error) {
+func (c *Controller) Start(ctx context.Context, runID string, graph map[string]any, budgets map[string]any, agentManifestRef, tenant string) (*RunInfo, error) {
 	workflowID := WorkflowIDPrefix + runID
 	input := map[string]any{"run_id": runID, "graph": graph}
 	// TOOL-004: the principal the Tool Gateway evaluates policy against. It already arrived at the
@@ -74,9 +87,19 @@ func (c *Controller) Start(ctx context.Context, runID string, graph map[string]a
 	if budgets != nil {
 		input["budgets"] = budgets
 	}
+	// VRT-AEON-005 T-6: the tenant goes in the workflow's MEMO, so every later operation on this run
+	// can ask Temporal who it belongs to without a table of our own.
+	//
+	// A MEMO AND NOT A SEARCH ATTRIBUTE, which is the "o equivalente" in Veritium's requirement. A
+	// custom search attribute has to be registered in the Temporal namespace — deployment
+	// configuration, and a run started before it existed would be unattributable — and what it buys
+	// is FILTERING a list. There is no list-runs endpoint here, so it would be configuration bought
+	// for a surface that does not exist. When one exists, that is when the search attribute earns
+	// its keep; the memo is what answers "whose run is this" today, which is what T-6 asks.
 	run, err := c.Client.ExecuteWorkflow(ctx, client.StartWorkflowOptions{
 		ID:        workflowID,
 		TaskQueue: c.TaskQueue,
+		Memo:      map[string]any{TenantMemoKey: tenant},
 	}, WorkflowType, input)
 	if err != nil {
 		return nil, fmt.Errorf("runcontroller: start: %w", err)
@@ -296,4 +319,31 @@ func (c *Controller) addLedgerSpend(ctx context.Context, workflowID, tenant stri
 	if spend.UnreportedUsageCalls > 0 {
 		(*consumed)["unreported_usage_calls"] = spend.UnreportedUsageCalls
 	}
+}
+
+// TenantOf reports which tenant a run belongs to, from its workflow memo.
+//
+// A run with no memo predates T-6 and is treated as DefaultTenant — see that constant for why that
+// is the same statement migration 0002 made about pre-existing rows, rather than a guess.
+func (c *Controller) TenantOf(ctx context.Context, workflowID string) (string, error) {
+	desc, err := c.Client.DescribeWorkflowExecution(ctx, workflowID, "")
+	if err != nil {
+		return "", fmt.Errorf("runcontroller: describe: %w", err)
+	}
+	memo := desc.WorkflowExecutionInfo.GetMemo()
+	if memo == nil {
+		return DefaultTenant, nil
+	}
+	payload, ok := memo.GetFields()[TenantMemoKey]
+	if !ok {
+		return DefaultTenant, nil
+	}
+	var tenant string
+	if err := converter.GetDefaultDataConverter().FromPayload(payload, &tenant); err != nil {
+		return "", fmt.Errorf("runcontroller: reading the tenant memo: %w", err)
+	}
+	if tenant == "" {
+		return DefaultTenant, nil
+	}
+	return tenant, nil
 }
