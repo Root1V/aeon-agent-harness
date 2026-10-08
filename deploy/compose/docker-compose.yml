@@ -336,6 +336,10 @@ services:
       AEON_WEBSEARCH_SEARXNG_URL: http://searxng:8080
       # Config-as-code (FND-003): the policy bundle is a file in Git, mounted read-only, not baked
       # into the image. Point this at a different bundle to authorize a different set of agents.
+      #
+      # VRT-AEON-005 T-5: this is now the SINGLE-TENANT form, and it serves the tenant AEON_TENANT_ID
+      # names (`default` here) rather than whoever calls. For several tenants on one gateway use
+      # AEON_POLICY_BUNDLE_DIR with one <tenant>.yaml per tenant; setting both is refused.
       AEON_POLICY_BUNDLE_PATH: /examples/deep-research/policy_bundle.yaml
       # TOOL-008: what repository.read may read. Mounted READ-ONLY below, and the tool is contained by
       # os.Root on top of that — two independent guarantees, because the mount protects the host and

@@ -150,7 +150,7 @@ func newEgressFixture(t *testing.T, maxInFlight int) *egressFixture {
 	}
 
 	handlers := &A2AEgressHandlers{
-		Policy: engine, RemoteAgents: s.RemoteAgentsFor("default"), Delegations: s.A2ADelegationsFor("default"),
+		Policy: policy.SingleTenantSet("default", engine), RemoteAgents: s.RemoteAgentsFor("default"), Delegations: s.A2ADelegationsFor("default"),
 		Broker: broker, MaxInFlightPerRun: maxInFlight, InFlightStaleAfter: time.Hour,
 	}
 	mux := http.NewServeMux()

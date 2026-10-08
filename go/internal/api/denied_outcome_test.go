@@ -81,7 +81,7 @@ func newDeniedOutcomeGateway(t *testing.T) *httptest.Server {
 	})
 
 	mux := http.NewServeMux()
-	(&ToolGatewayHandlers{Policy: engine, Executor: executor, Checkpointer: s}).Register(mux)
+	(&ToolGatewayHandlers{Policy: policy.SingleTenantSet("default", engine), Executor: executor, Checkpointer: s}).Register(mux)
 	(&CheckpointHandlers{Store: s}).Register(mux)
 	srv := httptest.NewServer(authWrap(t, mux, deniedOutcomeAgent))
 	t.Cleanup(srv.Close)

@@ -16,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/aeon-ai/aeon/go/internal/a2a"
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/secrets"
 	"github.com/aeon-ai/aeon/go/internal/store"
@@ -46,7 +47,9 @@ const delegationCredentialTTL = 2 * time.Minute
 // the hole Synaptum named on 2026-09-20: a governed agent could not do anything unauthorized itself, but
 // could ASK A THIRD PARTY to, and the child's tools cross the child's gateway and not ours.
 type A2AEgressHandlers struct {
-	Policy       *policy.Engine
+	// Policy is the per-tenant set (VRT-AEON-005 T-5); the engine is resolved from the caller's
+	// tenant and a tenant with no bundle may delegate nowhere.
+	Policy       *policy.Set
 	RemoteAgents *store.RemoteAgents
 	Delegations  *store.A2ADelegations
 	Broker       *secrets.Broker
@@ -158,7 +161,22 @@ func (h *A2AEgressHandlers) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	span.SetAttributes(attribute.String("aeon.a2a.remote_risk", remote.Risk))
 
-	decision := h.Policy.IsAllowedToDelegate(rec.AgentManifestRef, remoteAgentID)
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: delegation policy is evaluated against the caller's tenant",
+		})
+		return
+	}
+	engine, ok := h.Policy.EngineFor(caller.Tenant)
+	if !ok {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error":  "no policy bundle is loaded for this caller's tenant, so it may delegate nowhere",
+			"tenant": caller.Tenant,
+		})
+		return
+	}
+	decision := engine.IsAllowedToDelegate(rec.AgentManifestRef, remoteAgentID)
 	if !decision.Allowed {
 		// The disposition travels on a delegation refusal for the same reason it does on a tool refusal
 		// (INT-010): whether the loop may try a different destination, must stop, or should ask a person

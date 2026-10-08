@@ -55,7 +55,7 @@ func newEnforcementSeamServer(t *testing.T, checkpointer bool) *httptest.Server 
 		})
 	}
 
-	handlers := &ToolGatewayHandlers{Policy: engine, Executor: executor}
+	handlers := &ToolGatewayHandlers{Policy: policy.SingleTenantSet("default", engine), Executor: executor}
 	mux := http.NewServeMux()
 	if checkpointer {
 		s, err := store.Connect(context.Background(), memoryTestDSN(t))
