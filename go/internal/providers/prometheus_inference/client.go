@@ -286,7 +286,7 @@ type Model struct {
 // models as "this deployment has no vision model" instead of "none is granted to us".
 //
 // TO DISCOVER WHAT THIS CLIENT HOLDS, ask for a token with no `scope` parameter: the response's own
-// `scope` field carries the full granted scope. Measured 2026-10-09 — it returned six models where
+// `scope` field carries the full granted scope. Measured 2026-10-08 — it returned six models where
 // this endpoint had been showing two, three of them modality=vision. A scope-filtered catalogue
 // cannot reveal a grant whose model id you have not already guessed, so the token is the only
 // discovery path. What the DEPLOYMENT hosts remains invisible; only its operator can say.

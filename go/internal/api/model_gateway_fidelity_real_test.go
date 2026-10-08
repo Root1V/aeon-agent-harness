@@ -273,7 +273,7 @@ func TestAdapterFidelityAgainstRealPrometheus(t *testing.T) {
 		t.Run("a vision model SEES the image and names both of its colours", func(t *testing.T) {
 			// THE ASSERTION VERITIUM ASKED FOR, and for a day it could not be made: both models this
 			// client was granted were modality=text, so the only available evidence was the
-			// platform's refusal. Prometheus granted three vision models on 2026-10-09
+			// platform's refusal. Prometheus granted three vision models on 2026-10-08
 			// (qwen3-vl-8b, fara-7b, qwen3vl-30b-a3b) and the assertion is now the answer itself.
 			//
 			// Measured the same day, which is why qwen3-vl-8b is the default: 2.3s and "green \n red",
@@ -401,7 +401,7 @@ func realPrometheusModel() string {
 // models a client is granted is a property of the deployment.
 //
 // The default is qwen3-vl-8b because it was the fastest and cleanest of the three vision models
-// granted on 2026-10-09, measured: 2.3s naming both colours, against 5.8s for qwen3vl-30b-a3b, and a
+// granted on 2026-10-08, measured: 2.3s naming both colours, against 5.8s for qwen3vl-30b-a3b, and a
 // fara-7b that answers correctly and then emits a stray <tool_call> block.
 //
 // A client cannot enumerate what the deployment hosts, but it CAN read back what it was granted: a
