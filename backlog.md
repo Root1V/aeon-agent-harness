@@ -613,6 +613,89 @@ fichero mal nombrado. Sin `down`, a propósito.
   el mismo `name`? ¿un `SuiteReport` guardado explícitamente en el publish anterior?
 - **Coste:** M.
 
+### `sub_run_id` en la identidad de un checkpoint (`VRT-AEON-004`)
+
+- **Descripción:** la clave primaria de `run_checkpoints` es hoy
+  `(tenant_id, run_id, step_id, phase)`. Veritium pidió
+  `PRIMARY KEY (run_id, sub_run_id, step_id, phase)` porque con delegación anidada dos sub-runs
+  distintos del mismo run pueden usar el mismo `step_id`, y entonces el segundo **sobreescribe** al
+  primero sin error. Su frase: *«que un nieto de una delegación perdiera registros sin error sería
+  justo el tipo de fallo que no detectaríamos»*.
+- **Lo acordamos en el canal el 2026-10-07 y NO quedó registrado en ningún sitio de este repo.** Esta
+  entrada existe por eso: un compromiso escrito en un artefacto compartido y ausente de la
+  planificación propia es un compromiso que nadie va a construir, y el único síntoma habría sido
+  Veritium esperando. Misma forma que lleva saliendo toda la semana, aplicada a una promesa en vez de
+  a una afirmación.
+- **Lo que falta exactamente**, con su réplica del 2026-10-08 ya incorporada:
+  - La columna `sub_run_id TEXT NOT NULL DEFAULT ''` — **el centinela en el esquema y no en el
+    cliente**, que es lo único que pidieron de más: *«el centinela lo decide quien guarda los datos;
+    solo pedimos que quede escrito en el esquema y que el cliente no tenga que elegir»*. Un
+    `DEFAULT ''` lo hace explícito y deja a un `HttpCheckpointer` sin sub-run omitiendo el campo.
+  - La clave primaria pasa a `(tenant_id, run_id, sub_run_id, step_id, phase)` — con el `tenant_id`
+    que `GOV-001c` ya le puso delante.
+  - `sub_run_id` se trata como **ruta opaca** (acordado por ambos), no se parsea.
+- **Criterio de entrada:** ninguno, está decidido por las dos partes. Va en una migración versionada
+  (`GOV-002b`), y es destructiva sobre la PK, así que entra como las seis de `0002`.
+- **Criterio de aceptación:** dos sub-runs del mismo run con el mismo `step_id` y la misma `phase`
+  dejan **dos** filas, y cada una se lee con su propio `sub_run_id`.
+  **Control negativo:** con la PK actual, el segundo `Append` deduplica contra el primero y el test
+  cae. `TestCheckpointerDeduplicatesByStepIdentity` seguiría en verde en los dos casos —lo advirtió
+  Veritium al pedirlo— porque comprueba que un duplicado **no** cree una fila, que es lo contrario de
+  lo que hay que distinguir aquí.
+- **Coste:** S.
+
+### El tenant de un paso de un run es el del worker, no el del run
+
+- **Descripción:** siete de las veinte llamadas que derivan el tenant del llamante (`caller.Tenant`)
+  las alcanza **el worker de aeon** durante un run, no el consumidor que lo envió. El worker tiene un
+  token y por tanto un tenant, y `GraphRunWorkflow` no propaga el tenant del run — el memo de
+  `GOV-001e` — a ninguna de ellas: `ActivityPolicyInput` no lleva el campo y `grep tenant`
+  sobre `python/aeon_worker/graph.py` no devuelve nada. En un despliegue compartido con un worker,
+  **todo paso de todo run se evalúa y se contabiliza contra el tenant del worker**.
+
+  Reportado por Veritium (`VRT-AEON-005`, réplica del 2026-10-08) sobre una sola superficie, Cedar
+  por tenant, **medida en vivo en su instancia** contra `d73da2b`. Verificándolo salieron las otras:
+
+  | superficie | sitio | estado |
+  |---|---|---|
+  | Política Cedar de actividad externa | `tool_gateway_handlers.go:80` | medido por Veritium |
+  | Dedupe de ejecución de tools (`T-2`) | `tool_gateway_handlers.go:344` | sospechado por ellos, no medido |
+  | Checkpoints desde el Tool Gateway | `tool_gateway_handlers.go:456` | **no lo nombraron** |
+  | Checkpoints (`INT-009`) | `checkpoint_handlers.go:53,102` | **no lo nombraron** — afecta `VRT-AEON-004` |
+  | Checkpoint del Run Controller | `run_controller_handlers.go:356` | **no lo nombraron** |
+  | Ledger de coste de modelo (`OBS-003`) | `model_gateway_handlers.go:58` | **no lo nombraron** |
+  | Registro de agentes → **techo de coste** | `model_gateway_handlers.go:66` | **no lo nombraron, y es el peor** |
+
+- **Lo peor no es la atribución, es que el techo desaparece.** `overBudget` lee el manifiesto del
+  registro del tenant del llamante; si no está, **registra y deja pasar** (decisión deliberada de
+  `MDL-017`, para no romper despliegues cuyos agentes no están en el registro). Medido el 2026-10-08:
+  agente con techo de **1 token** en `tenant-b`, llamante en `tenant-ops` → la segunda llamada
+  devuelve **200** y el log dice *«no manifest for … so no cost ceiling is enforced»*; el mismo
+  caso con el llamante en `tenant-b` → **402**. Las otras seis superficies desplazan datos de sitio,
+  que es grave y es visible; esta **quita el control y no tiene síntoma**.
+- **Y va en las dos direcciones**, como señaló Veritium: el permit de B nunca se consulta para los
+  runs de B (denegación), y si se copia el permit de B al bundle del tenant del worker para que
+  funcione, ese permit queda disponible para los runs de **cualquier** tenant (fuga de
+  autorización). Es el criterio 3 de `VRT-AEON-005` al revés.
+- **Criterio de entrada:** ninguno. El diseño está decidido y tiene precedente propio: hace falta un
+  llamante de tipo worker **autorizado explícitamente** para hablar por los tenants de los runs que
+  ejecuta —lista explícita, **sin comodín**, exactamente la forma que `auth.Caller.MayActAs` ya tiene
+  para los `agent_manifest_ref`— y para cualquier otro llamante sigue el rechazo actual de
+  `rejectRequestTenant` («una petición que nombra un tenant se rechaza»). Cómo lo transporta el
+  worker es nuestra decisión; el memo del run ya lo tiene (`GOV-001e`).
+- **Criterio de aceptación (de Veritium, adoptado verbatim y ampliado con lo que encontramos):** un
+  worker cuyo llamante es del tenant `ops`; bundles A y B con un permit cada uno para la misma
+  actividad en colas distintas.
+  - Un run enviado por un llamante de B ejecuta la actividad permitida por B.
+  - El mismo grafo enviado por un llamante de A se deniega.
+  - Las filas de coste del run de B quedan en B.
+  - **Ampliación nuestra:** el run de B se **topa** con el techo del manifiesto de B aunque el
+    llamante sea `ops`, y sus checkpoints quedan en B.
+  - **Control negativo:** sin la propagación, el primer caso cae.
+- **Coste:** L. Toca tres lenguajes (el memo en el workflow Python, la cabecera saliente, el
+  llamante en Go) y siete puntos de llamada, y el transporte tiene que respetar `ADR-001`: lo que el
+  workflow pasa a una actividad entra en la historia y tiene que replayar igual.
+
 ### ~~Enforcement de budgets en el endpoint OpenAI-compatible (INT-002)~~ — CERRADA como `MDL-021` el 2026-10-08
 
 > **Cerrada.** Su criterio de entrada era decidir cómo un cliente externo identifica el run: «¿un
