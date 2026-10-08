@@ -69,6 +69,18 @@ type chatCompletionResponse struct {
 			// MDL-016: reasoning models on this platform return their chain of thought here, and
 			// dropping it makes a token-starved answer look like an empty one for no reason.
 			ReasoningContent string `json:"reasoning_content"`
+			// VRT-AEON-003 A-2: the calls the model asked for. Absent from this struct until now, so
+			// a model that answered with a tool call produced a ChatResult with empty content and no
+			// calls — an agent loop reading that sees a model that said nothing and has nothing to
+			// do, which is a plausible-looking end of turn rather than an error.
+			ToolCalls []struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
@@ -120,6 +132,24 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 	}
 
 	choice := parsed.Choices[0]
+
+	// Arguments are decoded HERE, once, and a string that does not parse fails the call (FND-004).
+	// The alternative — passing the raw string up for the loop to parse — moves the decision about
+	// what to do with malformed arguments to a caller that has no way to tell a model's bad JSON from
+	// a transport problem, and the usual outcome is `{}`: the tool runs with no arguments at all.
+	var toolCalls []providers.ToolCall
+	for i, tc := range choice.Message.ToolCalls {
+		args, err := providers.DecodeToolArguments(tc.Function.Arguments)
+		if err != nil {
+			return nil, fmt.Errorf("prometheus_inference: tool call %d (%s): %w", i, tc.Function.Name, err)
+		}
+		toolCalls = append(toolCalls, providers.ToolCall{
+			ID:        tc.ID,
+			Name:      tc.Function.Name,
+			Arguments: args,
+		})
+	}
+
 	return providers.NormalizedChatResponseFrom(providers.ChatResult{
 		ProviderRequestID:  meta.RequestID,
 		IdempotentReplayOf: meta.IdempotentReplayOf,
@@ -128,6 +158,7 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 		Content:            choice.Message.Content,
 		ReasoningContent:   choice.Message.ReasoningContent,
 		FinishReason:       choice.FinishReason,
+		ToolCalls:          toolCalls,
 		Usage: providers.Usage{
 			PromptTokens:     parsed.Usage.PromptTokens,
 			CompletionTokens: parsed.Usage.CompletionTokens,
