@@ -207,9 +207,22 @@ func TestRunControllerLifecycle(t *testing.T) {
 
 	t.Run("cancel while paused reliably reaches CANCELLED", func(t *testing.T) {
 		runID := newRunID("cancel")
-		startRun(t, srv, runID, simpleGraph("cancel-test.txt"))
-		// Same pause trick, but this time to make the cancel target deterministic: without it, a
-		// single-node graph might already be SUCCEEDED before the cancel request lands.
+		// A LOOP AND NOT A SINGLE NODE, and the margin is the point.
+		//
+		// This used to start a one-node graph and pause it, with a comment explaining that waiting
+		// for PAUSED rather than sleeping was what made it reliable. It was reliable by exactly one
+		// round trip: VRT-AEON-005 added a DescribeWorkflowExecution before the pause signal — the
+		// run's tenant has to be read before an operation is allowed on it — and the one-node run
+		// started winning. Measured: removing that single Describe makes this pass in 0.2s, keeping
+		// it makes it time out at 15s.
+		//
+		// The guard is not the thing to drop, so the run gets a real margin instead: 200 iterations
+		// of the same node take long enough that two round trips cannot beat them. A test whose
+		// correctness is one network call wide is a test that will fail on somebody else's machine.
+		startRun(t, srv, runID, map[string]any{
+			"id": "root", "kind": "loop", "max_iterations": 200,
+			"body": simpleGraph("cancel-test.txt"),
+		})
 		postAction(t, srv, runID, "pause")
 		// Wait for the run to actually report PAUSED rather than sleeping and hoping. A fixed sleep
 		// loses this race under load — observed for real: the workflow completed before the pause

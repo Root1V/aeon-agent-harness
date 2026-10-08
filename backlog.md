@@ -84,14 +84,22 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   cross-run.
 - **Coste:** XL.
 
-### Multi-tenancy real (aislamiento fuerte por tenant)
+### ~~Multi-tenancy real (aislamiento fuerte por tenant)~~ — CERRADA el 2026-10-08 como `GOV-001`
 
-- **Descripción:** hoy `tenant_id` está en los contratos pero el despliegue es mono-tenant. Aislamiento
-  de datos/policy/secretos por tenant es F5 (`GOV-001`).
-- **Fase objetivo:** F5.
-- **Criterio de entrada:** un segundo equipo/organización necesita desplegar sobre la misma
-  instancia sin ver datos de otros.
-- **Coste:** XL.
+Su criterio de entrada era «un segundo equipo/organización necesita desplegar sobre la misma
+instancia sin ver datos de otros», y también decía que el aislamiento fuerte debía diseñarse **contra
+los requisitos de quien lo pidiera**. Veritium lo pidió con los siete requisitos escritos
+(`VRT-AEON-005`), que es la forma en que esta entrada esperaba ser cerrada.
+
+Entregada en cinco rodajas, cada una verificable sola: `GOV-002b` (migraciones versionadas, el
+prerrequisito), `GOV-001b` (`T-1`+`T-7`), `GOV-001c` (`T-2`+`T-3`+`T-4`), `GOV-001d` (`T-5`) y
+`GOV-001e` (`T-6`).
+
+**Lo que queda fuera y por qué, dicho y no omitido:** residencia de datos por región y cuotas por
+tenant (el vecino ruidoso) — Veritium las dejó explícitamente fuera del pedido. RLS quedó como
+**sugerencia y no requisito** por decisión suya: lo exigido era el comportamiento, con un test
+negativo por tabla. Si el endurecimiento de producción pide aislamiento a nivel de rol de base de
+datos, llega como solicitud aparte.
 
 ### ~~No hay CI~~ — CERRADA el 2026-10-01, promovida como `CI-001`
 

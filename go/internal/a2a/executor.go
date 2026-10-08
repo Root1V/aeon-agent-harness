@@ -53,7 +53,7 @@ func (e *AeonAgentExecutor) Execute(ctx context.Context, reqCtx *a2asrv.RequestC
 		return fmt.Errorf("a2a: write working event: %w", err)
 	}
 
-	if _, err := e.Controller.Start(ctx, runID, e.Graph, nil, e.AgentManifestRef); err != nil {
+	if _, err := e.Controller.Start(ctx, runID, e.Graph, nil, e.AgentManifestRef, e.Tenant); err != nil {
 		return e.writeTerminal(ctx, reqCtx, q, sdka2a.TaskStateFailed, "starting the run: "+err.Error())
 	}
 
