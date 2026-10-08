@@ -219,41 +219,18 @@ toca este código: lo único que tiene que producir es el fichero.
   código nuestro: es una decisión de despliegue más un `sidecar`/`agent` que escriba el fichero.
 - **Coste:** S por nuestro lado (nada que cambiar), L por el del entorno.
 
-### `TestA2ATaskLifecycle` tiene una carrera: el run puede terminar antes de que llegue el cancel
+### ~~`TestA2ATaskLifecycle` tiene una carrera~~ — CERRADA el 2026-10-07
 
-- **Descripción:** observado una vez en CI (run 37128354650, job `integration (go, ...)`):
-  `canceling_a_task_reaches_canceled_and_really_cancels_the_underlying_Aeon_run` falló con
-  `CancelTask: internal error` en 0.05s, mientras el subtest hermano pasaba. **No reprodujo** en el
-  run siguiente con los mismos contenedores, y no está en el camino de ningún cambio de `SEC-006` —
-  el test usa Temporal y Postgres reales más un ejecutor en-proceso, y los tres servicios que
-  `SEC-006` tocó no participan. El test espera `TaskStateWorking` y entonces cancela; si el bucle de
-  50 iteraciones termina en esa ventana, `Controller.Cancel` falla contra un workflow que ya no corre
-  y el SDK lo envuelve como `internal error`. O sea que el fallo es correcto y la **premisa** del test
-  es la que es frágil.
-- **Fase objetivo:** antes de que alguien aprenda a re-lanzar este job por costumbre, que es el coste
-  real de un test intermitente.
-- **Criterio de entrada:** ninguno; es nuestro. Lo que falta es decidir **qué** afirmar: o el grafo se
-  bloquea de verdad (un `pause`, como hace `run_controller_handlers_test.go`) en vez de depender de
-  que 50 iteraciones tarden lo suficiente, o cancelar un run ya terminado se considera un estado
-  válido y el test acepta `completed` como desenlace alternativo. Lo primero prueba la cancelación;
-  lo segundo deja de probarla.
-- **Coste:** S.
+Volvió a ponerse rojo en CI (run 37705790205) con el mismo `CancelTask: internal error`, así que se
+arregló en vez de anotarse otra vez — **un test intermitente que se registra dos veces es un test que
+se re-lanza por costumbre**, que era el coste que la entrada original nombraba.
 
-### Los puertos del stack colisionan con otros proyectos del ecosistema, y MinIO es el peor caso
-
-- **Descripción:** señalado por Veritium (`VRT-AEON-002`, pregunta 4) y confirmado peor de lo que
-  decían. Publicamos 7233 y 8080, que argus también usa. Y **publicamos MinIO en el 9000 del host**,
-  que es exactamente el puerto que nuestro propio `.env.example` documenta para
-  `PROMETHEUS_AUTH_URL=http://127.0.0.1:9000` — levantar este compose y la plataforma Prometheus en
-  la misma máquina colisiona, y el servicio que colisiona es el que esta misma lista registra como
-  **sin ningún consumidor**. Además publicamos en `0.0.0.0` mientras argus se ata a `127.0.0.1`, que
-  es lo que `SEC-005` anotó al descubrir que quien alcanzara el 9404 podía aprobar runs.
-- **Fase objetivo:** antes de que dos stacks del ecosistema convivan en una máquina que no sea la del
-  dueño del proyecto.
-- **Criterio de entrada:** ninguno para la parte nuestra (dejar de publicar MinIO, atar a loopback,
-  hacer overridables los puertos de Temporal y su UI). La **convención** de bandas por stack sí
-  necesita acuerdo de ARG/PRM/SYN/VRT — propuesta puesta en el canal, sin respuesta todavía.
-- **Coste:** S lo nuestro; la convención es coordinación.
+El arreglo es el que la entrada ya proponía: el run se **pausa** antes del cancel. Dependía de que un
+bucle de 50 iteraciones tardara más que el viaje de «observado working» a «cancel enviado»; cuando
+ganaba el bucle, `Controller.Cancel` se dirigía a un workflow ya terminado y Temporal lo decía. El
+fallo era correcto y la **premisa** era lo frágil. Un run pausado está aparcado en
+`workflow.wait_condition`: está de verdad en vuelo y de verdad no puede terminar. Verificado 5 veces
+seguidas, 10/10 subtests.
 
 ### ~~El esquema de Postgres no tiene migraciones versionadas~~ — CERRADA el 2026-10-07
 
