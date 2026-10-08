@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -174,7 +173,13 @@ func TestCircuitBreakerQuarantinesVersion(t *testing.T) {
 	})
 
 	t.Run("unquarantine reverses the block", func(t *testing.T) {
-		resp, err := http.Post(srv.URL+"/agents/"+name+"/"+version+"/unquarantine", "application/json", bytes.NewReader([]byte("{}")))
+		// Authorized like every other call in this file. It was the one plain http.Post left, so it
+		// was the only one that broke when VRT-AEON-005 made the registry take its tenant from the
+		// caller — and it broke in CI and not locally, because this test needs Temporal and skips
+		// without it. A single unauthorized request in a suite that otherwise authorizes everything
+		// is invisible until the handler starts needing the identity.
+		resp := postJSONAuthed(t, srv.URL+"/agents/"+name+"/"+version+"/unquarantine", []byte("{}"))
+		var err error
 		if err != nil {
 			t.Fatalf("POST unquarantine: %v", err)
 		}
