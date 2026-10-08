@@ -60,7 +60,7 @@ func TestTheDeploymentRefusesCallersItCannotIdentify(t *testing.T) {
 		return map[string]any{"status": "executed"}, nil
 	})
 	mux := http.NewServeMux()
-	(&ToolGatewayHandlers{Policy: engine, Executor: executor}).Register(mux)
+	(&ToolGatewayHandlers{Policy: policy.SingleTenantSet("default", engine), Executor: executor}).Register(mux)
 	// A zero-valued RunControllerHandlers on purpose: every assertion below is a refusal that happens
 	// before the controller is reached, and giving it a real one would hide an ordering mistake — a
 	// guard that ran AFTER the signal was delivered would still return 403 and the test would pass.

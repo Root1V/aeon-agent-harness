@@ -42,7 +42,7 @@ func newSecretBrokerTestServer(t *testing.T, secretValues map[string]string) (*h
 	toolexec.RegisterSecretsTool(executor, broker)
 
 	mux := http.NewServeMux()
-	(&ToolGatewayHandlers{Policy: engine, Executor: executor}).Register(mux)
+	(&ToolGatewayHandlers{Policy: policy.SingleTenantSet("default", engine), Executor: executor}).Register(mux)
 	(&SecretBrokerHandlers{Broker: broker}).Register(mux)
 
 	srv := httptest.NewServer(authWrap(t, mux, "secrets-test-agent@1.0.0", "some-other-agent@1.0.0"))

@@ -54,7 +54,7 @@ func newDedupeTestServer(t *testing.T, tool *countingTool, toolName string, with
 	executor := toolexec.NewExecutor()
 	tool.register(executor, toolName)
 
-	handlers := &ToolGatewayHandlers{Policy: engine, Executor: executor}
+	handlers := &ToolGatewayHandlers{Policy: policy.SingleTenantSet("default", engine), Executor: executor}
 	if withStore {
 		handlers.Executions = newAPITestStore(t)
 	}
@@ -222,7 +222,7 @@ func TestToolExecutionIsDeduplicatedByIdempotencyKey(t *testing.T) {
 			t.Fatalf("loading Cedar engine: %v", err)
 		}
 		mux := http.NewServeMux()
-		(&ToolGatewayHandlers{Policy: engine, Executor: executor, Executions: newAPITestStore(t)}).Register(mux)
+		(&ToolGatewayHandlers{Policy: policy.SingleTenantSet("default", engine), Executor: executor, Executions: newAPITestStore(t)}).Register(mux)
 		srv := httptest.NewServer(authWrap(t, mux, "deep-research-general@0.1.0"))
 		t.Cleanup(srv.Close)
 

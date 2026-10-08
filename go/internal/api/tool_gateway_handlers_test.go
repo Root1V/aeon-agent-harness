@@ -55,7 +55,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	})
 
 	mux := http.NewServeMux()
-	handlers := &ToolGatewayHandlers{Policy: engine, Executor: executor}
+	handlers := &ToolGatewayHandlers{Policy: policy.SingleTenantSet("default", engine), Executor: executor}
 	handlers.Register(mux)
 
 	srv := httptest.NewServer(authWrap(t, mux, "deep-research-general@0.1.0", "some-other-agent@1.0.0"))

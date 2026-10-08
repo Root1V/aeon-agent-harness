@@ -18,8 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/aeon-ai/aeon/go/internal/api"
@@ -53,26 +51,42 @@ func main() {
 		defer shutdown(context.Background())
 	}
 
+	// VRT-AEON-005 T-5: ONE BUNDLE PER TENANT, selected by the caller's tenant at request time.
+	//
+	// Two ways to configure it and exactly one may be set, refused otherwise for the reason
+	// secretref gives about two sources for one secret: with both, a change applied to the one that
+	// loses has no effect and nothing fails.
+	//
+	//   AEON_POLICY_BUNDLE_DIR   a directory of <tenant>.yaml — the multi-tenant deployment.
+	//   AEON_POLICY_BUNDLE_PATH  one bundle, serving the tenant AEON_TENANT_ID names. The same file
+	//                            a single-tenant deployment already had, except that it now serves
+	//                            ONE NAMED tenant instead of whoever called — the old meaning was
+	//                            implicit and is the thing this slice removes.
+	bundleDir := os.Getenv("AEON_POLICY_BUNDLE_DIR")
 	bundlePath := os.Getenv("AEON_POLICY_BUNDLE_PATH")
-	if bundlePath == "" {
-		log.Fatal("aeon-toolgw: AEON_POLICY_BUNDLE_PATH is required")
+	if bundleDir != "" && bundlePath != "" {
+		log.Fatal("aeon-toolgw: AEON_POLICY_BUNDLE_DIR and AEON_POLICY_BUNDLE_PATH are both set; remove one — " +
+			"with two sources for the policy set, a change to the one that loses has no effect and nothing fails")
+	}
+	if bundleDir == "" && bundlePath == "" {
+		log.Fatal("aeon-toolgw: one of AEON_POLICY_BUNDLE_DIR or AEON_POLICY_BUNDLE_PATH is required")
 	}
 
-	raw, err := os.ReadFile(bundlePath)
+	var policies *policy.Set
+	var err error
+	if bundleDir != "" {
+		policies, err = policy.LoadSetFromDir(bundleDir)
+	} else {
+		tenant := os.Getenv("AEON_TENANT_ID")
+		if tenant == "" {
+			tenant = "default"
+		}
+		policies, err = policy.LoadSetForSingleTenant(tenant, bundlePath)
+	}
 	if err != nil {
-		log.Fatalf("aeon-toolgw: reading policy bundle %s: %v", bundlePath, err)
+		log.Fatalf("aeon-toolgw: %v", err)
 	}
-
-	var doc policy.PolicyBundleDoc
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
-		log.Fatalf("aeon-toolgw: parsing policy bundle %s: %v", bundlePath, err)
-	}
-
-	engine, err := policy.LoadEngine(doc)
-	if err != nil {
-		log.Fatalf("aeon-toolgw: loading Cedar policies from %s: %v", bundlePath, err)
-	}
-	log.Printf("aeon-toolgw: loaded %d Cedar polic(ies) from %s", len(doc.Policies), bundlePath)
+	log.Printf("aeon-toolgw: policy loaded for tenant(s): %s — a caller from any other tenant is denied", policies)
 
 	executor := toolexec.NewExecutor()
 
@@ -163,7 +177,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	handlers := &api.ToolGatewayHandlers{
-		Policy:   engine,
+		Policy:   policies,
 		Executor: executor,
 	}
 	handlers.Register(mux)
@@ -213,7 +227,7 @@ func main() {
 		// radius (depth is Synaptum's), but picking a number for someone else's deployment would be
 		// inventing a bound rather than enforcing one they chose.
 		egress := &api.A2AEgressHandlers{
-			Policy:             engine,
+			Policy:             policies,
 			RemoteAgents:       s.RemoteAgentsFor(deploymentTenant),
 			Delegations:        s.A2ADelegationsFor(deploymentTenant),
 			Broker:             broker,
@@ -246,7 +260,14 @@ func main() {
 		if err != nil {
 			log.Fatalf("aeon-toolgw: listing the Tool Registry for the MCP server: %v", err)
 		}
-		mcpServer, catalog := aeonmcp.NewToolGatewayCatalog(tools, engine, executor)
+		// The MCP catalog is built once at startup, like the tool executor, so it serves the
+		// DEPLOYMENT's tenant. A gateway serving several tenants needs this per-request too —
+		// said here rather than discovered, same as the other startup-built surfaces above.
+		mcpEngine, ok := policies.EngineFor(deploymentTenant)
+		if !ok {
+			log.Fatalf("aeon-toolgw: the MCP catalog needs a policy bundle for tenant %q and none is loaded", deploymentTenant)
+		}
+		mcpServer, catalog := aeonmcp.NewToolGatewayCatalog(tools, mcpEngine, executor)
 		mux.Handle("/mcp", sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return mcpServer }, &sdkmcp.StreamableHTTPOptions{Stateless: true}))
 		// The count reported is the DISTINCT TOOLS exposed, not the registry rows read. List returns every
 		// version of every tool, so the old message said "213 tool(s)" for a catalogue of a handful — a

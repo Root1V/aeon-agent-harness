@@ -39,7 +39,7 @@ func TestSchedulingExternalWorkIsItsOwnAuthorization(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	(&ToolGatewayHandlers{Policy: engine, Executor: toolexec.NewExecutor()}).Register(mux)
+	(&ToolGatewayHandlers{Policy: policy.SingleTenantSet("default", engine), Executor: toolexec.NewExecutor()}).Register(mux)
 	const agent = "deep-research-general@0.1.0"
 	srv := httptest.NewServer(authWrap(t, mux, agent))
 	t.Cleanup(srv.Close)

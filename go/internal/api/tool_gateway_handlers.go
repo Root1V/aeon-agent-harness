@@ -32,7 +32,10 @@ var toolGatewayTracer = otel.Tracer("aeon-toolgw")
 // path that reaches the Executor without going through Policy.IsAllowed — see docs/adr/0001's
 // "policy check after argument generation, before execution" rule.
 type ToolGatewayHandlers struct {
-	Policy   *policy.Engine
+	// Policy is the SET — one Cedar engine per tenant (VRT-AEON-005 T-5). Resolved per request from
+	// the caller's tenant, and a tenant with no bundle is DENIED rather than falling back to
+	// somebody else's permits.
+	Policy   *policy.Set
 	Executor *toolexec.Executor
 	// Executions is the STORE, not a dedupe handle, since VRT-AEON-005: the handle is derived per
 	// request from the caller's tenant (store.ToolExecutionsFor), because a handle built once at
@@ -57,6 +60,35 @@ type ToolGatewayHandlers struct {
 }
 
 // Register mounts the tool gateway routes on mux.
+
+// engineFor resolves the Cedar engine for the caller's tenant, writing the refusal itself when there
+// is none.
+//
+// THREE REFUSALS, AND THEY SAY DIFFERENT THINGS ON PURPOSE. No caller means this route was mounted
+// without auth.Require — a wiring mistake, and answering anyway is how an unauthenticated surface
+// comes back. No bundle for the tenant means governance has not been written for them yet, which is
+// a deployment gap and not a policy decision; it must not resolve to another tenant's engine,
+// because a permit applying where nobody wrote it is the exact defect A2A-002 and RUN-006 both hit.
+func (h *ToolGatewayHandlers) engineFor(w http.ResponseWriter, r *http.Request) (*policy.Engine, string, bool) {
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: policy is evaluated against the caller's tenant (SEC-005/VRT-AEON-005)",
+		})
+		return nil, "", false
+	}
+	engine, ok := h.Policy.EngineFor(caller.Tenant)
+	if !ok {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"error": "no policy bundle is loaded for this caller's tenant, so nothing is authorized for it. " +
+				"A missing bundle is a denial and never a fallback to another tenant's policies",
+			"tenant": caller.Tenant,
+		})
+		return nil, "", false
+	}
+	return engine, caller.Tenant, true
+}
+
 func (h *ToolGatewayHandlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /check-policy", h.checkPolicy)
 	mux.HandleFunc("POST /check-activity-policy", h.checkActivityPolicy)
@@ -85,7 +117,11 @@ func (h *ToolGatewayHandlers) checkPolicy(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	decision := h.Policy.IsAllowed(body.AgentManifestRef, body.ToolName)
+	engine, _, ok := h.engineFor(w, r)
+	if !ok {
+		return
+	}
+	decision := engine.IsAllowed(body.AgentManifestRef, body.ToolName)
 	writeJSON(w, http.StatusOK, decision)
 }
 
@@ -144,7 +180,11 @@ func (h *ToolGatewayHandlers) checkActivityPolicy(w http.ResponseWriter, r *http
 		return
 	}
 
-	decision := h.Policy.IsAllowedToRunActivity(body.AgentManifestRef, body.ActivityName, body.TaskQueue)
+	engine, _, ok := h.engineFor(w, r)
+	if !ok {
+		return
+	}
+	decision := engine.IsAllowedToRunActivity(body.AgentManifestRef, body.ActivityName, body.TaskQueue)
 	writeJSON(w, http.StatusOK, decision)
 }
 
@@ -193,7 +233,11 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	decision := h.Policy.IsAllowed(body.AgentManifestRef, body.ToolName)
+	engine, _, ok := h.engineFor(w, r)
+	if !ok {
+		return
+	}
+	decision := engine.IsAllowed(body.AgentManifestRef, body.ToolName)
 	if !decision.Allowed {
 		// NOT codes.Error, and this corrects a contradiction that sat in this file for a while: the
 		// MarkGuardrail comment said a policy denial is the system working correctly and must not be
