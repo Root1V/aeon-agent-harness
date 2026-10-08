@@ -115,7 +115,7 @@ func newStreamingTestServer(t *testing.T, upstream *fakeStreamingUpstream) *http
 
 	mux := http.NewServeMux()
 	(&OpenAICompatibleHandlers{Gateway: gw, Bundle: bundle}).Register(mux)
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -132,7 +132,7 @@ func postStream(t *testing.T, ctx context.Context, url string, stream bool) *htt
 		t.Fatalf("building request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(authorize(req))
 	if err != nil {
 		t.Fatalf("POST /v1/chat/completions: %v", err)
 	}

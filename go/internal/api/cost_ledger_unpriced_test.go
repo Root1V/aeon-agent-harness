@@ -38,7 +38,7 @@ func TestCostLedgerDistinguishesUnpricedFromFree(t *testing.T) {
 	// second run against the same one — rows from the earlier run were still there and CallCount
 	// came back 3. A test that fails only sometimes is the kind that gets silenced rather than
 	// fixed, so the isolation is part of the test, not a convenience.
-	newServer := func(t *testing.T, ledger *store.FinOpsLedger, provider, model, costModel string, in, out float64) *httptest.Server {
+	newServer := func(t *testing.T, ledgerStore *store.Store, provider, model, costModel string, in, out float64) *httptest.Server {
 		t.Helper()
 		upstream := fakeChatUpstream(t, model)
 		gw := modelgateway.New()
@@ -54,8 +54,8 @@ func TestCostLedgerDistinguishesUnpricedFromFree(t *testing.T) {
 			})
 		}
 		mux := http.NewServeMux()
-		(&ModelGatewayHandlers{Gateway: gw, Pricing: finops.NewPricingTable(rates), Ledger: ledger}).Register(mux)
-		srv := httptest.NewServer(mux)
+		(&ModelGatewayHandlers{Gateway: gw, Pricing: finops.NewPricingTable(rates), Ledger: ledgerStore}).Register(mux)
+		srv := httptest.NewServer(authWrap(t, mux))
 		t.Cleanup(srv.Close)
 		return srv
 	}
@@ -73,12 +73,13 @@ func TestCostLedgerDistinguishesUnpricedFromFree(t *testing.T) {
 	}
 
 	t.Run("a compute_based call is recorded with no cost, not with zero", func(t *testing.T) {
-		ledger := newAPITestStore(t).FinOpsLedger()
+		ledgerStore := newAPITestStore(t)
+		ledger := ledgerStore.FinOpsLedgerFor("default")
 		// A compute_based rate really is configured — examples/deep-research's bundle declares one
 		// — it just carries no per-token price.
 		provider, model := "prometheus_inference", "gpt-oss-20b-mxfp4-"+randSuffix(t)
 
-		body := decide(t, newServer(t, ledger, provider, model, "compute_based", 0, 0), provider, model)
+		body := decide(t, newServer(t, ledgerStore, provider, model, "compute_based", 0, 0), provider, model)
 
 		// The /decide response was already honest: it omits cost_usd when nothing was priced.
 		if _, present := body["cost_usd"]; present {
@@ -101,10 +102,11 @@ func TestCostLedgerDistinguishesUnpricedFromFree(t *testing.T) {
 	t.Run("a genuinely free call is recorded as zero, and stays distinguishable from it", func(t *testing.T) {
 		// This is the half that makes the previous subtest mean something. If "unpriced" were the
 		// only representable state we would have swapped one merged fact for another.
-		ledger := newAPITestStore(t).FinOpsLedger()
+		ledgerStore := newAPITestStore(t)
+		ledger := ledgerStore.FinOpsLedgerFor("default")
 		provider, model := "openai", "free-tier-model-"+randSuffix(t)
 
-		body := decide(t, newServer(t, ledger, provider, model, "token_based", 0, 0), provider, model)
+		body := decide(t, newServer(t, ledgerStore, provider, model, "token_based", 0, 0), provider, model)
 		if body["cost_usd"] != float64(0) {
 			t.Errorf("cost_usd = %v, want 0 — this model is priced, and its price is zero", body["cost_usd"])
 		}
@@ -123,12 +125,13 @@ func TestCostLedgerDistinguishesUnpricedFromFree(t *testing.T) {
 
 	t.Run("a model with no configured rate still leaves a row", func(t *testing.T) {
 		// The renamed-model case: recordCost used to return here, before the insert.
-		ledger := newAPITestStore(t).FinOpsLedger()
+		ledgerStore := newAPITestStore(t)
+		ledger := ledgerStore.FinOpsLedgerFor("default")
 		provider := "prometheus_inference"
 		model := "gpt-oss-20b-mxfp4-renamed-" + randSuffix(t)
 
 		// No rate at all for this (provider, model) — the renamed-model case.
-		decide(t, newServer(t, ledger, provider, model, "", 0, 0), provider, model)
+		decide(t, newServer(t, ledgerStore, provider, model, "", 0, 0), provider, model)
 
 		row := findCostRow(t, ledger, provider, model)
 		if row.CallCount != 1 {
@@ -146,7 +149,8 @@ func TestCostLedgerDistinguishesUnpricedFromFree(t *testing.T) {
 		// An aggregate cannot carry the row-level distinction, so the count travels next to it.
 		// Without that count the total is a lower bound wearing the shape of an exact figure — the
 		// same mistake as the zero, one level up.
-		ledger := newAPITestStore(t).FinOpsLedger()
+		ledgerStore := newAPITestStore(t)
+		ledger := ledgerStore.FinOpsLedgerFor("default")
 		provider, model := "openai", "partial-"+randSuffix(t)
 
 		priced := 0.30
@@ -171,7 +175,8 @@ func TestCostLedgerDistinguishesUnpricedFromFree(t *testing.T) {
 	})
 
 	t.Run("the dashboard never prints a figure where it has none", func(t *testing.T) {
-		ledger := newAPITestStore(t).FinOpsLedger()
+		ledgerStore := newAPITestStore(t)
+		ledger := ledgerStore.FinOpsLedgerFor("default")
 		computeBased := "compute_based"
 		if err := ledger.Record(ctx, store.CostEntry{
 			Provider: "prometheus_inference", Model: "dash-" + randSuffix(t),
@@ -181,9 +186,11 @@ func TestCostLedgerDistinguishesUnpricedFromFree(t *testing.T) {
 		}
 
 		mux := http.NewServeMux()
-		(&FinOpsHandlers{Ledger: ledger}).Register(mux)
+		(&FinOpsHandlers{Ledger: ledgerStore}).Register(mux)
 		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/finops/costs", nil))
+		// Served through auth.Require, not the bare mux: the handler takes the tenant from the
+		// caller, and a bare mux has no caller to take one from.
+		authWrap(t, mux).ServeHTTP(rec, authorize(httptest.NewRequest(http.MethodGet, "/finops/costs", nil)))
 
 		page := rec.Body.String()
 		if !strings.Contains(page, "&mdash;") {

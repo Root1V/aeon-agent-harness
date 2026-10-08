@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/finops"
 	"github.com/aeon-ai/aeon/go/internal/modelgateway"
 	"github.com/aeon-ai/aeon/go/internal/store"
@@ -25,14 +26,46 @@ import (
 type ModelGatewayHandlers struct {
 	Gateway *modelgateway.Gateway
 	Pricing *finops.PricingTable
-	Ledger  *store.FinOpsLedger
+	// VRT-AEON-005: the STORE, with the ledger derived per request from the caller's tenant — a
+	// handle built at startup would be one tenant's for every caller. Nil-safe as before.
+	Ledger *store.Store
 	// Agents is the registry the cost ceiling is read from (MDL-017). Optional: without it no ceiling
 	// is enforced, which is reported at startup rather than assumed — a gateway that silently stops
 	// enforcing budgets is worse than one that never did.
-	Agents *store.AgentRegistry
+	Agents *store.Store
 }
 
 // Register mounts the model gateway routes on mux.
+// tenantOf resolves the caller's tenant, or reports that there is no caller. Nil-safe stores keep
+// their old meaning: a deployment without Postgres has no ledger and no ceiling, which is reported
+// at startup, and that is unchanged by tenancy.
+func (h *ModelGatewayHandlers) tenantOf(r *http.Request) (string, bool) {
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		return "", false
+	}
+	return caller.Tenant, true
+}
+
+// ledgerFor is nil when this deployment has no ledger OR when there is no caller to scope it to.
+// The second case matters: a cost row written without a tenant would land in whichever tenant the
+// column defaults to, which is somebody else's bill.
+func (h *ModelGatewayHandlers) ledgerFor(r *http.Request) *store.FinOpsLedger {
+	tenant, ok := h.tenantOf(r)
+	if !ok || h.Ledger == nil {
+		return nil
+	}
+	return h.Ledger.FinOpsLedgerFor(tenant)
+}
+
+func (h *ModelGatewayHandlers) agentsFor(r *http.Request) *store.AgentRegistry {
+	tenant, ok := h.tenantOf(r)
+	if !ok || h.Agents == nil {
+		return nil
+	}
+	return h.Agents.AgentRegistryFor(tenant)
+}
+
 func (h *ModelGatewayHandlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /decide", h.decide)
 }
@@ -156,7 +189,7 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 		// MEASURED zero. nil here would say "nobody knows", which would be false — we know exactly.
 		zeroTokens := 0
 		promptTokens, completionTokens = &zeroTokens, &zeroTokens
-		if h.Ledger != nil {
+		if ledger := h.ledgerFor(r); ledger != nil {
 			zero := 0.0
 			entry := store.CostEntry{
 				Provider: result.ProviderUsed, Model: result.Model,
@@ -172,7 +205,7 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 				ServedModel:        servedModel,
 				ServedByInstance:   servedByInstance,
 			}
-			if err := h.Ledger.Record(r.Context(), entry); err != nil {
+			if err := ledger.Record(r.Context(), entry); err != nil {
 				log.Printf("aeon-modelgw: recording FinOps replay event: %v", err)
 			}
 		}
@@ -198,7 +231,8 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 		}
 	}
 
-	if h.Ledger == nil {
+	ledger := h.ledgerFor(r)
+	if ledger == nil {
 		return
 	}
 	cacheRead, cacheWrite := usageCacheTokens(result.Output)
@@ -221,7 +255,7 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 		ServedByInstance:  servedByInstance,
 		ReasoningTokens:   reasoning,
 	}
-	if err := h.Ledger.Record(r.Context(), entry); err != nil {
+	if err := ledger.Record(r.Context(), entry); err != nil {
 		log.Printf("aeon-modelgw: recording FinOps cost event: %v", err)
 	}
 }
@@ -323,14 +357,15 @@ func (h *ModelGatewayHandlers) overBudget(r *http.Request, runID, agentRef strin
 	// A call that names no run cannot be capped: there is nothing to sum. Same for a call that names no
 	// agent — the ceiling lives in the manifest. Both are legitimate (a script, an eval), and the
 	// gateway's startup log says whether enforcement is configured at all.
-	if h.Agents == nil || h.Ledger == nil || runID == "" || agentRef == "" {
+	agents, ledger := h.agentsFor(r), h.ledgerFor(r)
+	if agents == nil || ledger == nil || runID == "" || agentRef == "" {
 		return nil
 	}
 	name, version, ok := splitManifestRef(agentRef)
 	if !ok {
 		return nil
 	}
-	record, err := h.Agents.Get(r.Context(), name, version)
+	record, err := agents.Get(r.Context(), name, version)
 	if err != nil || record == nil {
 		// An unregistered agent is not capped, and this is the one place that decision is worth
 		// disagreeing with later: refusing would make the ceiling fail closed, at the cost of breaking
@@ -347,7 +382,7 @@ func (h *ModelGatewayHandlers) overBudget(r *http.Request, runID, agentRef strin
 		return nil
 	}
 
-	spend, err := h.Ledger.SpendForRun(r.Context(), runID)
+	spend, err := ledger.SpendForRun(r.Context(), runID)
 	if err != nil {
 		// The ledger is unreachable, so the spend is unknown. Allowing the call is the deliberate
 		// choice: a database blip would otherwise stop every run in flight, and the failure mode of

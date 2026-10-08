@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/checkpoint"
+	"github.com/aeon-ai/aeon/go/internal/store"
 )
 
 // CheckpointHandlers exposes INT-009's durability seam over HTTP. This is what makes it a seam at
@@ -19,7 +21,10 @@ import (
 // loop's to answer, and putting it here would move a decision to the side of the seam that agreed
 // not to make any.
 type CheckpointHandlers struct {
-	Checkpointer checkpoint.Checkpointer
+	// VRT-AEON-005: the store, with the checkpointer derived per request from the caller's tenant.
+	// Before migration 0002 the journal key was (run_id, step_id, phase) and the per-run sequence was
+	// UNIQUE (run_id, seq), so two tenants using the same run id shared one journal and one sequence.
+	Store *store.Store
 }
 
 // Register mounts the checkpoint routes on mux.
@@ -38,6 +43,14 @@ type appendCheckpointRequest struct {
 // answers 201. Both are successes — the seam's contract is that a caller under at-least-once
 // execution must never have to distinguish a retry from a first attempt in order to stay correct.
 func (h *CheckpointHandlers) append(w http.ResponseWriter, r *http.Request) {
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: the run journal is scoped to the caller's tenant (VRT-AEON-005)",
+		})
+		return
+	}
+	checkpointer := h.Store.CheckpointerFor(caller.Tenant)
 	var body appendCheckpointRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -55,7 +68,7 @@ func (h *CheckpointHandlers) append(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := h.Checkpointer.Append(r.Context(), entry)
+	res, err := checkpointer.Append(r.Context(), entry)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -79,7 +92,15 @@ type runStateResponse struct {
 }
 
 func (h *CheckpointHandlers) load(w http.ResponseWriter, r *http.Request) {
-	state, err := h.Checkpointer.Load(r.Context(), r.PathValue("run_id"))
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: the run journal is scoped to the caller's tenant (VRT-AEON-005)",
+		})
+		return
+	}
+	checkpointer := h.Store.CheckpointerFor(caller.Tenant)
+	state, err := checkpointer.Load(r.Context(), r.PathValue("run_id"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

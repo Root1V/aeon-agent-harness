@@ -81,8 +81,8 @@ func newDeniedOutcomeGateway(t *testing.T) *httptest.Server {
 	})
 
 	mux := http.NewServeMux()
-	(&ToolGatewayHandlers{Policy: engine, Executor: executor, Checkpointer: s.Checkpointer()}).Register(mux)
-	(&CheckpointHandlers{Checkpointer: s.Checkpointer()}).Register(mux)
+	(&ToolGatewayHandlers{Policy: engine, Executor: executor, Checkpointer: s}).Register(mux)
+	(&CheckpointHandlers{Store: s}).Register(mux)
 	srv := httptest.NewServer(authWrap(t, mux, deniedOutcomeAgent))
 	t.Cleanup(srv.Close)
 	return srv
@@ -283,9 +283,9 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 
 		mux := http.NewServeMux()
 		(&RunControllerHandlers{
-			Controller: runcontroller.New(c, ""), Checkpointer: s.Checkpointer(),
+			Controller: runcontroller.New(c, ""), Checkpointer: s,
 		}).Register(mux)
-		(&CheckpointHandlers{Checkpointer: s.Checkpointer()}).Register(mux)
+		(&CheckpointHandlers{Store: s}).Register(mux)
 		srv := httptest.NewServer(authWrap(t, mux, deniedOutcomeAgent))
 		t.Cleanup(srv.Close)
 
@@ -356,9 +356,9 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 
 		mux := http.NewServeMux()
 		(&RunControllerHandlers{
-			Controller: runcontroller.New(c, ""), Checkpointer: s.Checkpointer(),
+			Controller: runcontroller.New(c, ""), Checkpointer: s,
 		}).Register(mux)
-		(&CheckpointHandlers{Checkpointer: s.Checkpointer()}).Register(mux)
+		(&CheckpointHandlers{Store: s}).Register(mux)
 		srv := httptest.NewServer(authWrap(t, mux, deniedOutcomeAgent))
 		t.Cleanup(srv.Close)
 

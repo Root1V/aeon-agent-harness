@@ -33,7 +33,7 @@ func (f *finOpsFakeProvider) CostModel() string         { return f.costModel }
 // fabricated per-token price.
 func TestFinOpsDashboardShowsRealCostPerModel(t *testing.T) {
 	s := newAPITestStore(t)
-	ledger := s.FinOpsLedger()
+	ledgerStore := s
 
 	tokenModel := "finops-test-model-" + randSuffix(t)
 	computeModel := "finops-test-local-" + randSuffix(t)
@@ -48,9 +48,9 @@ func TestFinOpsDashboardShowsRealCostPerModel(t *testing.T) {
 	gw.RegisterProvider("fake-compute", &finOpsFakeProvider{costModel: "compute_based"})
 
 	mux := http.NewServeMux()
-	(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger}).Register(mux)
-	(&FinOpsHandlers{Ledger: ledger}).Register(mux)
-	srv := httptest.NewServer(mux)
+	(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledgerStore}).Register(mux)
+	(&FinOpsHandlers{Ledger: ledgerStore}).Register(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 
 	// 1000 prompt + 500 completion tokens at $10/$30 per million = 0.01 + 0.015 = $0.025.

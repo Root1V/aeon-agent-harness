@@ -16,12 +16,19 @@ import (
 // same rows the audit trail does — splitting them would let a run's traffic be under-counted while
 // looking fully recorded.
 type A2ADelegations struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	tenant string
 }
 
 // A2ADelegations returns a handle for A2A-002's delegation ledger.
-func (s *Store) A2ADelegations() *A2ADelegations {
-	return &A2ADelegations{pool: s.pool}
+// A2ADelegationsFor returns the handle SCOPED TO ONE TENANT (VRT-AEON-005 T-4).
+//
+// The tenant is a CONSTRUCTOR argument, not a method parameter, and that is the seam: slice 2 found
+// the Memory Store's isolation implemented route by route — four routes read the tenant from the
+// request and five checked none at all — because every method was a separate chance to forget. A
+// handle that cannot exist without a tenant makes the compiler answer that once, here.
+func (s *Store) A2ADelegationsFor(tenant string) *A2ADelegations {
+	return &A2ADelegations{pool: s.pool, tenant: tenant}
 }
 
 // Delegation is one proxied call to a remote agent.
@@ -119,8 +126,9 @@ func (d *A2ADelegations) Open(ctx context.Context, opts OpenOptions) (*Delegatio
 		var inFlight int
 		if err := tx.QueryRow(ctx,
 			`SELECT count(*) FROM a2a_delegations
-			   WHERE run_id = $1 AND completed_at IS NULL AND created_at > now() - $2::interval`,
-			rec.RunID, fmt.Sprintf("%d seconds", int(staleAfter.Seconds())),
+			   WHERE tenant_id = $3 AND run_id = $1 AND completed_at IS NULL
+			     AND created_at > now() - $2::interval`,
+			rec.RunID, fmt.Sprintf("%d seconds", int(staleAfter.Seconds())), d.tenant,
 		).Scan(&inFlight); err != nil {
 			return nil, fmt.Errorf("store: counting in-flight delegations for run %s: %w", rec.RunID, err)
 		}
@@ -131,10 +139,10 @@ func (d *A2ADelegations) Open(ctx context.Context, opts OpenOptions) (*Delegatio
 
 	var out Delegation
 	err = tx.QueryRow(ctx,
-		`INSERT INTO a2a_delegations (run_id, step_id, agent_manifest_ref, remote_agent_id, rpc_method, hop_depth)
-		 VALUES (NULLIF($1, ''), NULLIF($2, ''), $3, $4, $5, $6)
+		`INSERT INTO a2a_delegations (tenant_id, run_id, step_id, agent_manifest_ref, remote_agent_id, rpc_method, hop_depth)
+		 VALUES ($7, NULLIF($1, ''), NULLIF($2, ''), $3, $4, $5, $6)
 		 RETURNING id, created_at`,
-		rec.RunID, rec.StepID, rec.AgentManifestRef, rec.RemoteAgentID, rec.RPCMethod, rec.HopDepth,
+		rec.RunID, rec.StepID, rec.AgentManifestRef, rec.RemoteAgentID, rec.RPCMethod, rec.HopDepth, d.tenant,
 	).Scan(&out.ID, &out.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("store: opening delegation to %q: %w", rec.RemoteAgentID, err)
@@ -223,9 +231,10 @@ func (d *A2ADelegations) CloseByTaskID(ctx context.Context, runID, remoteTaskID,
 func (d *A2ADelegations) RecordDenial(ctx context.Context, rec Delegation, reason string) error {
 	_, err := d.pool.Exec(ctx,
 		`INSERT INTO a2a_delegations
-		   (run_id, step_id, agent_manifest_ref, remote_agent_id, rpc_method, hop_depth, denied_reason, completed_at)
-		 VALUES (NULLIF($1, ''), NULLIF($2, ''), $3, $4, $5, $6, $7, now())`,
-		rec.RunID, rec.StepID, rec.AgentManifestRef, rec.RemoteAgentID, rec.RPCMethod, rec.HopDepth, reason)
+		   (tenant_id, run_id, step_id, agent_manifest_ref, remote_agent_id, rpc_method, hop_depth, denied_reason, completed_at)
+		 VALUES ($8, NULLIF($1, ''), NULLIF($2, ''), $3, $4, $5, $6, $7, now())`,
+		rec.RunID, rec.StepID, rec.AgentManifestRef, rec.RemoteAgentID, rec.RPCMethod, rec.HopDepth, reason, d.tenant,
+	)
 	if err != nil {
 		return fmt.Errorf("store: recording denied delegation to %q: %w", rec.RemoteAgentID, err)
 	}
@@ -238,7 +247,7 @@ func (d *A2ADelegations) ForRun(ctx context.Context, runID string) ([]Delegation
 		`SELECT id, COALESCE(run_id, ''), COALESCE(step_id, ''), agent_manifest_ref, remote_agent_id,
 		        rpc_method, COALESCE(remote_task_id, ''), COALESCE(task_state, ''), terminal, hop_depth,
 		        COALESCE(denied_reason, ''), created_at, completed_at
-		   FROM a2a_delegations WHERE run_id = $1 ORDER BY id`, runID)
+		   FROM a2a_delegations WHERE tenant_id = $2 AND run_id = $1 ORDER BY id`, runID, d.tenant)
 	if err != nil {
 		return nil, fmt.Errorf("store: listing delegations for run %s: %w", runID, err)
 	}

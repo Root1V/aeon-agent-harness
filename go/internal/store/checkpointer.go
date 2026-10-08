@@ -15,7 +15,8 @@ import (
 // Checkpointer is the Postgres-backed implementation of INT-009's durability seam
 // (checkpoint.Checkpointer). See go/internal/checkpoint for the contract and migrations/ for the DDL.
 type Checkpointer struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	tenant string
 }
 
 var _ checkpoint.Checkpointer = (*Checkpointer)(nil)
@@ -53,8 +54,8 @@ func (c *Checkpointer) Append(ctx context.Context, entry checkpoint.Entry) (chec
 	var same bool
 	err = tx.QueryRow(ctx,
 		`SELECT seq, payload IS NOT DISTINCT FROM $4::jsonb
-		   FROM run_checkpoints WHERE run_id = $1 AND step_id = $2 AND phase = $3`,
-		entry.RunID, entry.StepID, string(entry.Phase), payload,
+		   FROM run_checkpoints WHERE tenant_id = $5 AND run_id = $1 AND step_id = $2 AND phase = $3`,
+		entry.RunID, entry.StepID, string(entry.Phase), payload, c.tenant,
 	).Scan(&existingSeq, &same)
 	switch {
 	case err == nil:
@@ -68,10 +69,11 @@ func (c *Checkpointer) Append(ctx context.Context, entry checkpoint.Entry) (chec
 
 	var seq int64
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO run_checkpoints (run_id, step_id, phase, seq, payload)
-		 SELECT $1, $2, $3, COALESCE(MAX(seq), -1) + 1, $4::jsonb FROM run_checkpoints WHERE run_id = $1
+		`INSERT INTO run_checkpoints (tenant_id, run_id, step_id, phase, seq, payload)
+		 SELECT $5, $1, $2, $3, COALESCE(MAX(seq), -1) + 1, $4::jsonb
+		   FROM run_checkpoints WHERE tenant_id = $5 AND run_id = $1
 		 RETURNING seq`,
-		entry.RunID, entry.StepID, string(entry.Phase), payload,
+		entry.RunID, entry.StepID, string(entry.Phase), payload, c.tenant,
 	).Scan(&seq); err != nil {
 		return checkpoint.AppendResult{}, fmt.Errorf("store: appending checkpoint: %w", err)
 	}
@@ -87,8 +89,9 @@ func (c *Checkpointer) Load(ctx context.Context, runID string) (*checkpoint.RunS
 		return nil, fmt.Errorf("store: run_id is required to load checkpoints")
 	}
 	rows, err := c.pool.Query(ctx,
-		`SELECT step_id, phase, seq, payload, recorded_at FROM run_checkpoints WHERE run_id = $1 ORDER BY seq`,
-		runID,
+		`SELECT step_id, phase, seq, payload, recorded_at
+		   FROM run_checkpoints WHERE tenant_id = $2 AND run_id = $1 ORDER BY seq`,
+		runID, c.tenant,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store: loading checkpoints for run %s: %w", runID, err)

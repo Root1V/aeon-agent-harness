@@ -80,7 +80,7 @@ func newModalityTestServer(t *testing.T) (*httptest.Server, *countingProvider) {
 
 	mux := http.NewServeMux()
 	(&OpenAICompatibleHandlers{Gateway: gw, Bundle: bundle}).Register(mux)
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 	return srv, provider
 }

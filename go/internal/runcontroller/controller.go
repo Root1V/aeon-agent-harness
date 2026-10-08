@@ -31,7 +31,9 @@ type Controller struct {
 	TaskQueue string
 	// Ledger is where a run's real cost and token count come from (MDL-018). Optional: without it the
 	// status omits them rather than reporting zeros, which is the defect it exists to remove.
-	Ledger *store.FinOpsLedger
+	// VRT-AEON-005: the store. A run's spend is a TENANT's spend, so the handle is derived from the
+	// tenant the caller passes to Status rather than fixed when the Controller is built.
+	Ledger *store.Store
 }
 
 // WorkflowIDPrefix is what a run id becomes as a Temporal workflow id. Named once here because
@@ -196,7 +198,7 @@ type Status struct {
 // Status fetches a run's current status. budgets_consumed (RUN-003) is queried regardless of
 // terminal-ness — Temporal answers queries against a closed workflow by replaying its history, so
 // this still reports accurate counts after e.g. a budget-triggered failure.
-func (c *Controller) Status(ctx context.Context, workflowID string) (*Status, error) {
+func (c *Controller) Status(ctx context.Context, workflowID, tenant string) (*Status, error) {
 	desc, err := c.Client.DescribeWorkflowExecution(ctx, workflowID, "")
 	if err != nil {
 		return nil, fmt.Errorf("runcontroller: describe: %w", err)
@@ -216,7 +218,7 @@ func (c *Controller) Status(ctx context.Context, workflowID string) (*Status, er
 	if val, err := c.Client.QueryWorkflow(ctx, workflowID, "", "budgets_consumed"); err == nil {
 		_ = val.Get(&budgetsConsumed)
 	}
-	c.addLedgerSpend(ctx, workflowID, &budgetsConsumed)
+	c.addLedgerSpend(ctx, workflowID, tenant, &budgetsConsumed)
 
 	return &Status{
 		WorkflowID:      workflowID,
@@ -267,14 +269,14 @@ func mapStatus(s enumspb.WorkflowExecutionStatus, paused, hasPendingApproval boo
 // WITHOUT A LEDGER THEY STAY ABSENT, which is the whole point. A deployment with no AEON_PG_DSN knows
 // nothing about what a run spent, and saying so is the only honest answer — a zero there would be the
 // defect this function exists to remove, reintroduced by its own fallback.
-func (c *Controller) addLedgerSpend(ctx context.Context, workflowID string, consumed *map[string]any) {
-	if c.Ledger == nil {
+func (c *Controller) addLedgerSpend(ctx context.Context, workflowID, tenant string, consumed *map[string]any) {
+	if c.Ledger == nil || tenant == "" {
 		return
 	}
 	// The run id is the workflow id minus the prefix this controller adds when it starts a run, because
 	// the ledger is keyed by the run id the CALLER chose.
 	runID := strings.TrimPrefix(workflowID, WorkflowIDPrefix)
-	spend, err := c.Ledger.SpendForRun(ctx, runID)
+	spend, err := c.Ledger.FinOpsLedgerFor(tenant).SpendForRun(ctx, runID)
 	if err != nil {
 		log.Printf("runcontroller: cannot read spend for run %s, so its status omits cost: %v", runID, err)
 		return

@@ -5,6 +5,7 @@ import (
 	"html"
 	"net/http"
 
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/store"
 )
 
@@ -19,7 +20,9 @@ import (
 // total regardless. An unpriced call now renders as "—" and is counted separately, so the page
 // never puts a figure where it has none.
 type FinOpsHandlers struct {
-	Ledger *store.FinOpsLedger
+	// VRT-AEON-005 T-2: the store. GET /finops/costs sums the CALLER'S tenant and nothing else —
+	// cost per case is a business and audit fact, and another project must not be able to read it.
+	Ledger *store.Store
 }
 
 // AttributionTotalView is store.AttributionTotal under the name this page uses. Aliased rather than
@@ -33,19 +36,27 @@ func (h *FinOpsHandlers) Register(mux *http.ServeMux) {
 }
 
 func (h *FinOpsHandlers) showCosts(w http.ResponseWriter, r *http.Request) {
-	totals, err := h.Ledger.TotalsByModel(r.Context())
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: costs are scoped to the caller's tenant (VRT-AEON-005)",
+		})
+		return
+	}
+	ledger := h.Ledger.FinOpsLedgerFor(caller.Tenant)
+	totals, err := ledger.TotalsByModel(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	// OBS-003b: read before anything is written, so a failure here is a 500 and not a half-rendered
 	// page with a 200 already on the wire.
-	byRun, err := h.Ledger.TotalsByRun(r.Context())
+	byRun, err := ledger.TotalsByRun(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	byAgent, err := h.Ledger.TotalsByAgent(r.Context())
+	byAgent, err := ledger.TotalsByAgent(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

@@ -56,7 +56,7 @@ func newDedupeTestServer(t *testing.T, tool *countingTool, toolName string, with
 
 	handlers := &ToolGatewayHandlers{Policy: engine, Executor: executor}
 	if withStore {
-		handlers.Executions = newAPITestStore(t).ToolExecutions()
+		handlers.Executions = newAPITestStore(t)
 	}
 
 	mux := http.NewServeMux()
@@ -222,7 +222,7 @@ func TestToolExecutionIsDeduplicatedByIdempotencyKey(t *testing.T) {
 			t.Fatalf("loading Cedar engine: %v", err)
 		}
 		mux := http.NewServeMux()
-		(&ToolGatewayHandlers{Policy: engine, Executor: executor, Executions: newAPITestStore(t).ToolExecutions()}).Register(mux)
+		(&ToolGatewayHandlers{Policy: engine, Executor: executor, Executions: newAPITestStore(t)}).Register(mux)
 		srv := httptest.NewServer(authWrap(t, mux, "deep-research-general@0.1.0"))
 		t.Cleanup(srv.Close)
 
@@ -337,7 +337,7 @@ func TestToolExecutionIsDeduplicatedByIdempotencyKey(t *testing.T) {
 
 		// And nothing was claimed, so the key is still free.
 		s := newAPITestStore(t)
-		claim, err := s.ToolExecutions().Claim(context.Background(), key, "shell.exec", agentRef, map[string]any{"command": "echo hi"})
+		claim, err := s.ToolExecutionsFor("default").Claim(context.Background(), key, "shell.exec", agentRef, map[string]any{"command": "echo hi"})
 		if err != nil {
 			t.Fatalf("claiming the key afterwards: %v", err)
 		}

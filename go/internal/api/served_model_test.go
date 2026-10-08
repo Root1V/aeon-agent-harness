@@ -60,7 +60,7 @@ func (p *disagreeingProvider) CostModel() string         { return "token_based" 
 func TestServedModelIsRecordedWhenItDiffers(t *testing.T) {
 	ctx := context.Background()
 
-	newServer := func(t *testing.T, ledger *store.FinOpsLedger, provider providers.Provider, model string) *httptest.Server {
+	newServer := func(t *testing.T, ledgerStore *store.Store, provider providers.Provider, model string) *httptest.Server {
 		t.Helper()
 		gw := modelgateway.New()
 		gw.RegisterProvider("test-provider", provider)
@@ -69,8 +69,8 @@ func TestServedModelIsRecordedWhenItDiffers(t *testing.T) {
 			InputPerMillionUSD: 1, OutputPerMillionUSD: 2,
 		}})
 		mux := http.NewServeMux()
-		(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger}).Register(mux)
-		srv := httptest.NewServer(mux)
+		(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledgerStore}).Register(mux)
+		srv := httptest.NewServer(authWrap(t, mux))
 		t.Cleanup(srv.Close)
 		return srv
 	}
@@ -88,9 +88,10 @@ func TestServedModelIsRecordedWhenItDiffers(t *testing.T) {
 	}
 
 	t.Run("a served model that differs is reported, not left to be deduced", func(t *testing.T) {
-		ledger := newAPITestStore(t).FinOpsLedger()
+		ledgerStore := newAPITestStore(t)
+		ledger := ledgerStore.FinOpsLedgerFor("default")
 		requested := "profile-model-" + randSuffix(t)
-		srv := newServer(t, ledger, &disagreeingProvider{servedModel: "actually-served-2", instance: "inst-7"}, requested)
+		srv := newServer(t, ledgerStore, &disagreeingProvider{servedModel: "actually-served-2", instance: "inst-7"}, requested)
 
 		body := decide(t, srv, requested)
 
@@ -128,9 +129,10 @@ func TestServedModelIsRecordedWhenItDiffers(t *testing.T) {
 		// when a provider says nothing about the instance, the column stays empty rather than being
 		// filled with the requested model: "served what we asked" and "never said" are different facts,
 		// and only one of them can be reconciled later.
-		ledger := newAPITestStore(t).FinOpsLedger()
+		ledgerStore := newAPITestStore(t)
+		ledger := ledgerStore.FinOpsLedgerFor("default")
 		requested := "agreeing-model-" + randSuffix(t)
-		srv := newServer(t, ledger, &disagreeingProvider{servedModel: requested}, requested)
+		srv := newServer(t, ledgerStore, &disagreeingProvider{servedModel: requested}, requested)
 
 		body := decide(t, srv, requested)
 
@@ -159,7 +161,8 @@ func TestServedModelIsRecordedWhenItDiffers(t *testing.T) {
 			t.Skip("Prometheus credentials not set — the recording path is verified against the real platform or not at all")
 		}
 
-		ledger := newAPITestStore(t).FinOpsLedger()
+		ledgerStore := newAPITestStore(t)
+		ledger := ledgerStore.FinOpsLedgerFor("default")
 		client := &prometheusinference.Client{
 			GatewayURL: gateway, ClientID: clientID, ClientSecret: secret,
 			Scope: "inference:read model:" + model,
@@ -171,8 +174,8 @@ func TestServedModelIsRecordedWhenItDiffers(t *testing.T) {
 			InputPerMillionUSD: 0.2, OutputPerMillionUSD: 0.6,
 		}})
 		mux := http.NewServeMux()
-		(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger}).Register(mux)
-		srv := httptest.NewServer(mux)
+		(&ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledgerStore}).Register(mux)
+		srv := httptest.NewServer(authWrap(t, mux))
 		t.Cleanup(srv.Close)
 
 		status, body := postDecide(t, srv, decideRequest{

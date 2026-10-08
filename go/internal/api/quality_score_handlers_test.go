@@ -27,7 +27,7 @@ func TestQualityAwareRoutingChangesWithADegradedScore(t *testing.T) {
 	mux := http.NewServeMux()
 	(&ModelGatewayHandlers{Gateway: gw}).Register(mux)
 	(&QualityScoreHandlers{Scores: scores}).Register(mux)
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 
 	decideBody := decideRequest{

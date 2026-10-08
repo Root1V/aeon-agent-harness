@@ -73,19 +73,20 @@ func main() {
 
 	verifyDeclaredModalities(bundle)
 
-	var ledger *store.FinOpsLedger
+	var ledger *store.Store
 	var qualityScores *store.QualityScoreStore
 	// MDL-017: the agent registry, for the cost ceiling the manifest declares.
-	var agents *store.AgentRegistry
+	var agents *store.Store
 	if dsn := os.Getenv("AEON_PG_DSN"); dsn != "" {
 		s, err := store.Connect(context.Background(), dsn)
 		if err != nil {
 			log.Fatalf("aeon-modelgw: connecting to Postgres for the FinOps ledger / quality scores: %v", err)
 		}
 		defer s.Close()
-		ledger = s.FinOpsLedger()
+		// VRT-AEON-005: the store, with the tenant-scoped handle derived per request.
+		ledger = s
 		log.Println("aeon-modelgw: FinOps cost ledger live (GET /finops/costs)")
-		agents = s.AgentRegistry()
+		agents = s
 
 		qualityScores = s.QualityScores(qualityScoreThreshold())
 		gw.Quality = qualityScores

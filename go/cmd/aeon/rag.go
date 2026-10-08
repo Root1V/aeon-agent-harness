@@ -63,7 +63,15 @@ func runRagIndex(dir, corpus string) error {
 		ModelID: model,
 	}
 
-	ragStore := s.RagStore()
+	// VRT-AEON-005: the CLI indexes into the tenant named by AEON_TENANT_ID, defaulting to the same
+	// "default" the migration backfilled and the shipped caller bundles declare. The CLI is a
+	// person's tool and has no caller bundle, so the operator's environment is the only place the
+	// tenant can come from here — stated rather than silently assumed.
+	tenant := os.Getenv("AEON_TENANT_ID")
+	if tenant == "" {
+		tenant = "default"
+	}
+	ragStore := s.RagStoreFor(tenant)
 	var files, chunks int
 	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {

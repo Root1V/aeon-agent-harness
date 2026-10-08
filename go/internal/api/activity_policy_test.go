@@ -93,7 +93,7 @@ func TestSchedulingExternalWorkIsItsOwnAuthorization(t *testing.T) {
 		// Reaching the handler with no authenticated caller means the route was mounted without
 		// auth.Require. Answering anyway is how an unauthenticated route comes back one wiring
 		// mistake at a time, so the handler refuses instead of trusting the body.
-		bare := httptest.NewServer(mux)
+		bare := httptest.NewServer(authWrap(t, mux))
 		t.Cleanup(bare.Close)
 		encoded, _ := json.Marshal(map[string]any{
 			"agent_manifest_ref": agent, "activity_name": "acme.process_item", "task_queue": "q",

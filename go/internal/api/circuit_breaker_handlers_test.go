@@ -77,7 +77,8 @@ func releaseRealAgent(t *testing.T, registry *store.AgentRegistry, name, version
 // reverses the block.
 func TestCircuitBreakerQuarantinesVersion(t *testing.T) {
 	s := newAPITestStore(t)
-	registry := s.AgentRegistry()
+	registryStore := s
+	registry := s.AgentRegistryFor("default")
 	name := "circuit-breaker-test-agent-" + randSuffix(t)
 	version := "0.1.0"
 	releaseRealAgent(t, registry, name, version)
@@ -93,10 +94,10 @@ func TestCircuitBreakerQuarantinesVersion(t *testing.T) {
 	temporalClient := testTemporalClient(t)
 
 	mux := http.NewServeMux()
-	(&CircuitBreakerHandlers{Registry: registry, Breaker: breaker, Secrets: broker}).Register(mux)
-	(&RunControllerHandlers{Controller: runcontroller.New(temporalClient, "test-queue-"+randSuffix(t)), Registry: registry}).Register(mux)
+	(&CircuitBreakerHandlers{Registry: registryStore, Breaker: breaker, Secrets: broker}).Register(mux)
+	(&RunControllerHandlers{Controller: runcontroller.New(temporalClient, "test-queue-"+randSuffix(t)), Registry: registryStore}).Register(mux)
 
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 
 	postOutcome := func(success bool) (int, map[string]any) {
@@ -207,15 +208,16 @@ func postStartRun(t *testing.T, srv *httptest.Server, runID, agentManifestRef st
 // can quarantine a Released version immediately, with no rolling-window threshold involved at all.
 func TestQuarantineHandlerIsAKillSwitchRegardlessOfBreakerState(t *testing.T) {
 	s := newAPITestStore(t)
-	registry := s.AgentRegistry()
+	registryStore := s
+	registry := s.AgentRegistryFor("default")
 	name := "kill-switch-test-agent-" + randSuffix(t)
 	version := "0.1.0"
 	releaseRealAgent(t, registry, name, version)
 
 	breaker := circuitbreaker.New(circuitbreaker.DefaultThresholds)
 	mux := http.NewServeMux()
-	(&CircuitBreakerHandlers{Registry: registry, Breaker: breaker}).Register(mux)
-	srv := httptest.NewServer(mux)
+	(&CircuitBreakerHandlers{Registry: registryStore, Breaker: breaker}).Register(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 
 	body, _ := json.Marshal(quarantineRequest{Reason: "operator-triggered kill switch, suspected data exfiltration"})
@@ -238,7 +240,8 @@ func TestQuarantineHandlerIsAKillSwitchRegardlessOfBreakerState(t *testing.T) {
 // a real, distinguishable HTTP status (409) rather than a generic 500.
 func TestQuarantineRejectsNonReleasedVersion(t *testing.T) {
 	s := newAPITestStore(t)
-	registry := s.AgentRegistry()
+	registryStore := s
+	registry := s.AgentRegistryFor("default")
 	name := "draft-agent-" + randSuffix(t)
 	version := "0.1.0"
 	ctx := context.Background()
@@ -254,8 +257,8 @@ func TestQuarantineRejectsNonReleasedVersion(t *testing.T) {
 
 	breaker := circuitbreaker.New(circuitbreaker.DefaultThresholds)
 	mux := http.NewServeMux()
-	(&CircuitBreakerHandlers{Registry: registry, Breaker: breaker}).Register(mux)
-	srv := httptest.NewServer(mux)
+	(&CircuitBreakerHandlers{Registry: registryStore, Breaker: breaker}).Register(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 
 	body, _ := json.Marshal(quarantineRequest{Reason: "should not apply to a Draft"})

@@ -20,7 +20,7 @@ func newInferenceClassTestServer(t *testing.T, profiles []modelgateway.ModelProf
 
 	mux := http.NewServeMux()
 	(&OpenAICompatibleHandlers{Gateway: gw, Bundle: modelgateway.ModelPolicyBundleDoc{Profiles: profiles}}).Register(mux)
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 	return srv, provider
 }

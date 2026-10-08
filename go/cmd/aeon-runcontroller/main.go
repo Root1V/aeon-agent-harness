@@ -20,7 +20,6 @@ import (
 
 	"github.com/aeon-ai/aeon/go/internal/api"
 	"github.com/aeon-ai/aeon/go/internal/auth"
-	"github.com/aeon-ai/aeon/go/internal/checkpoint"
 	"github.com/aeon-ai/aeon/go/internal/httpserver"
 	"github.com/aeon-ai/aeon/go/internal/runcontroller"
 	"github.com/aeon-ai/aeon/go/internal/store"
@@ -67,26 +66,26 @@ func main() {
 	}
 	defer temporalClient.Close()
 
-	var registry *store.AgentRegistry
-	var checkpointer checkpoint.Checkpointer
+	var registry *store.Store
+	var checkpointer *store.Store
 	// MDL-018: where a run's real cost and token count come from. Without it the status endpoint omits
 	// them instead of reporting zeros.
-	var ledger *store.FinOpsLedger
+	var ledger *store.Store
 	if dsn := os.Getenv("AEON_PG_DSN"); dsn != "" {
 		s, err := store.Connect(context.Background(), dsn)
 		if err != nil {
 			log.Fatalf("aeon-runcontroller: connecting to Postgres for the circuit breaker check: %v", err)
 		}
 		defer s.Close()
-		registry = s.AgentRegistry()
+		registry = s
 		log.Println("aeon-runcontroller: circuit breaker enforcement live (a quarantined agent_manifest_ref will be refused)")
 
 		// INT-011: a person's approval decision is journalled as a known outcome, because the person decides
 		// while the loop is not running and only this process witnesses it.
-		checkpointer = s.Checkpointer()
+		checkpointer = s
 		log.Println("aeon-runcontroller: approval decisions journalled as known outcomes (INT-011)")
 
-		ledger = s.FinOpsLedger()
+		ledger = s
 		log.Println("aeon-runcontroller: GET /runs/{id} reports real cost and tokens from the FinOps ledger (MDL-018)")
 	} else {
 		log.Println("aeon-runcontroller: AEON_PG_DSN not set — circuit breaker enforcement skipped (see A5 in roadmap.md), approval decisions not journalled (INT-011), and run status OMITS cost/tokens rather than reporting zeros (MDL-018)")

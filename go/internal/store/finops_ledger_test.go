@@ -11,7 +11,7 @@ import (
 // computed in Go from a re-read of individual rows.
 func TestFinOpsLedgerRecordsAndAggregatesRealCosts(t *testing.T) {
 	s := newTestStore(t)
-	ledger := s.FinOpsLedger()
+	ledger := s.FinOpsLedgerFor("default")
 	ctx := context.Background()
 
 	// A unique model name per test run avoids collisions with rows any other test run left behind
@@ -68,7 +68,7 @@ func TestFinOpsLedgerRecordsAndAggregatesRealCosts(t *testing.T) {
 
 func TestFinOpsLedgerRecordWithoutRunIDStoresNull(t *testing.T) {
 	s := newTestStore(t)
-	ledger := s.FinOpsLedger()
+	ledger := s.FinOpsLedgerFor("default")
 	ctx := context.Background()
 	model := "test-model-no-run-" + randSuffix(t)
 

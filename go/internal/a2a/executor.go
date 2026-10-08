@@ -22,6 +22,12 @@ const defaultPollInterval = 250 * time.Millisecond
 // construction time: an incoming A2A message's content isn't yet translated into a graph spec of
 // its own (see backlog.md) — every task this executor runs executes the same graph.
 type AeonAgentExecutor struct {
+	// Tenant the runs this executor starts belong to (VRT-AEON-005). Declared when the executor is
+	// built rather than read per request, because an A2A task arrives over its own protocol and
+	// carries no Aeon caller — so the deployment that mounts this executor is what decides, and it
+	// has to say so instead of inheriting whichever tenant a column defaults to.
+	Tenant string
+
 	Controller *runcontroller.Controller
 	Graph      map[string]any
 	// AgentManifestRef is the principal the Tool Gateway evaluates policy against for runs started
@@ -68,7 +74,7 @@ func (e *AeonAgentExecutor) Execute(ctx context.Context, reqCtx *a2asrv.RequestC
 			// one).
 			return ctx.Err()
 		case <-ticker.C:
-			status, err := e.Controller.Status(ctx, workflowID)
+			status, err := e.Controller.Status(ctx, workflowID, e.Tenant)
 			if err != nil {
 				return e.writeTerminal(ctx, reqCtx, q, sdka2a.TaskStateFailed, "checking run status: "+err.Error())
 			}

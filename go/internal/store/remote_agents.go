@@ -35,12 +35,19 @@ type RemoteAgentRecord struct {
 
 // RemoteAgents is the Postgres-backed registry of delegation destinations.
 type RemoteAgents struct {
-	pool *pgxpool.Pool
+	pool   *pgxpool.Pool
+	tenant string
 }
 
 // RemoteAgents returns a handle for A2A-002's remote agent registry.
-func (s *Store) RemoteAgents() *RemoteAgents {
-	return &RemoteAgents{pool: s.pool}
+// RemoteAgentsFor returns the handle SCOPED TO ONE TENANT (VRT-AEON-005 T-4).
+//
+// The tenant is a CONSTRUCTOR argument, not a method parameter, and that is the seam: slice 2 found
+// the Memory Store's isolation implemented route by route — four routes read the tenant from the
+// request and five checked none at all — because every method was a separate chance to forget. A
+// handle that cannot exist without a tenant makes the compiler answer that once, here.
+func (s *Store) RemoteAgentsFor(tenant string) *RemoteAgents {
+	return &RemoteAgents{pool: s.pool, tenant: tenant}
 }
 
 // Declare registers a delegation destination, or updates one already declared.
@@ -65,13 +72,13 @@ func (r *RemoteAgents) Declare(ctx context.Context, rec RemoteAgentRecord) (*Rem
 
 	var out RemoteAgentRecord
 	err := r.pool.QueryRow(ctx,
-		`INSERT INTO remote_agents (agent_id, url, risk, description, credential_secret_name)
-		 VALUES ($1, $2, $3, NULLIF($4, ''), NULLIF($5, ''))
-		 ON CONFLICT (agent_id) DO UPDATE SET
+		`INSERT INTO remote_agents (tenant_id, agent_id, url, risk, description, credential_secret_name)
+		 VALUES ($6, $1, $2, $3, NULLIF($4, ''), NULLIF($5, ''))
+		 ON CONFLICT (tenant_id, agent_id) DO UPDATE SET
 		   url = EXCLUDED.url, risk = EXCLUDED.risk, description = EXCLUDED.description,
 		   credential_secret_name = EXCLUDED.credential_secret_name, updated_at = now()
 		 RETURNING agent_id, url, risk, COALESCE(description, ''), COALESCE(credential_secret_name, ''), created_at, updated_at`,
-		rec.AgentID, rec.URL, rec.Risk, rec.Description, rec.CredentialSecretName,
+		rec.AgentID, rec.URL, rec.Risk, rec.Description, rec.CredentialSecretName, r.tenant,
 	).Scan(&out.AgentID, &out.URL, &out.Risk, &out.Description, &out.CredentialSecretName, &out.CreatedAt, &out.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("store: declaring remote agent %q: %w", rec.AgentID, err)
@@ -84,7 +91,7 @@ func (r *RemoteAgents) Get(ctx context.Context, agentID string) (*RemoteAgentRec
 	var out RemoteAgentRecord
 	err := r.pool.QueryRow(ctx,
 		`SELECT agent_id, url, risk, COALESCE(description, ''), COALESCE(credential_secret_name, ''), created_at, updated_at
-		   FROM remote_agents WHERE agent_id = $1`, agentID,
+		   FROM remote_agents WHERE tenant_id = $2 AND agent_id = $1`, agentID, r.tenant,
 	).Scan(&out.AgentID, &out.URL, &out.Risk, &out.Description, &out.CredentialSecretName, &out.CreatedAt, &out.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w: %s", ErrRemoteAgentNotDeclared, agentID)
@@ -99,7 +106,7 @@ func (r *RemoteAgents) Get(ctx context.Context, agentID string) (*RemoteAgentRec
 func (r *RemoteAgents) List(ctx context.Context) ([]RemoteAgentRecord, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT agent_id, url, risk, COALESCE(description, ''), COALESCE(credential_secret_name, ''), created_at, updated_at
-		   FROM remote_agents ORDER BY created_at, agent_id`)
+		   FROM remote_agents WHERE tenant_id = $1 ORDER BY created_at, agent_id`, r.tenant)
 	if err != nil {
 		return nil, fmt.Errorf("store: listing remote agents: %w", err)
 	}

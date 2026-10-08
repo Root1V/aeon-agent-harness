@@ -59,7 +59,7 @@ func newRealToolGatewayServer(t *testing.T) *httptest.Server {
 	}
 	t.Cleanup(s.Close)
 
-	registry := s.ToolRegistry()
+	registry := s.ToolRegistryFor("default")
 	searchToolID := "search.web." + uuid.NewString()
 	_, err = registry.Create(ctx, map[string]any{
 		"tool_id":     searchToolID,

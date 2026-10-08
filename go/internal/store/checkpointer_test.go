@@ -21,7 +21,7 @@ import (
 
 func newTestCheckpointer(t *testing.T) *Checkpointer {
 	t.Helper()
-	return newTestStore(t).Checkpointer()
+	return newTestStore(t).CheckpointerFor("default")
 }
 
 func newCheckpointRunID(label string) string {

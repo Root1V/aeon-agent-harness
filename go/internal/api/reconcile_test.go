@@ -76,7 +76,8 @@ func TestLedgerTotalsReconcileWithPlatformUsage(t *testing.T) {
 
 	t.Run("a real call lands in our ledger with the platform's own id", func(t *testing.T) {
 		s := newAPITestStore(t)
-		ledger := s.FinOpsLedger()
+		ledgerStore := s
+		ledger := s.FinOpsLedgerFor("default")
 
 		// The rate here is deliberately the platform's real one for this model, discovered by asking
 		// it rather than assumed: our bundle declared these models compute_based with no per-token
@@ -88,11 +89,11 @@ func TestLedgerTotalsReconcileWithPlatformUsage(t *testing.T) {
 
 		gw := modelgateway.New()
 		gw.RegisterProvider(prometheusinference.Name, &prometheusinference.Adapter{Client: client, Model: model})
-		handlers := &ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledger}
+		handlers := &ModelGatewayHandlers{Gateway: gw, Pricing: pricing, Ledger: ledgerStore}
 
 		mux := http.NewServeMux()
 		handlers.Register(mux)
-		srv := httptest.NewServer(mux)
+		srv := httptest.NewServer(authWrap(t, mux))
 		t.Cleanup(srv.Close)
 
 		status, body := postDecide(t, srv, decideRequest{

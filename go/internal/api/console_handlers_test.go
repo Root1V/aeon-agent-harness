@@ -31,7 +31,7 @@ func TestAgentConsoleShowsARunEndToEnd(t *testing.T) {
 	mux := http.NewServeMux()
 	(&RunControllerHandlers{Controller: controller}).Register(mux)
 	(&ConsoleHandlers{Controller: controller, TempoURL: tempoURL}).Register(mux)
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 
 	runID := newRunID("console")
@@ -75,7 +75,7 @@ func TestAgentConsoleReturns404ForAnUnknownRun(t *testing.T) {
 	controller := runcontroller.New(temporalClient, "")
 	mux := http.NewServeMux()
 	(&ConsoleHandlers{Controller: controller}).Register(mux)
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
 
 	resp := getAuthed(t, srv.URL+"/console/runs/"+newRunID("does-not-exist"))

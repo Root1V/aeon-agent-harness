@@ -41,7 +41,7 @@ func testAgentManifest(name, version string) map[string]any {
 // time, exactly as docs/adr and the spec require.
 func TestAgentRegistryLifecycle(t *testing.T) {
 	s := newTestStore(t)
-	registry := s.AgentRegistry()
+	registry := s.AgentRegistryFor("default")
 	ctx := context.Background()
 
 	name := "test-agent-" + randSuffix(t)
@@ -126,7 +126,7 @@ func TestAgentRegistryLifecycle(t *testing.T) {
 // but never computes itself), and a blocked promotion leaves the agent's lifecycle unchanged.
 func TestAgentRegistryReleaseGateBlocksPromotion(t *testing.T) {
 	s := newTestStore(t)
-	registry := s.AgentRegistry()
+	registry := s.AgentRegistryFor("default")
 	ctx := context.Background()
 
 	name := "test-agent-gate-" + randSuffix(t)
@@ -199,7 +199,7 @@ func releaseTestAgent(t *testing.T, registry *AgentRegistry, name string) (versi
 // changes, and Unquarantine reverses it.
 func TestAgentRegistryQuarantine(t *testing.T) {
 	s := newTestStore(t)
-	registry := s.AgentRegistry()
+	registry := s.AgentRegistryFor("default")
 	ctx := context.Background()
 	name := "test-agent-quarantine-" + randSuffix(t)
 	version := releaseTestAgent(t, registry, name)
