@@ -13,6 +13,35 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 
 ---
 
+### `AEON_CALLERS_DIR`: un `<tenant>.yaml` por tenant, como el bundle de políticas
+
+- **Descripción:** el bundle de callers se carga de **un solo fichero** (`auth.LoadFile`,
+  `AEON_CALLERS_PATH`, hoy `examples/deep-research/callers.yaml`). No hay opción de directorio.
+  Así que incorporar un consumidor a un despliegue compartido significa editar un documento que
+  contiene los callers de **todos los demás, incluidos sus `tokenSHA256`** — el PR de un equipo
+  toca lo de otro.
+- **Es asimétrico con las políticas, y el argumento que hizo a esas un directorio aplica igual.**
+  `GOV-001d` puso `AEON_POLICY_BUNDLE_DIR` con un `<tenant>.yaml` por tenant precisamente para que
+  el gobierno de un tenant sea un fichero propio, y para que un directorio malformado **no arranque**
+  el gateway en vez de cargar a medias. Los callers son la otra mitad de lo mismo: la identidad.
+- **Encontrado contestando a Veritium** (`VRT-AEON-005`, 2026-10-08). Cerraron la entrada tras
+  verificar `GOV-001f` en vivo contra `5682aba` y preguntaron cómo entregarnos su configuración:
+  su `veritium.yaml` es un PR limpio, su entrada de caller no lo es. Mientras esto no exista, la
+  salida práctica es que nos manden el fragmento y lo integremos nosotros.
+- **Criterio de entrada:** ninguno. Lo asumimos en el canal el 2026-10-08 y **esta entrada se
+  escribió antes de contestar**, porque las dos veces anteriores que dije «queda anotado» —los
+  puertos (`DX-006`) y `sub_run_id` (`INT-009b`)— no quedó anotado en ninguna parte y el único
+  síntoma habría sido Veritium esperando.
+- **Criterio de aceptación:** dos ficheros, `a.yaml` y `b.yaml`, cargan dos callers con tenants
+  distintos; un caller sin `tenant` **no carga** (ya es así); un fichero mal nombrado se **rechaza**
+  en vez de saltarse, como hace `tenantFileName` para las políticas; declarar `AEON_CALLERS_PATH`
+  **y** `AEON_CALLERS_DIR` a la vez se rechaza, como ya hace el par de políticas; y un token
+  duplicado entre DOS ficheros se rechaza igual que dentro de uno — que es el caso nuevo y el que
+  importa, porque dos equipos no ven el fichero del otro.
+  **Control negativo:** sin la comprobación entre ficheros, dos tenants con el mismo token cargan
+  y la identidad del audit trail la decide el orden de lectura del directorio.
+- **Coste:** S.
+
 ### Ningún perfil de agente usa todavía `shell.exec` real (`TOOL-003`)
 
 - **Descripción:** `TOOL-003` construyó el motor de ejecución real (`go/internal/sandbox`), pero el
