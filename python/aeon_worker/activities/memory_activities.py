@@ -180,7 +180,10 @@ async def write_memory_candidates_activity(inp: WriteCandidatesInput) -> WriteCa
                 "memory_id": candidate_memory_id(inp.run_id, candidate),
                 "type": candidate.type,
                 "scope": candidate.scope,
-                "tenant_id": inp.tenant_id,
+                # VRT-AEON-005 T-1: NO tenant_id. The control plane takes it from this worker's
+                # credential, and a request that names one is REFUSED rather than ignored — a client
+                # that sends the field believes it is choosing the isolation boundary, and before
+                # this change it was: every memory route read tenant_id off the wire.
                 "content": candidate.content,
                 "source_run_ids": candidate.source_run_ids or [inp.run_id],
                 "evidence_refs": candidate.evidence_refs,

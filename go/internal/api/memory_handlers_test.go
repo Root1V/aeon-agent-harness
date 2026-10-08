@@ -28,6 +28,11 @@ func memoryTestDSN(t *testing.T) string {
 }
 
 func newMemoryTestServer(t *testing.T) *httptest.Server {
+	srv, _ := newMemoryTestServerWithStore(t)
+	return srv
+}
+
+func newMemoryTestServerWithStore(t *testing.T) (*httptest.Server, *store.MemoryStore) {
 	t.Helper()
 	ctx := context.Background()
 	s, err := store.Connect(ctx, memoryTestDSN(t))
@@ -43,9 +48,14 @@ func newMemoryTestServer(t *testing.T) *httptest.Server {
 
 	mux := http.NewServeMux()
 	(&MemoryHandlers{MemoryStore: memoryStore}).Register(mux)
-	srv := httptest.NewServer(mux)
+	// VRT-AEON-005 T-1: WRAPPED IN auth.Require NOW, and it was not before. These handlers were
+	// tested with no authentication middleware at all, which is precisely why a `tenant_id` taken
+	// from the request looked acceptable — there was no caller to take one from. A seam tested
+	// without the middleware that gives it its identity is a seam tested as if identity were
+	// optional.
+	srv := httptest.NewServer(authWrap(t, mux))
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, memoryStore
 }
 
 // tamperTestRecordContent mutates a record's content directly via a raw connection, bypassing
@@ -82,7 +92,9 @@ func doJSON(t *testing.T, method, url string, body any) (status int, parsed map[
 		t.Fatalf("new request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	// VRT-AEON-005: authorized like every other helper here. Before this these routes were mounted
+	// without auth.Require, so an unauthenticated request was the normal case in these tests.
+	resp, err := http.DefaultClient.Do(authorize(req))
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, url, err)
 	}
@@ -115,7 +127,7 @@ func TestMemoryHandlersFullPipelineOverHTTP(t *testing.T) {
 	srv := newMemoryTestServer(t)
 
 	status, created := doJSON(t, http.MethodPost, srv.URL+"/memory/candidates", map[string]any{
-		"type": "PROCEDURAL", "scope": "user", "tenant_id": "tenant-http-test", "content": "run lint before commit",
+		"type": "PROCEDURAL", "scope": "user", "content": "run lint before commit",
 	})
 	if status != http.StatusCreated {
 		t.Fatalf("create: status = %d, body = %v", status, created)
@@ -145,7 +157,7 @@ func TestMemoryHandlersFullPipelineOverHTTP(t *testing.T) {
 		t.Fatalf("promote: status = %d, body = %v", status, promoted)
 	}
 
-	resp := getAuthed(t, srv.URL+"/memory/active?scope=user&tenant_id=tenant-http-test")
+	resp := getAuthed(t, srv.URL+"/memory/active?scope=user")
 	defer resp.Body.Close()
 	var active []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&active); err != nil {
@@ -164,19 +176,28 @@ func TestMemoryHandlersFullPipelineOverHTTP(t *testing.T) {
 
 func TestMemoryHandlersGetUnknownIs404(t *testing.T) {
 	srv := newMemoryTestServer(t)
-	resp := getAuthed(t, srv.URL+"/memory/00000000-0000-0000-0000-000000000000?tenant_id=whatever")
+	resp := getAuthed(t, srv.URL+"/memory/00000000-0000-0000-0000-000000000000")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", resp.StatusCode)
 	}
 }
 
-func TestMemoryHandlersGetRequiresTenantID(t *testing.T) {
+// TestMemoryHandlersRefuseARequestThatNamesATenant is this test's INVERSION, and the inversion is
+// the feature (VRT-AEON-005 T-1).
+//
+// It used to assert that a GET without a `tenant_id` query value was a 400 — the tenant was
+// REQUIRED in the request. That is what made SEC-004's isolation real and the boundary the caller's
+// choice: naming the wrong tenant returned 404, and nothing stopped a caller naming any tenant it
+// liked. Now the tenant comes from the credential, so a request that omits it is correct and a
+// request that names a different one is refused rather than ignored — a client that sends the field
+// believes it is choosing.
+func TestMemoryHandlersRefuseARequestThatNamesATenant(t *testing.T) {
 	srv := newMemoryTestServer(t)
-	resp := getAuthed(t, srv.URL+"/memory/00000000-0000-0000-0000-000000000000")
+	resp := getAuthed(t, srv.URL+"/memory/00000000-0000-0000-0000-000000000000?tenant_id=someone-else")
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("status = %d, want 403: a request naming a tenant must be told where the tenant comes from", resp.StatusCode)
 	}
 }
 
@@ -189,65 +210,74 @@ func TestMemoryHandlersListActiveRequiresScope(t *testing.T) {
 	}
 }
 
-// TestMemoryHandlersGetIsIsolatedByTenant is SEC-004's isolation check on the HTTP surface: a real
-// memory_id belonging to tenant A returns 404 — not the record — when fetched with tenant B's
-// tenant_id, even though the id itself is perfectly valid.
-func TestMemoryHandlersGetIsIsolatedByTenant(t *testing.T) {
-	srv := newMemoryTestServer(t)
-	status, created := doJSON(t, http.MethodPost, srv.URL+"/memory/candidates", map[string]any{
-		"type": "SEMANTIC", "scope": "project", "tenant_id": "tenant-A", "content": "tenant A's secret",
+// TestAnotherTenantsMemoryIsIndISTINGUISHABLEFromOneThatDoesNotExist is VRT-AEON-005 T-7, and it
+// is the SEC-004 isolation test rewritten around what changed.
+//
+// The old version created the other tenant's record THROUGH THE API by putting `tenant_id:
+// "tenant-A"` in the body, then fetched it with `?tenant_id=tenant-B` and asserted a 404. Every
+// line of that was true and the test was weaker than it looked: it proved that naming the wrong
+// tenant returns 404, not that a caller cannot name another tenant. The write it used to set up the
+// fixture was itself the hole — a caller putting a record into a tenant it does not belong to.
+//
+// Now the other tenant's record can only be created by going around the API, directly through the
+// store, which is the honest shape of the question: the record EXISTS, it belongs to somebody else,
+// and every route must behave as though it does not.
+func TestAnotherTenantsMemoryIsIndistinguishableFromOneThatDoesNotExist(t *testing.T) {
+	srv, memoryStore := newMemoryTestServerWithStore(t)
+
+	// Planted behind the API's back, because the API will no longer let a caller write into another
+	// tenant — which is the point.
+	foreign, err := memoryStore.WriteCandidate(context.Background(), store.MemoryRecord{
+		Type: "SEMANTIC", Scope: "project", TenantID: "another-tenant", Content: "not for this caller",
 	})
-	if status != http.StatusCreated {
-		t.Fatalf("create: status = %d, body = %v", status, created)
-	}
-	memoryID := created["memory_id"].(string)
-
-	resp := getAuthed(t, srv.URL+"/memory/"+memoryID+"?tenant_id=tenant-B")
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNotFound {
-		t.Errorf("cross-tenant GET: status = %d, want 404 (must not leak that the record exists)", resp.StatusCode)
-	}
-
-	resp2, err := http.Get(srv.URL + "/memory/" + memoryID + "?tenant_id=tenant-A")
 	if err != nil {
-		t.Fatalf("GET: %v", err)
+		t.Fatalf("planting the other tenant's record: %v", err)
 	}
-	defer resp2.Body.Close()
-	if resp2.StatusCode != http.StatusOK {
-		t.Errorf("same-tenant GET: status = %d, want 200", resp2.StatusCode)
+
+	// Every route that takes a memory_id. The five after revoke had NO tenant check at all before
+	// this change, so a caller could quarantine, promote or repair another tenant's memory knowing
+	// only its id — and a memory_id is a uuid, which is not a secret.
+	t.Run("GET", func(t *testing.T) {
+		resp := getAuthed(t, srv.URL+"/memory/"+foreign.MemoryID)
+		defer resp.Body.Close()
+		assertLooksMissing(t, resp.StatusCode)
+	})
+	for _, route := range []string{"/revoke", "/quarantine", "/validate", "/promote", "/reject", "/repair"} {
+		t.Run(route, func(t *testing.T) {
+			status, body := doJSON(t, http.MethodPost, srv.URL+"/memory/"+foreign.MemoryID+route, map[string]any{"allowed": true})
+			assertLooksMissing(t, status)
+			if _, leaked := body["content"]; leaked {
+				t.Errorf("%s returned the record's content: %v", route, body)
+			}
+		})
+	}
+
+	// NEGATIVE CONTROL: the same routes on the caller's OWN record must work, or the test above
+	// passes because nothing works.
+	own, err := memoryStore.WriteCandidate(context.Background(), store.MemoryRecord{
+		Type: "SEMANTIC", Scope: "project", TenantID: "default", Content: "this caller's own",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := getAuthed(t, srv.URL+"/memory/"+own.MemoryID)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the caller's own record returned %d — the test above proves nothing", resp.StatusCode)
 	}
 }
 
-// TestMemoryHandlersRevokeIsIsolatedByTenant proves the same isolation holds on the write side:
-// a caller claiming the wrong tenant cannot revoke (or confirm the existence of) another
-// tenant's memory.
-func TestMemoryHandlersRevokeIsIsolatedByTenant(t *testing.T) {
-	srv := newMemoryTestServer(t)
-	status, created := doJSON(t, http.MethodPost, srv.URL+"/memory/candidates", map[string]any{
-		"type": "SEMANTIC", "scope": "project", "tenant_id": "tenant-A", "content": "x",
-	})
-	if status != http.StatusCreated {
-		t.Fatalf("create: status = %d, body = %v", status, created)
+// assertLooksMissing fixes T-7's exact wording: 404 or an empty list, NEVER 403. A 403 answers a
+// question the caller was not entitled to ask — it confirms the record is real.
+func assertLooksMissing(t *testing.T, status int) {
+	t.Helper()
+	if status == http.StatusForbidden {
+		t.Errorf("status = 403: a forbidden answer CONFIRMS the record exists. Across a tenant " +
+			"boundary the answer has to be indistinguishable from \"no such record\" (T-7)")
+		return
 	}
-	memoryID := created["memory_id"].(string)
-	for _, step := range []string{"/quarantine", "/validate", "/promote"} {
-		body := map[string]any{}
-		if step != "/quarantine" {
-			body["allowed"] = true
-		}
-		if status, resp := doJSON(t, http.MethodPost, srv.URL+"/memory/"+memoryID+step, body); status != http.StatusOK {
-			t.Fatalf("%s: status = %d, body = %v", step, status, resp)
-		}
-	}
-
-	status, body := doJSON(t, http.MethodPost, srv.URL+"/memory/"+memoryID+"/revoke", map[string]any{"tenant_id": "tenant-B"})
 	if status != http.StatusNotFound {
-		t.Fatalf("cross-tenant revoke: status = %d, want 404; body = %v", status, body)
-	}
-
-	status, body = doJSON(t, http.MethodPost, srv.URL+"/memory/"+memoryID+"/revoke", map[string]any{"tenant_id": "tenant-A"})
-	if status != http.StatusOK || body["status"] != "REVOKED" {
-		t.Fatalf("same-tenant revoke: status = %d, body = %v", status, body)
+		t.Errorf("status = %d, want 404", status)
 	}
 }
 

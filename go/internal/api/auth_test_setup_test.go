@@ -39,6 +39,7 @@ func authWrap(t *testing.T, mux *http.ServeMux, actsAs ...string) http.Handler {
 	a, err := auth.Load(auth.CallerBundleDoc{Kind: "CallerBundle", Callers: []auth.Caller{{
 		ID:          "test-caller",
 		Kind:        auth.KindService,
+		Tenant:      "default",
 		TokenSHA256: auth.HashToken(testCallerToken),
 		MayActAs:    actsAs,
 		MayApprove:  true,
@@ -71,6 +72,7 @@ func shippedPlusTestCallers(t *testing.T, actsAs ...string) *auth.Authenticator 
 	doc.Callers = append(doc.Callers, auth.Caller{
 		ID:          "test-caller",
 		Kind:        auth.KindService,
+		Tenant:      "default",
 		TokenSHA256: auth.HashToken(testCallerToken),
 		MayActAs:    actsAs,
 		MayApprove:  true,

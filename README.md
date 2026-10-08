@@ -5,7 +5,7 @@ it always needs and always reimplements badly: a durable execution loop, typed c
 verifiable evidence and citations, authorization enforced outside the model, hard budgets, OTel
 tracing, and eval gates — without locking you into one model provider or one agent framework.
 
-> **Status:** 102 features `DONE`, each with a named acceptance test that runs against real
+> **Status:** 103 features `DONE`, each with a named acceptance test that runs against real
 > infrastructure — real Postgres, real Temporal, real model providers, real money where the feature is
 > about money. [roadmap.md](roadmap.md) is the index; don't trust a feature is real until its row says
 > `DONE`, and that status is mechanically checked (`make roadmap-check`) against a test that exists.

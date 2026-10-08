@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -70,6 +71,17 @@ type Caller struct {
 	MayActAs []string `yaml:"mayActAs" json:"may_act_as,omitempty"`
 	// MayApprove is whether this caller may decide a pending approval. Never implied by MayActAs.
 	MayApprove bool `yaml:"mayApprove" json:"may_approve"`
+	// Tenant is the isolation boundary this caller's reads and writes are confined to
+	// (VRT-AEON-005 T-1). REQUIRED: a bundle with a caller that has none does not load.
+	//
+	// ASSIGNED BY THE OPERATOR OF THE DEPLOYMENT, NEVER DECLARED BY THE CLIENT IN A REQUEST, which
+	// Veritium asked for in those words and which is the lesson SEC-005 already paid for: the Cedar
+	// principal used to come off the wire, so a well-tested default-deny engine was judging whichever
+	// identity the caller typed. A tenant taken from a request body or query string is the same
+	// defect with a different field name, and it is the one the Memory Store had — every memory route
+	// read `tenant_id` from the request, so the isolation SEC-004 built and tested was real and the
+	// tenant was the caller's choice.
+	Tenant string `yaml:"tenant" json:"tenant"`
 }
 
 // ActsAs reports whether this caller may present agentManifestRef as its own.
@@ -111,6 +123,11 @@ var (
 // Every validation here refuses rather than repairs. A caller with no token hash, a duplicate id, a
 // duplicate token or an unknown kind is a mistake in a security config, and the one thing worse than
 // failing to start is starting with an entry that does not mean what it looks like.
+// tenantPattern keeps a tenant to a plain lowercase identifier. Deliberately narrow: this value
+// ends up in a SQL predicate and (from slice 4) in a Cedar principal, and a narrow alphabet means
+// neither place needs quoting rules that could be got wrong once.
+var tenantPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+
 func Load(doc CallerBundleDoc) (*Authenticator, error) {
 	if doc.Kind != "" && doc.Kind != "CallerBundle" {
 		return nil, fmt.Errorf("auth: expected kind CallerBundle, got %q", doc.Kind)
@@ -133,6 +150,24 @@ func Load(doc CallerBundleDoc) (*Authenticator, error) {
 		default:
 			return nil, fmt.Errorf("auth: caller %q has kind %q, want one of service|human|external", c.ID, c.Kind)
 		}
+		// VRT-AEON-005 T-1: REQUIRED, and refused rather than defaulted. A default tenant would mean
+		// a caller whose entry forgot one silently joins whichever tenant the default names, and the
+		// deployment looks configured — the same shape as the `mayActAs` wildcard this package
+		// refuses one field above. There is no "all tenants" value for the same reason.
+		c.Tenant = strings.TrimSpace(c.Tenant)
+		if c.Tenant == "" {
+			return nil, fmt.Errorf(
+				"auth: caller %q has no tenant. It is required and has no default: a caller that joined "+
+					"a default tenant by omission would read and write another deployment's data while "+
+					"looking configured", c.ID)
+		}
+		if !tenantPattern.MatchString(c.Tenant) {
+			return nil, fmt.Errorf(
+				"auth: caller %q has tenant %q, which must match %s — a plain identifier, so it can be "+
+					"a safe part of a database predicate and of a Cedar principal without quoting rules",
+				c.ID, c.Tenant, tenantPattern)
+		}
+
 		hash := strings.ToLower(strings.TrimSpace(c.TokenSHA256))
 		if len(hash) != 64 {
 			return nil, fmt.Errorf("auth: caller %q needs a 64-character hex tokenSHA256 (got %d characters)", c.ID, len(hash))
