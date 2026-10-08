@@ -10,6 +10,14 @@
 #
 # The bundle never carries a token, only its SHA-256. A config-as-code file is committed, diffed and
 # pasted into issues, and a secret in one of those is a secret in all three.
+# VRT-AEON-005 T-1: every caller declares a `tenant`, and it is REQUIRED — a bundle with a caller
+# that has none does not load. `default` here because that is what this deployment's existing data
+# carries (AEON_TENANT_ID in deploy/compose), so adopting tenancy changes nothing for a laptop.
+#
+# ASSIGNED HERE AND NEVER IN A REQUEST. That is the whole property: before this, every Memory Store
+# route read `tenant_id` from the query string or the body, so the isolation SEC-004 built was real
+# and the tenant was whatever the caller typed — the same defect SEC-005 removed from the Cedar
+# principal, one field name along.
 apiVersion: harness.ai/v1
 kind: CallerBundle
 callers:
@@ -20,6 +28,7 @@ callers:
   # formality with an audit entry. `mayApprove` is never implied by `mayActAs` (go/internal/auth).
   - id: worker
     kind: service
+    tenant: default
     # sha256 of "dev-worker-token-not-a-secret"
     tokenSHA256: "8eabe1a460429843e6fafe922cfd327079ef693777d4c4a76c0b9638e8676125"
     mayActAs:
@@ -31,6 +40,7 @@ callers:
   # separable in both directions is what makes the audit line mean something.
   - id: operator
     kind: human
+    tenant: default
     # sha256 of "dev-operator-token-not-a-secret"
     tokenSHA256: "700183179880062613e852ea7838fa721cc9300a033b9a0fbfc12bbec846d05f"
     mayActAs: []
@@ -41,6 +51,7 @@ callers:
   # permissive caller proves the handler runs, not that the deployment is configured.
   - id: integration-test
     kind: service
+    tenant: default
     # sha256 of "dev-test-token-not-a-secret"
     tokenSHA256: "4167faa73aedad9589d46f41c47e5964fedca12b5e9fc3a54c7b174dbb892dbf"
     mayActAs:

@@ -15,7 +15,7 @@ import (
 // the operator sees a started service and concludes it is configured. Each case below is a mistake
 // somebody will actually make, and each one has a specific way of being silently wrong if accepted.
 func TestCallerBundleRefusesWhatItCannotMean(t *testing.T) {
-	good := Caller{ID: "worker", Kind: KindService, TokenSHA256: HashToken("t1"), MayActAs: []string{"a@1"}}
+	good := Caller{ID: "worker", Kind: KindService, Tenant: "default", TokenSHA256: HashToken("t1"), MayActAs: []string{"a@1"}}
 
 	cases := []struct {
 		name    string
@@ -37,19 +37,19 @@ func TestCallerBundleRefusesWhatItCannotMean(t *testing.T) {
 		},
 		{
 			name:    "a caller with no token",
-			doc:     CallerBundleDoc{Callers: []Caller{{ID: "x", Kind: KindService}}},
+			doc:     CallerBundleDoc{Callers: []Caller{{ID: "x", Kind: KindService, Tenant: "default"}}},
 			wantErr: "64-character hex",
 			why:     "an empty hash would match the hash of nothing, and `Bearer ` is a request away",
 		},
 		{
 			name:    "a token hash that is not a hash",
-			doc:     CallerBundleDoc{Callers: []Caller{{ID: "x", Kind: KindService, TokenSHA256: strings.Repeat("z", 64)}}},
+			doc:     CallerBundleDoc{Callers: []Caller{{ID: "x", Kind: KindService, Tenant: "default", TokenSHA256: strings.Repeat("z", 64)}}},
 			wantErr: "non-hex",
 			why:     "a pasted token instead of its hash is the most likely mistake here, and it is 64 chars often enough",
 		},
 		{
 			name:    "an unknown kind",
-			doc:     CallerBundleDoc{Callers: []Caller{{ID: "x", Kind: "robot", TokenSHA256: HashToken("t")}}},
+			doc:     CallerBundleDoc{Callers: []Caller{{ID: "x", Kind: "robot", Tenant: "default", TokenSHA256: HashToken("t")}}},
 			wantErr: "want one of service|human|external",
 			why:     "the kind is written into the audit line of every approval; an unvalidated one makes that line unaggregatable",
 		},
@@ -57,16 +57,31 @@ func TestCallerBundleRefusesWhatItCannotMean(t *testing.T) {
 			name: "two callers with the same id",
 			doc: CallerBundleDoc{Callers: []Caller{
 				good,
-				{ID: "worker", Kind: KindHuman, TokenSHA256: HashToken("t2"), MayApprove: true},
+				{ID: "worker", Kind: KindHuman, Tenant: "default", TokenSHA256: HashToken("t2"), MayApprove: true},
 			}},
 			wantErr: "duplicate caller id",
 			why:     "whichever entry won would decide both what is permitted and what the journal records",
 		},
 		{
+			// VRT-AEON-005 T-1. No default, for the same reason mayActAs has no wildcard one field up:
+			// a caller that joined a tenant by omission reads and writes another deployment's data
+			// while the bundle looks configured.
+			name:    "a caller with no tenant",
+			doc:     CallerBundleDoc{Callers: []Caller{{ID: "x", Kind: KindService, TokenSHA256: HashToken("t")}}},
+			wantErr: "has no tenant",
+			why:     "a tenant acquired by omission is an isolation boundary nobody chose",
+		},
+		{
+			name:    "a tenant that is not a plain identifier",
+			doc:     CallerBundleDoc{Callers: []Caller{{ID: "x", Kind: KindService, Tenant: "Acme Corp; DROP", TokenSHA256: HashToken("t")}}},
+			wantErr: "must match",
+			why:     "this value becomes part of a SQL predicate and of a Cedar principal, so a narrow alphabet means neither needs quoting rules that could be got wrong once",
+		},
+		{
 			name: "two callers sharing a token",
 			doc: CallerBundleDoc{Callers: []Caller{
 				good,
-				{ID: "other", Kind: KindHuman, TokenSHA256: HashToken("t1"), MayApprove: true},
+				{ID: "other", Kind: KindHuman, Tenant: "default", TokenSHA256: HashToken("t1"), MayApprove: true},
 			}},
 			wantErr: "share a token",
 			why:     "that is not two identities, it is one identity with two names — and the audit line gets whichever the map returned",
@@ -89,7 +104,7 @@ func TestCallerBundleRefusesWhatItCannotMean(t *testing.T) {
 // TestRequireRefusesEveryCredentialThatIsNotOne is the middleware's own half.
 func TestRequireRefusesEveryCredentialThatIsNotOne(t *testing.T) {
 	a, err := Load(CallerBundleDoc{Callers: []Caller{
-		{ID: "worker", Kind: KindService, TokenSHA256: HashToken("right-token"), MayActAs: []string{"a@1"}},
+		{ID: "worker", Kind: KindService, Tenant: "default", TokenSHA256: HashToken("right-token"), MayActAs: []string{"a@1"}},
 	}})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -147,8 +162,8 @@ func TestRequireRefusesEveryCredentialThatIsNotOne(t *testing.T) {
 // gate on an irreversible action would be a formality that writes an audit entry.
 func TestApprovalIsNotImpliedByExecution(t *testing.T) {
 	a, err := Load(CallerBundleDoc{Callers: []Caller{
-		{ID: "worker", Kind: KindService, TokenSHA256: HashToken("w"), MayActAs: []string{"deep-research-general@0.1.0"}},
-		{ID: "operator", Kind: KindHuman, TokenSHA256: HashToken("o"), MayApprove: true},
+		{ID: "worker", Kind: KindService, Tenant: "default", TokenSHA256: HashToken("w"), MayActAs: []string{"deep-research-general@0.1.0"}},
+		{ID: "operator", Kind: KindHuman, Tenant: "default", TokenSHA256: HashToken("o"), MayApprove: true},
 	}})
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -182,7 +197,7 @@ func TestApprovalIsNotImpliedByExecution(t *testing.T) {
 
 // TestActsAsHasNoWildcard pins the absence of a convenience that would undo the feature.
 func TestActsAsHasNoWildcard(t *testing.T) {
-	c := Caller{ID: "x", Kind: KindService, MayActAs: []string{"*"}}
+	c := Caller{ID: "x", Kind: KindService, Tenant: "default", MayActAs: []string{"*"}}
 	if c.ActsAs("anything@1.0.0") {
 		t.Fatalf("`*` in mayActAs acted as a wildcard. It must be a literal: a wildcard is one config " +
 			"edit away from restoring the hole SEC-005 closed, and the deployment would look configured")
