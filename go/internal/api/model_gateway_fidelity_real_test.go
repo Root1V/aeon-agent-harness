@@ -36,13 +36,20 @@ func TestAdapterFidelityAgainstRealPrometheus(t *testing.T) {
 	srv := newRealPrometheusGatewayServer(t)
 	model := realPrometheusModel()
 
-	decideReal := func(t *testing.T, rendered map[string]any) (int, map[string]any) {
+	// The model is a PARAMETER and not a closure constant because this test now exercises two
+	// models on one deployment: the text one for tools and structured output, and a vision one for
+	// the image. The gateway routes on the candidate, so the same server serves both.
+	decideRealAs := func(t *testing.T, routeModel string, rendered map[string]any) (int, map[string]any) {
 		t.Helper()
-		rendered["model"] = model
+		rendered["model"] = routeModel
 		return postDecide(t, srv, decideRequest{
-			Candidates:      []decideCandidate{{Provider: "prometheus_inference", Model: model, Priority: 0}},
+			Candidates:      []decideCandidate{{Provider: prometheusinference.Name, Model: routeModel, Priority: 0}},
 			RenderedContext: rendered,
 		})
+	}
+	decideReal := func(t *testing.T, rendered map[string]any) (int, map[string]any) {
+		t.Helper()
+		return decideRealAs(t, model, rendered)
 	}
 
 	weatherTool := []any{map[string]any{
@@ -203,39 +210,31 @@ func TestAdapterFidelityAgainstRealPrometheus(t *testing.T) {
 	})
 
 	t.Run("content as parts is transported, and an image really arrives", func(t *testing.T) {
-		// THE FINDING THIS SUBTEST RECORDS, measured rather than argued.
+		// THE DEFECT THIS RECORDS, measured rather than argued.
 		//
 		// The old mapping did `content, _ := m["content"].(string)` — an assertion that fails SILENTLY
 		// on an array — so a vision call reached the platform as a message with empty content. The
 		// platform answered 200 with content "" (measured). A caller asking about an image got a
 		// successful, empty answer; nothing anywhere said the image had been dropped.
 		//
-		// NO VISION-CAPABLE MODEL IS GRANTED TO THIS CLIENT, and the wording matters — an earlier
-		// version of this comment said the DEPLOYMENT has none, which is not something we can see.
-		// Measured 2026-10-08: GET /v1/models returns exactly the models in the token's granted
-		// scope (0, 1 and 2 models as the requested scope was narrowed), so it is not a catalogue of
-		// what exists. ADR-0004 called it "public, every active model on the gateway, regardless of
-		// who's authorized" — corrected there. Both models we are granted report modality=text, and
-		// whether a vision model exists unatttributed is a question for the platform's operator.
-		//
-		// Either way we do not get to assert past it: a double would be the only way to "pass" a
-		// vision assertion, and a double proves nothing about fidelity.
-		//
-		// What CAN be verified against the real platform is strictly stronger than a happy answer: the
-		// platform's refusal names the modality, which it can only do because it RECEIVED an image. A
-		// request with the image dropped does not get refused — it succeeds. So the refusal is the
-		// evidence, and the subtest below fails if the call quietly succeeds.
 		// A 64x64 PNG, GREEN top half and RED bottom half, 133 bytes.
 		//
-		// It replaced a 1x1 TRANSPARENT pixel, and that swap is the difference between a test that
-		// can prove something and one that cannot. With a transparent pixel the only available
-		// assertion is the refusal, because not even a real vision model can name a colour that is
-		// not there — so on the day a vision model is granted, the old image would have made the
-		// success branch assert "it answered something", which a model hallucinating about an image
-		// it never received also satisfies. Two specific colours are the cheapest assertion that
-		// DISCRIMINATES: guessing both is unlikely, and naming them is within reach of the smallest
-		// VLM, which is all this test needs (it measures transport, not model quality).
+		// It replaced a 1x1 TRANSPARENT pixel, and that swap is what made the first subtest below
+		// possible. With a transparent pixel the only available assertion is the refusal, because not
+		// even a real vision model can name a colour that is not there — so the success branch could
+		// only ever have asserted "it answered something", which a model hallucinating about an image
+		// it never received also satisfies. Two specific colours is the cheapest assertion that
+		// DISCRIMINATES, and naming them is within reach of the smallest VLM, which is all this test
+		// needs: it measures transport, not model quality.
 		const greenOverRedPNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAATElEQVR42u3PMQ0AAAgDsPk3DRp2EprUQJPJbQICAgICAgICAgICAgICAgICAgICAgIC7wgICAgICAgICAgICAgICAgICAgICAgI1BaxZPDi2L1X8gAAAABJRU5ErkJggg=="
+
+		imageMessage := func() []any {
+			return []any{map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "text", "text": "Name the two colours in this image, in English, " +
+					"one word each."},
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": greenOverRedPNG}},
+			}}}
+		}
 
 		t.Run("a text-only parts array is read, not just accepted", func(t *testing.T) {
 			// The prompt asks for a WORD THAT ONLY APPEARS IN THE PART, so the assertion separates
@@ -271,41 +270,64 @@ func TestAdapterFidelityAgainstRealPrometheus(t *testing.T) {
 			}
 		})
 
-		t.Run("an image part arrives at the platform", func(t *testing.T) {
-			status, body := decideReal(t, map[string]any{
-				"messages": []any{map[string]any{"role": "user", "content": []any{
-					map[string]any{"type": "text", "text": "Name the two colours in this image, in English, " +
-						"one word each."},
-					map[string]any{"type": "image_url", "image_url": map[string]any{"url": greenOverRedPNG}},
-				}}},
+		t.Run("a vision model SEES the image and names both of its colours", func(t *testing.T) {
+			// THE ASSERTION VERITIUM ASKED FOR, and for a day it could not be made: both models this
+			// client was granted were modality=text, so the only available evidence was the
+			// platform's refusal. Prometheus granted three vision models on 2026-10-09
+			// (qwen3-vl-8b, fara-7b, qwen3vl-30b-a3b) and the assertion is now the answer itself.
+			//
+			// Measured the same day, which is why qwen3-vl-8b is the default: 2.3s and "green \n red",
+			// against 5.8s for qwen3vl-30b-a3b and a fara-7b that names both colours and then emits a
+			// stray <tool_call> block — it is a computer-use agent model and wants to act, not answer.
+			//
+			// Both colours and not one: a model guessing from the prompt alone could land on either,
+			// and landing on both is what the image decides.
+			visionModel := realPrometheusVisionModel()
+			status, body := decideRealAs(t, visionModel, map[string]any{
+				"messages":   imageMessage(),
 				"max_tokens": 400,
+			})
+			if status != http.StatusOK {
+				t.Fatalf("the vision model %q refused a data-URI image: status=%d body=%v",
+					visionModel, status, body)
+			}
+			content, _ := firstMessage(t, body)["content"].(string)
+			lowered := strings.ToLower(content)
+			missing := []string{}
+			for _, colour := range []string{"green", "red"} {
+				if !strings.Contains(lowered, colour) {
+					missing = append(missing, colour)
+				}
+			}
+			if len(missing) > 0 {
+				t.Fatalf("%q answered %q without naming %v — the image was dropped and the model is "+
+					"guessing, or it arrived degraded", visionModel, content, missing)
+			}
+			t.Logf("%s named both colours: %q", visionModel, content)
+		})
+
+		t.Run("a text model refuses the same image BY MODALITY", func(t *testing.T) {
+			// The negative control, and it is permanent rather than a stand-in for the subtest above.
+			//
+			// It proves arrival WITHOUT depending on any model's answer: the platform can only name
+			// the modality having received an image, and a request with the image dropped is not
+			// refused — it succeeds with content "" (measured both ways on 2026-10-08). So this
+			// subtest fails if the call quietly succeeds, which is exactly the old behaviour.
+			status, body := decideReal(t, map[string]any{
+				"messages":   imageMessage(),
+				"max_tokens": 64,
 			})
 			if status == http.StatusOK {
 				content, _ := firstMessage(t, body)["content"].(string)
-				// A vision-capable model is now serving this profile, so the assertion stops being the
-				// refusal and becomes the answer — and it has to be an assertion the image actually
-				// decides. "It answered something" is also what a model hallucinating about an image it
-				// never received produces, which is precisely the failure this whole subtest exists to
-				// detect.
-				lowered := strings.ToLower(content)
-				if !strings.Contains(lowered, "green") || !strings.Contains(lowered, "red") {
-					t.Fatalf("a vision-capable model answered %q without naming both colours in the "+
-						"image (green over red) — either the image was dropped and the model is "+
-						"guessing, or it arrived degraded", content)
-				}
-				t.Logf("a vision-capable model named both colours: %q — transport confirmed by the "+
-					"answer rather than by the refusal", content)
-				return
+				t.Fatalf("the text model %q accepted an image and answered %q — either it is no longer "+
+					"modality=text, or the image never left this process", model, content)
 			}
-			// The expected outcome on a text-only deployment, and the one that proves transport.
 			errMsg, _ := body["error"].(string)
 			lowered := strings.ToLower(errMsg)
 			if !strings.Contains(lowered, "image") && !strings.Contains(lowered, "modality") {
-				t.Fatalf("status=%d error=%q — expected either an answer or a refusal naming the image; "+
+				t.Fatalf("status=%d error=%q — expected a refusal naming the image or the modality; "+
 					"anything else means we cannot tell whether the image arrived", status, errMsg)
 			}
-			t.Logf("the platform refused BY MODALITY (%q), which it can only do having received the "+
-				"image: a request with the image dropped succeeds instead", errMsg)
 		})
 	})
 }
@@ -353,8 +375,8 @@ func realPrometheusClientOrSkip(t *testing.T) (*prometheusinference.Client, stri
 	if scope == "" {
 		// Same derivation MDL-015 made the gateway do from the bundle: one model:<id> per candidate.
 		// A hand-written scope naming one model while routing picks per request is what made every
-		// other candidate answer 403.
-		scope = "inference:read model:" + model
+		// other candidate answer 403 — and this test now routes to TWO models, so both are named.
+		scope = "inference:read model:" + model + " model:" + realPrometheusVisionModel()
 	}
 	client := &prometheusinference.Client{
 		GatewayURL:   gatewayURL,
@@ -373,6 +395,24 @@ func realPrometheusModel() string {
 		return m
 	}
 	return "gpt-oss-20b-mxfp4"
+}
+
+// realPrometheusVisionModel is the model the image subtest routes to. Same reasoning as above: which
+// models a client is granted is a property of the deployment.
+//
+// The default is qwen3-vl-8b because it was the fastest and cleanest of the three vision models
+// granted on 2026-10-09, measured: 2.3s naming both colours, against 5.8s for qwen3vl-30b-a3b, and a
+// fara-7b that answers correctly and then emits a stray <tool_call> block.
+//
+// A client cannot enumerate what the deployment hosts, but it CAN read back what it was granted: a
+// token request that omits `scope` comes back with the full granted scope in the response's `scope`
+// field. That is how these three were found, and it is worth knowing — GET /v1/models only returns
+// the models the REQUESTED scope named, so it cannot discover a grant you have not guessed.
+func realPrometheusVisionModel() string {
+	if m := os.Getenv("PROMETHEUS_VISION_MODEL"); m != "" {
+		return m
+	}
+	return "qwen3-vl-8b"
 }
 
 // firstMessage digs the assistant message out of a /decide response, failing on any shape that is
