@@ -53,6 +53,7 @@ with workflow.unsafe.imports_passed_through():
         research_subtask_activity,
     )
     from aeon_worker.activities.model_activities import DecideCandidate
+    from aeon_worker.tenancy import TENANT_MEMO_KEY
 
 _ACTIVITY_TIMEOUT = timedelta(seconds=120)
 _RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -72,7 +73,18 @@ class DeepResearchWorkflowInput:
     # an extra model call per run, and a caller that has not thought about memory should not silently
     # start paying for one.
     reflect: bool = False
-    tenant_id: str = "default"
+    # tenant_id IS GONE FROM HERE, and it was never functional: the only thing that read it was
+    # WriteCandidatesInput, whose own field had stopped travelling when VRT-AEON-005 T-1 removed
+    # tenant_id from the request body. So a client could set it and nothing happened.
+    #
+    # IT IS REMOVED RATHER THAN IGNORED, because the moment the worker gained the entitlement to name
+    # a tenant (MayActForTenants), a client-supplied tenant_id reaching the header would have been a
+    # privilege escalation THROUGH THE REQUEST BODY: a run belonging to A, asking the worker to write
+    # into B, honoured because the WORKER is entitled to B. Exactly the defect SEC-005 and the Memory
+    # Store each paid for, re-entered through a field that had looked harmless while it was dead.
+    #
+    # The tenant now comes from the Temporal memo, which is set by the Run Controller from the
+    # authenticated caller and which a client cannot set.
 
 
 @dataclass
@@ -99,6 +111,10 @@ class DeepResearchWorkflow:
     @workflow.run
     async def run(self, request: DeepResearchWorkflowInput) -> DeepResearchWorkflowResult:
         run_id = workflow.info().workflow_id
+        # From the MEMO, never from `request` — see the note where tenant_id used to live. Deterministic
+        # under ADR-001: the memo is in the workflow's start attributes, so a replay reads the same
+        # value; the "" default lets a run started before the memo existed replay instead of raising.
+        tenant = workflow.memo_value(TENANT_MEMO_KEY, "")
         candidates = [DecideCandidate(provider=c["provider"], model=c["model"], priority=c["priority"]) for c in request.candidates]
 
         plan_output: PlanResearchOutput = await workflow.execute_activity(
@@ -107,7 +123,7 @@ class DeepResearchWorkflow:
                 query=request.query, model=request.model, candidates=candidates,
                 data_sensitivity=request.data_sensitivity,
                 # OBS-003b: the run's own id and the agent it runs as, so its cost lands attributed.
-                run_id=run_id, agent_manifest_ref=request.agent_manifest_ref,
+                run_id=run_id, agent_manifest_ref=request.agent_manifest_ref, tenant=tenant,
             ),
             start_to_close_timeout=_ACTIVITY_TIMEOUT,
             retry_policy=_RETRY_POLICY,
@@ -128,6 +144,7 @@ class DeepResearchWorkflow:
                             candidates=candidates,
                             data_sensitivity=request.data_sensitivity,
                             agent_manifest_ref=request.agent_manifest_ref,
+                            tenant=tenant,
                             allowed_tools=request.allowed_tools,
                         ),
                         start_to_close_timeout=_ACTIVITY_TIMEOUT,
@@ -156,6 +173,7 @@ class DeepResearchWorkflow:
                 data_sensitivity=request.data_sensitivity,
                 run_id=run_id,  # OBS-003b
                 agent_manifest_ref=request.agent_manifest_ref,
+                tenant=tenant,
                 allowed_claims=[
                     AllowedClaim(claim_id=c["claim_id"], claim=c["claim"], quote=c["quote"], source_id=c["source_id"])
                     for c in allowed_claims
@@ -197,6 +215,7 @@ class DeepResearchWorkflow:
                     candidates=candidates,
                     data_sensitivity=request.data_sensitivity,
                     agent_manifest_ref=request.agent_manifest_ref,  # OBS-003b
+                    tenant=tenant,
                 ),
                 start_to_close_timeout=_ACTIVITY_TIMEOUT,
                 retry_policy=_RETRY_POLICY,
@@ -207,7 +226,7 @@ class DeepResearchWorkflow:
                     write_memory_candidates_activity,
                     WriteCandidatesInput(
                         run_id=run_id,
-                        tenant_id=request.tenant_id,
+                        tenant=tenant,
                         candidates=reflect_output.candidates,
                     ),
                     start_to_close_timeout=_ACTIVITY_TIMEOUT,

@@ -51,7 +51,6 @@ async def start_deep_research_run(
     agent_manifest_ref: str = "",
     allowed_tools: list[str] | None = None,
     reflect: bool = False,
-    tenant_id: str = "default",
 ) -> DeepResearchReport:
     """Starts a real DeepResearchWorkflow execution and blocks until it completes. `candidates` is
     already-resolved Model Gateway routing (see aeon_sdk.model_policy.resolve_candidates) — this
@@ -71,7 +70,6 @@ async def start_deep_research_run(
             # MEM-003: off by default. Reflecting costs an extra model call per run, and a caller who
             # has not thought about memory should not start paying for one by upgrading.
             reflect=reflect,
-            tenant_id=tenant_id,
         ),
         id=run_id,
         task_queue=task_queue,

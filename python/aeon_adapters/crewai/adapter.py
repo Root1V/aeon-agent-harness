@@ -41,6 +41,10 @@ class AeonLLM(BaseLLM):
     data_sensitivity: str = ""
     run_id: str = ""  # OBS-003b
     agent_manifest_ref: str = ""
+    # VRT-AEON-005: the tenant of the RUN, so an interop run is billed and CAPPED against whoever
+    # submitted it. Same reasoning as the run_id above, one boundary out: the identity fields were
+    # built and the wire was missing, and nothing failed.
+    tenant: str = ""
 
     def call(
         self,
@@ -60,7 +64,7 @@ class AeonLLM(BaseLLM):
                 DecideInput(
                     candidates=self.candidates, rendered_context=rendered_context,
                     data_sensitivity=self.data_sensitivity,
-                    run_id=self.run_id, agent_manifest_ref=self.agent_manifest_ref,
+                    run_id=self.run_id, agent_manifest_ref=self.agent_manifest_ref, tenant=self.tenant,
                 )
             )
         )
@@ -80,6 +84,7 @@ async def run_crewai_crew(
     data_sensitivity: str = "",
     run_id: str = "",  # OBS-003b
     agent_manifest_ref: str = "",
+    tenant: str = "",
 ) -> dict[str, Any]:
     """Builds the crew with the Aeon-bound LLM injected, runs it (via a worker thread — see module
     docstring), and returns its output. Meant to be called from inside a single Temporal Activity —
@@ -87,7 +92,7 @@ async def run_crewai_crew(
     replay directly."""
     llm = AeonLLM(
         model=model, candidates=candidates, data_sensitivity=data_sensitivity,
-        run_id=run_id, agent_manifest_ref=agent_manifest_ref,
+        run_id=run_id, agent_manifest_ref=agent_manifest_ref, tenant=tenant,
     )
     crew = build_crew(llm)
 

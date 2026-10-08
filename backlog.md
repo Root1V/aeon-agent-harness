@@ -644,7 +644,24 @@ fichero mal nombrado. Sin `down`, a propósito.
   lo que hay que distinguir aquí.
 - **Coste:** S.
 
-### El tenant de un paso de un run es el del worker, no el del run
+### ~~El tenant de un paso de un run es el del worker, no el del run~~ — CERRADA como `GOV-001f` el 2026-10-08
+
+> **Cerrada.** Su criterio de entrada era «ninguno, está decidido», y el diseño salió como esta
+> entrada lo describía: `X-Aeon-Run-Tenant` resuelta en un solo sitio, y
+> `auth.Caller.MayActForTenants` —lista explícita, sin comodín, solo para llamantes `service`—
+> como el privilegio que la honra. El coste declarado era **L** y lo fue: tres lenguajes, seis
+> puntos de llamada y un transporte que sale del memo de Temporal para respetar `ADR-001`.
+>
+> **Dos cosas que esta entrada no veía.** (1) El recuento era de siete superficies y son **seis**:
+> las tres de checkpoints que había listado estaban bien —el consumidor llega con su propio
+> tenant, y el journal de aprobación pasa por `ownedRun`— y faltaba `POST /memory/candidates`,
+> que el worker sí llama. (2) Había una **escalada latente**: `DeepResearchWorkflowInput` llevaba
+> un `tenant_id` suministrado por el cliente y muerto, que al cablearse a la cabecera habría
+> dejado a un run de A escribir en B porque el **worker** tiene derecho a B. Eliminado.
+>
+> Ver la fila `GOV-001f`.
+
+### El tenant de un paso de un run es el del worker, no el del run — descripción original
 
 - **Descripción:** siete de las veinte llamadas que derivan el tenant del llamante (`caller.Tenant`)
   las alcanza **el worker de aeon** durante un run, no el consumidor que lo envió. El worker tiene un

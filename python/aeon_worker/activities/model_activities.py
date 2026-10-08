@@ -40,6 +40,10 @@ class DecideInput:
     candidates: list[DecideCandidate]
     rendered_context: dict[str, Any]
     data_sensitivity: str = ""
+    # VRT-AEON-005: travels wherever run_id and agent_manifest_ref travel — the tenant of the RUN,
+    # so the gateway bills and CAPS it against whoever submitted it rather than against this worker.
+    tenant: str = ""
+
     # OBS-003b: who this call is FOR. The Model Gateway has accepted both since OBS-003 and
     # `FinOpsLedger` has recorded them since then, and no Python caller ever filled either — so the
     # ledger could aggregate "cost per model" and the other half of OBS-003's own title, cost per run
@@ -105,7 +109,7 @@ async def call_model_gateway(inp: DecideInput) -> DecideOutput:
 
         # THE LINE THAT MAKES ONE TRACE. Without it the gateway starts a root span and this run's spans end
         # up scattered across unrelated traces — each present, none connected.
-        headers = service_headers()
+        headers = service_headers(run_tenant=inp.tenant)
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
             with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 — fixed internal URL, not user input

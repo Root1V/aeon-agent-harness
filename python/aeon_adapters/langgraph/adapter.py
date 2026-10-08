@@ -32,6 +32,10 @@ class ModelGatewayChatClient:
     # a LangGraph run's tool calls were attributable and its model calls were not.
     run_id: str = ""
     agent_manifest_ref: str = ""
+    # VRT-AEON-005: the tenant of the RUN, so an interop run is billed and CAPPED against whoever
+    # submitted it. Same reasoning as the run_id above, one boundary out: the identity fields were
+    # built and the wire was missing, and nothing failed.
+    tenant: str = ""
 
     async def chat(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
         """Returns the Model Gateway's NormalizedChatResponse-shaped output (choices[0].message.
@@ -42,7 +46,7 @@ class ModelGatewayChatClient:
             DecideInput(
                 candidates=self.candidates, rendered_context=rendered_context,
                 data_sensitivity=self.data_sensitivity,
-                run_id=self.run_id, agent_manifest_ref=self.agent_manifest_ref,
+                run_id=self.run_id, agent_manifest_ref=self.agent_manifest_ref, tenant=self.tenant,
             )
         )
         return result.output
@@ -82,13 +86,14 @@ async def run_langgraph_graph(
     model: str,
     data_sensitivity: str = "",
     agent_manifest_ref: str = "",
+    tenant: str = "",
 ) -> dict[str, Any]:
     """Builds the graph with Aeon-bound clients injected, invokes it, and returns its final state.
     Meant to be called from inside a single Temporal Activity — never from workflow code, since
     LangGraph's own `ainvoke` loop is not something Temporal can safely replay directly."""
     model_client = ModelGatewayChatClient(
         candidates=candidates, model=model, data_sensitivity=data_sensitivity,
-        run_id=run_id, agent_manifest_ref=agent_manifest_ref,
+        run_id=run_id, agent_manifest_ref=agent_manifest_ref, tenant=tenant,
     )
     tool_client = ToolGatewayCaller(run_id=run_id, node_id=node_id)
     graph = build_graph(model_client, tool_client)
