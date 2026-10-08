@@ -66,7 +66,12 @@ func TestRunStartedOverHTTPIsOneTraceDownToTheWorker(t *testing.T) {
 	// ExtractTraceContext, the same wrapper all four binaries mount (OBS-006b). Without it the inbound
 	// traceparent below is ignored and the handler starts a root span of its own — so this test would
 	// be checking propagation while skipping the step that receives it.
-	srv := httptest.NewServer(httpserver.ExtractTraceContext(mux))
+	// ExtractTraceContext OUTSIDE auth.Require, which is the order the real httpserver uses: a 401
+	// stays inside the caller's trace instead of becoming a root span of its own (SEC-005). This test
+	// was the one server in the package still mounted without auth at all, so it was the one that
+	// broke when VRT-AEON-005 made a run reachable only by its own tenant — and it broke in CI, since
+	// it needs a real worker and Tempo and skips here.
+	srv := httptest.NewServer(httpserver.ExtractTraceContext(authWrap(t, mux)))
 	t.Cleanup(srv.Close)
 
 	// A traceparent written by hand rather than taken from a span we started. This is what an incident
@@ -88,7 +93,7 @@ func TestRunStartedOverHTTPIsOneTraceDownToTheWorker(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("traceparent", traceparent)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := http.DefaultClient.Do(authorize(req))
 	if err != nil {
 		t.Fatalf("POST /runs: %v", err)
 	}
