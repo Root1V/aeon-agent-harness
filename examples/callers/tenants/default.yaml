@@ -1,0 +1,98 @@
+# default.yaml — el nombre del fichero ES el tenant (GOV-001h).
+#
+# MISMOS TRES CALLERS Y MISMOS HASHES que examples/deep-research/callers.yaml (no los mismos bytes:
+# este fichero lleva su propio encabezado), para que un despliegue pueda pasar de AEON_CALLERS_PATH a AEON_CALLERS_DIR sin que cambie
+# nada de su conducta — y para que el modo directorio esté ejercido por el stack de referencia en vez
+# de solo por tests. Los tokens de desarrollo son públicos a propósito y lo dicen donde están.
+#
+# Para añadir un tenant: un fichero más aquí, que no toca este. Ver ../README.md.
+
+# SEC-005 caller bundle for LOCAL DEVELOPMENT. The tokens below are PUBLIC: they are in a committed
+# file, so anyone with the repository has them. That is deliberate and it is the only reason this file
+# can exist — `make dev` has to come up without a secret-provisioning step.
+#
+# DO NOT USE THIS FILE OUTSIDE A LAPTOP. For anything reachable by anyone else, generate real tokens
+# and write their hashes into your own bundle:
+#
+#   token=$(openssl rand -hex 32)          # keep this where you keep secrets
+#   printf '%s' "$token" | shasum -a 256   # put THIS in tokenSHA256
+#
+# The bundle never carries a token, only its SHA-256. A config-as-code file is committed, diffed and
+# pasted into issues, and a secret in one of those is a secret in all three.
+# VRT-AEON-005 T-1: every caller declares a `tenant`, and it is REQUIRED — a bundle with a caller
+# that has none does not load. `default` here because that is what this deployment's existing data
+# carries (AEON_TENANT_ID in deploy/compose), so adopting tenancy changes nothing for a laptop.
+#
+# ASSIGNED HERE AND NEVER IN A REQUEST. That is the whole property: before this, every Memory Store
+# route read `tenant_id` from the query string or the body, so the isolation SEC-004 built was real
+# and the tenant was whatever the caller typed — the same defect SEC-005 removed from the Cedar
+# principal, one field name along.
+apiVersion: harness.ai/v1
+kind: CallerBundle
+callers:
+  # The Python worker. It may act as the Deep Research agent and it may NOT approve.
+  #
+  # THAT SECOND HALF IS THE POINT OF THE WHOLE FEATURE. The worker is the process that gets blocked on
+  # an approval; a credential that could both run the tool and approve it would make the gate a
+  # formality with an audit entry. `mayApprove` is never implied by `mayActAs` (go/internal/auth).
+  - id: worker
+    kind: service
+    tenant: default
+    # sha256 of "dev-worker-token-not-a-secret"
+    tokenSHA256: "8eabe1a460429843e6fafe922cfd327079ef693777d4c4a76c0b9638e8676125"
+    mayActAs:
+      - deep-research-general@0.1.0
+    mayApprove: false
+    # GOV-001f: the tenants whose RUNS this worker may execute, named with X-Aeon-Run-Tenant. Absent
+    # here on purpose, because this example is a single-tenant deployment and that is the whole point
+    # of the field being optional: without it the worker names its own tenant and everything behaves
+    # exactly as it did before the header existed.
+    #
+    # ONLY AN OPERATOR CAN WRITE THIS LINE, which is what keeps `tenant` above still operator-assigned
+    # (see its own note). For a SHARED deployment where one worker executes several tenants' runs:
+    #
+    #   tenant: ops
+    #   mayActForTenants:
+    #     - tenant-a
+    #     - tenant-b
+    #
+    # Without it, every step of every run is judged, billed and journalled against this worker's own
+    # tenant whoever submitted it — including the cost ceiling, which simply stops applying because
+    # the run's agent is not in the registry the gateway looks at. Veritium measured that
+    # (VRT-AEON-005). There is NO WILDCARD and no "all" value, and only a `service` caller may hold
+    # the field: both refused at load, because a privilege that is silently ignored is
+    # indistinguishable from one that was granted.
+
+  # A person. May approve, and deliberately may NOT act as any agent: an operator deciding an approval
+  # has no reason to be able to execute tools in an agent's name, and the two permissions being
+  # separable in both directions is what makes the audit line mean something.
+  - id: operator
+    kind: human
+    tenant: default
+    # sha256 of "dev-operator-token-not-a-secret"
+    tokenSHA256: "700183179880062613e852ea7838fa721cc9300a033b9a0fbfc12bbec846d05f"
+    mayActAs: []
+    mayApprove: true
+
+  # The integration tests' own identity, so a test exercises the real guard with a real token instead
+  # of a path that skips it. Listed here rather than invented per-test: a test that builds its own
+  # permissive caller proves the handler runs, not that the deployment is configured.
+  - id: integration-test
+    kind: service
+    tenant: default
+    # sha256 of "dev-test-token-not-a-secret"
+    tokenSHA256: "4167faa73aedad9589d46f41c47e5964fedca12b5e9fc3a54c7b174dbb892dbf"
+    mayActAs:
+      - deep-research-general@0.1.0
+      # VRT-AEON-001: the agent `allow-test-external-activity` in policy_bundle.yaml names. It has no
+      # manifest in the registry on purpose, so nothing can actually be started as it — the entry
+      # exists so the activity node's ALLOW path is exercised by a real caller against the real
+      # bundle instead of by a test that builds its own permissive identity.
+      #
+      # ENUMERATED HERE RATHER THAN WIDENED. The first run of those tests failed with
+      # `403 caller may not act as this agent`, which is SEC-005 doing exactly its job, and the
+      # tempting fix was a `*` in mayActAs. There is a test that fixes the absence of a wildcard
+      # (TestActsAsHasNoWildcard) precisely because a wildcard would be convenient, spread by habit,
+      # and restore the hole with the deployment still looking configured.
+      - activity-node-test@0.1.0
+    mayApprove: true
