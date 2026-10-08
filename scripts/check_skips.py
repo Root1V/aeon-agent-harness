@@ -47,8 +47,9 @@ TOLERATED = (
     # normal run cannot overwrite the artefact three teams verify against.
     "set AEON_WRITE_STEP_IDENTITY_CORPUS=1",
     # These reconcile against the real Prometheus platform with real credentials and real money. They
-    # must NOT run in CI: the secret does not belong in a runner, and `make test-mdl-015` is the target
-    # that runs them deliberately, by a person, on a machine that has the credentials.
+    # must NOT run in CI: the secret does not belong in a runner, and `make test-mdl-015` and
+    # `make test-vrt-aeon-003` are the targets that run them deliberately, by a person, on a machine
+    # that has the credentials.
     "Prometheus credentials not set",
     # The same argument, different wording, and worth listing separately rather than loosening the
     # pattern above: TOOL-006's retrieval half needs the platform's embedding credentials. The first

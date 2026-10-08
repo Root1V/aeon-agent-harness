@@ -170,12 +170,27 @@ test-vrt-aeon-003: ## Run VRT-AEON-003's adapter-fidelity acceptance tests (real
 	# code when written against a double. Real inference spends real money (fractions of a cent), so
 	# it is excluded from CI for the same reason as test-mdl-015.
 	#
-	# No containers and no Postgres: the gateway is mounted in-process with its REAL handler, REAL
-	# routing and the REAL adapter, and the ledger is left nil (which is what a gateway deployed
-	# without one does). What is real is the only thing this request is about — the wire.
+	# The gateway is mounted in-process with its REAL handler, REAL routing and the REAL adapter. A-2
+	# needs no database (it is about the wire, and its ledger is left nil — which is what a gateway
+	# deployed without one does); A-3's half needs a real ledger, because "not charged twice" is a
+	# claim about rows and nothing else can check it.
+	#
+	# Postgres is reached on the HOST port (5442, deliberately non-default — see the compose file)
+	# rather than from inside aeon_default, because this target runs the tests on the host: they need
+	# the real platform's credentials, which live in .env and are not handed to a container.
+	#
+	# A-3's ceiling half is NOT here. It is in `make test-go-integration` with the rest of the suite,
+	# because it needs a provider that reports exactly N tokens and real inference reports whatever it
+	# reports — a ceiling test against a real model is a flaky test, not a stronger one. The split is
+	# deliberate: real platform where fidelity and replay are the subject, controlled provider where
+	# our own arithmetic is.
 	#
 	# Credentials come from .env, which is gitignored and never committed; see .env.example.
-	set -a && . ./.env && set +a && cd go && go test ./internal/api/ -run TestAdapterFidelityAgainstRealPrometheus -v -count=1
+	$(COMPOSE) --profile core up -d --wait postgres
+	set -a && . ./.env && set +a && cd go && \
+		AEON_TEST_PG_DSN="postgres://aeon:aeon@localhost:5442/aeon?sslmode=disable" \
+		go test ./internal/api/ -count=1 -v \
+			-run 'TestAdapterFidelityAgainstRealPrometheus|TestIdempotencyHeaderIsNotBilledTwiceThroughTheOpenAISurface'
 
 test-first-use-case: ## Check the on-ramp in docs/your-first-use-case.md still works
 	# A document is the artefact most likely to assert something the code no longer does — this repo's

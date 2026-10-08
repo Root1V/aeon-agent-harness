@@ -613,7 +613,22 @@ fichero mal nombrado. Sin `down`, a propósito.
   el mismo `name`? ¿un `SuiteReport` guardado explícitamente en el publish anterior?
 - **Coste:** M.
 
-### Enforcement de budgets en el endpoint OpenAI-compatible (INT-002)
+### ~~Enforcement de budgets en el endpoint OpenAI-compatible (INT-002)~~ — CERRADA como `MDL-021` el 2026-10-08
+
+> **Cerrada.** Su criterio de entrada era decidir cómo un cliente externo identifica el run: «¿un
+> header custom? ¿parte del `model` string (`profile:run_id`)?». Gana el header —
+> `X-Aeon-Run-Id`, `X-Aeon-Agent-Manifest-Ref`, `Idempotency-Key` — y el argumento es el que esta
+> entrada ya contenía sin sacar la conclusión: el contrato de este endpoint **es de otro** (OpenAI),
+> así que meter el run en el campo `model` reescribe el significado de una propiedad ajena, y un
+> cliente que no sabe nada de Aeon tiene que seguir funcionando. Con el header, no enviarlo es
+> legal y **se reporta** en la respuesta.
+>
+> Lo que esta entrada **no** veía, y es lo que la hacía más urgente de lo que su coste «M» sugería:
+> no faltaba el coste *por run*, faltaba **el coste**. `Ledger.Record` solo se llamaba desde el
+> handler de `/decide`, así que este endpoint no dejaba **ni una fila** en el ledger, con run o sin
+> él. Lo encontró Veritium (`VRT-AEON-003` A-3). Ver la fila `MDL-021`.
+
+### Enforcement de budgets en el endpoint OpenAI-compatible (INT-002) — descripción original
 
 - **Descripción:** `POST /v1/chat/completions` (INT-002) resuelve routing real contra un
   `ModelPolicyBundle` real, pero no aplica ningún límite de coste/tokens por-agente — no hay hoy

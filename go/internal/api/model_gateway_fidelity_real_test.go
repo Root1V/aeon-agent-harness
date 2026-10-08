@@ -298,12 +298,35 @@ func TestAdapterFidelityAgainstRealPrometheus(t *testing.T) {
 // behaviour a gateway deployed without a ledger has.
 func newRealPrometheusGatewayServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	client, model := realPrometheusClientOrSkip(t)
+
+	gw := modelgateway.New()
+	gw.RegisterProvider(prometheusinference.Name, &prometheusinference.Adapter{Client: client, Model: model})
+	mux := http.NewServeMux()
+	(&ModelGatewayHandlers{Gateway: gw, Pricing: finops.NewPricingTable(nil)}).Register(mux)
+	srv := httptest.NewServer(authWrap(t, mux))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// realPrometheusClientOrSkip builds a client against the real deployment, or skips.
+//
+// Shared by both of VRT-AEON-003's real-platform tests (A-2's fidelity and A-3's idempotency) so
+// there is one place that decides what "the real platform is available" means. The guard names only
+// the three variables the client actually needs — the older OBS-006 test still guards on
+// PROMETHEUS_AUTH_URL, which the client no longer HAS (one address, not two: see Client.GatewayURL),
+// so that test skips over a variable nothing reads.
+func realPrometheusClientOrSkip(t *testing.T) (*prometheusinference.Client, string) {
+	t.Helper()
 	gatewayURL := os.Getenv("PROMETHEUS_GATEWAY_URL")
 	clientID := os.Getenv("PROMETHEUS_CLIENT_ID")
 	clientSecret := os.Getenv("PROMETHEUS_CLIENT_SECRET")
 	if gatewayURL == "" || clientID == "" || clientSecret == "" {
-		t.Skip("real-platform test: set PROMETHEUS_GATEWAY_URL, PROMETHEUS_CLIENT_ID and " +
-			"PROMETHEUS_CLIENT_SECRET (they live in .env, which is gitignored) — see `make test-vrt-aeon-003`")
+		// The wording starts with the exact phrase scripts/check_skips.py tolerates, and that is not a
+		// coincidence to be cleaned up later: that file's own comment records having carried three
+		// variants of this message and missed the fourth. One condition, one wording.
+		t.Skip("Prometheus credentials not set — set PROMETHEUS_GATEWAY_URL, PROMETHEUS_CLIENT_ID and " +
+			"PROMETHEUS_CLIENT_SECRET (they live in .env, which is gitignored) and run `make test-vrt-aeon-003`")
 	}
 	model := realPrometheusModel()
 	scope := os.Getenv("PROMETHEUS_SCOPE")
@@ -320,14 +343,7 @@ func newRealPrometheusGatewayServer(t *testing.T) *httptest.Server {
 		Scope:        scope,
 	}
 	t.Cleanup(func() { _ = client.Close() })
-
-	gw := modelgateway.New()
-	gw.RegisterProvider("prometheus_inference", &prometheusinference.Adapter{Client: client, Model: model})
-	mux := http.NewServeMux()
-	(&ModelGatewayHandlers{Gateway: gw, Pricing: finops.NewPricingTable(nil)}).Register(mux)
-	srv := httptest.NewServer(authWrap(t, mux))
-	t.Cleanup(srv.Close)
-	return srv
+	return client, model
 }
 
 // realPrometheusModel is configurable because which models a client is authorized for is a property
