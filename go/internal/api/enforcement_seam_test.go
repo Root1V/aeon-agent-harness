@@ -44,12 +44,12 @@ func newEnforcementSeamServer(t *testing.T, checkpointer bool) *httptest.Server 
 	}
 
 	executor := toolexec.NewExecutor()
-	executor.Register("search.web", func(args map[string]any) (map[string]any, error) {
+	executor.Register("search.web", func(_ string, args map[string]any) (map[string]any, error) {
 		return map[string]any{"status": "executed"}, nil
 	})
 	for _, refused := range []string{"shell.exec", "external.write.database", "artifact.write"} {
 		name := refused
-		executor.Register(name, func(map[string]any) (map[string]any, error) {
+		executor.Register(name, func(string, map[string]any) (map[string]any, error) {
 			t.Errorf("the executor ran %q, which policy refuses — the seam reported a decision it did not enforce", name)
 			return map[string]any{}, nil
 		})

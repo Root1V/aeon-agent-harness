@@ -75,7 +75,7 @@ func newDeniedOutcomeGateway(t *testing.T) *httptest.Server {
 	// and a test that only inspected the journal would still pass if the tool had also run — which is the
 	// one outcome that would make the record a lie.
 	executor := toolexec.NewExecutor()
-	executor.Register("shell.exec", func(map[string]any) (map[string]any, error) {
+	executor.Register("shell.exec", func(string, map[string]any) (map[string]any, error) {
 		t.Error("the executor ran a tool the policy denied — the journal record would be describing a call that actually happened")
 		return map[string]any{}, nil
 	})

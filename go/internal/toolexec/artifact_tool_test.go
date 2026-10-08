@@ -7,29 +7,31 @@ import (
 	"testing"
 )
 
+// testTenant is the tenant every call in this file acts for. Artifacts are parked per tenant since
+// GOV-001g — `<root>/<tenant>/<id>` — so the fixture builds that shape rather than a flat directory,
+// and the tool is handed the same per-tenant resolver cmd/aeon-toolgw builds.
+const testTenant = "tenant-under-test"
+
 func newArtifactFixture(t *testing.T) (*Executor, string, string) {
 	t.Helper()
 	base := t.TempDir()
 	artifactDir := filepath.Join(base, "artifacts")
 	outsideDir := filepath.Join(base, "outside")
-	for _, d := range []string{artifactDir, outsideDir} {
+	for _, d := range []string{filepath.Join(artifactDir, testTenant), outsideDir} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(artifactDir, "art_deadbeefcafe1234"), []byte("# Report\nthe findings\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(artifactDir, testTenant, "art_deadbeefcafe1234"), []byte("# Report\nthe findings\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(outsideDir, "secret.txt"), []byte("SECRET-OUTSIDE-THE-ROOT"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	root, err := os.OpenRoot(artifactDir)
-	if err != nil {
-		t.Fatalf("OpenRoot: %v", err)
-	}
-	t.Cleanup(func() { _ = root.Close() })
 	e := &Executor{fns: map[string]ExecuteFunc{}}
-	RegisterArtifactReadTool(e, root, artifactDir)
+	RegisterArtifactReadTool(e, func(tenant string) (*os.Root, error) {
+		return os.OpenRoot(filepath.Join(artifactDir, tenant))
+	}, artifactDir)
 	return e, artifactDir, outsideDir
 }
 
@@ -37,7 +39,7 @@ func newArtifactFixture(t *testing.T) (*Executor, string, string) {
 func TestArtifactReadReturnsWhatARunProduced(t *testing.T) {
 	e, _, _ := newArtifactFixture(t)
 
-	out, err := e.Execute("artifact.read", map[string]any{"artifact_id": "art_deadbeefcafe1234"})
+	out, err := e.Execute(testTenant, "artifact.read", map[string]any{"artifact_id": "art_deadbeefcafe1234"})
 	if err != nil {
 		t.Fatalf("artifact.read: %v", err)
 	}
@@ -52,7 +54,7 @@ func TestArtifactReadReturnsWhatARunProduced(t *testing.T) {
 	}
 
 	t.Run("a line range works here too", func(t *testing.T) {
-		out, err := e.Execute("artifact.read", map[string]any{
+		out, err := e.Execute(testTenant, "artifact.read", map[string]any{
 			"artifact_id": "art_deadbeefcafe1234", "start_line": 2.0, "end_line": 2.0,
 		})
 		if err != nil {
@@ -79,7 +81,9 @@ func TestArtifactReadTakesAnIDAndNotAPath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(artifactDir, "notes.md"), []byte("inside but not an artifact"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if err := os.Symlink(filepath.Join(outsideDir, "secret.txt"), filepath.Join(artifactDir, "art_00000000")); err != nil {
+	if err := os.Symlink(filepath.Join(outsideDir, "secret.txt"), // Inside the TENANT directory, which is the root the tool now opens — one level up it is
+		// simply a file that is not there, and this subtest would stop testing containment.
+		filepath.Join(artifactDir, testTenant, "art_00000000")); err != nil {
 		t.Skipf("cannot create a symlink on this filesystem: %v", err)
 	}
 
@@ -97,7 +101,7 @@ func TestArtifactReadTakesAnIDAndNotAPath(t *testing.T) {
 		{"a valid id that is a symlink out of the root", "art_00000000", "escapes"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := e.Execute("artifact.read", map[string]any{"artifact_id": tc.id})
+			out, err := e.Execute(testTenant, "artifact.read", map[string]any{"artifact_id": tc.id})
 			if err == nil {
 				t.Fatalf("the read SUCCEEDED and returned %v", out["content"])
 			}
@@ -111,13 +115,13 @@ func TestArtifactReadTakesAnIDAndNotAPath(t *testing.T) {
 	}
 
 	t.Run("a missing artifact_id is named", func(t *testing.T) {
-		if _, err := e.Execute("artifact.read", map[string]any{}); err == nil {
+		if _, err := e.Execute(testTenant, "artifact.read", map[string]any{}); err == nil {
 			t.Fatal("a call with no artifact_id succeeded")
 		}
 	})
 
 	t.Run("an id that is well-formed but absent reads as absent", func(t *testing.T) {
-		_, err := e.Execute("artifact.read", map[string]any{"artifact_id": "art_ffffffffffff"})
+		_, err := e.Execute(testTenant, "artifact.read", map[string]any{"artifact_id": "art_ffffffffffff"})
 		if err == nil {
 			t.Fatal("reading an artifact that does not exist succeeded")
 		}

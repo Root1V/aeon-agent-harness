@@ -244,7 +244,9 @@ class DeepResearchWorkflow:
         # reason travels in `note` — so this needs no try/except of its own.
         artifact = await workflow.execute_activity(
             write_artifact_activity,
-            WriteArtifactInput(run_id=run_id, name="report.md", content=draft.text),
+            # tenant= is what decides WHICH artifact store this report lands in (GOV-001g), and it
+            # comes from the memo like everything else — never from the request.
+            WriteArtifactInput(run_id=run_id, name="report.md", content=draft.text, tenant=tenant),
             start_to_close_timeout=_ACTIVITY_TIMEOUT,
             retry_policy=RetryPolicy(maximum_attempts=1),
         )

@@ -150,7 +150,7 @@ func readContainedTextFile(root *os.Root, toolName, argName, rel string, args ma
 // `{"status":"executed"}` without doing anything is worse than an absent one, because an absent one
 // fails on the first call. This reads a real file off a real disk.
 func RegisterRepositoryReadTool(e *Executor, root *os.Root, rootPath string) {
-	e.Register("repository.read", func(args map[string]any) (map[string]any, error) {
+	e.Register("repository.read", func(_ string, args map[string]any) (map[string]any, error) {
 		rel, _ := args["path"].(string)
 		rel = strings.TrimSpace(rel)
 		if rel == "" {

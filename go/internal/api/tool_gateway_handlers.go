@@ -307,7 +307,9 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.Executor.Execute(body.ToolName, body.Args)
+	// The SAME tenant the policy was evaluated against (engineFor), so a tool that is tenant-scoped
+	// cannot be served from one tenant's store while being authorized by another's bundle.
+	result, err := h.Executor.Execute(tenant, body.ToolName, body.Args)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
@@ -395,7 +397,7 @@ func (h *ToolGatewayHandlers) executeDeduplicated(
 		return
 	}
 
-	result, execErr := h.Executor.Execute(body.ToolName, body.Args)
+	result, execErr := h.Executor.Execute(dedupeTenant, body.ToolName, body.Args)
 	if execErr != nil {
 		if relErr := executions.Release(r.Context(), body.IdempotencyKey); relErr != nil {
 			log.Printf("aeon-toolgw: releasing idempotency key after a failed execution: %v", relErr)

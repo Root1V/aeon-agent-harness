@@ -81,7 +81,11 @@ func toolCallHandler(toolName string, eng *policy.Engine, executor ToolExecutor)
 			}, nil
 		}
 
-		result, err := executor.Execute(toolName, args)
+		// INT-003's external MCP callers share one Cedar principal and are not a run, so there is no
+		// run tenant to pass. The empty string is deliberate and the tenant-scoped tools refuse it
+		// rather than fall back to a deployment-wide store — an external caller reading artifacts
+		// somebody's run produced is exactly what GOV-001g closed.
+		result, err := executor.Execute("", toolName, args)
 		if err != nil {
 			return &sdkmcp.CallToolResult{
 				IsError: true,

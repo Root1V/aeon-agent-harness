@@ -19,7 +19,7 @@ const defaultTopK = 5
 // Verifier has nothing to check the quote against — the citation becomes an assertion that happens
 // to look sourced.
 func RegisterRagTool(e *Executor, s *store.RagStore, embedder rag.Embedder, corpus string) {
-	e.Register("search.rag", func(args map[string]any) (map[string]any, error) {
+	e.Register("search.rag", func(_ string, args map[string]any) (map[string]any, error) {
 		query, _ := args["query"].(string)
 		if query == "" {
 			return nil, fmt.Errorf("toolexec: search.rag: missing required string arg %q", "query")

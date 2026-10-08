@@ -14,7 +14,14 @@ import (
 
 // ExecuteFunc is what running a tool actually does. Real implementations (MCP-backed, sandboxed,
 // etc.) will replace these — see roadmap.md RAG-001/TOOL-002, both still TODO.
-type ExecuteFunc func(args map[string]any) (map[string]any, error)
+//
+// THE TENANT IS THE FIRST ARGUMENT AND NOT PART OF `args`, which is the whole point of the
+// signature change GOV-001g made. `args` comes off the wire, so a tenant in there would be the
+// caller choosing its own isolation boundary — the defect SEC-005 and the Memory Store each paid
+// for once. As a parameter it is supplied by the gateway from `effectiveTenant`, and every tool
+// author sees it and has to decide whether their tool is tenant-scoped. Five of the six ignore it;
+// the sixth was reading other tenants' data before this existed.
+type ExecuteFunc func(tenant string, args map[string]any) (map[string]any, error)
 
 // shellExecImage is the image every shell.exec call runs in (TOOL-003) — small, fast to pull, and
 // what go/internal/sandbox's own tests already exercise.
@@ -48,7 +55,7 @@ func NewExecutor() *Executor {
 		runner    *sandbox.Runner
 		runnerErr error
 	)
-	e.Register("shell.exec", func(args map[string]any) (map[string]any, error) {
+	e.Register("shell.exec", func(_ string, args map[string]any) (map[string]any, error) {
 		command, ok := args["command"].(string)
 		if !ok || command == "" {
 			return nil, fmt.Errorf("toolexec: shell.exec: missing required string arg %q", "command")
@@ -80,10 +87,10 @@ func (e *Executor) Register(toolName string, fn ExecuteFunc) {
 // Execute runs a registered tool. Callers MUST check policy.Engine.IsAllowed before calling this —
 // Execute itself does not check authorization; that separation is what makes the policy check
 // testable independently of tool implementations.
-func (e *Executor) Execute(toolName string, args map[string]any) (map[string]any, error) {
+func (e *Executor) Execute(tenant, toolName string, args map[string]any) (map[string]any, error) {
 	fn, ok := e.fns[toolName]
 	if !ok {
 		return nil, fmt.Errorf("toolexec: unknown tool %q", toolName)
 	}
-	return fn(args)
+	return fn(tenant, args)
 }
