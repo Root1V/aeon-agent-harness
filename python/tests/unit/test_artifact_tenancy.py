@@ -65,7 +65,40 @@ async def test_two_tenants_running_the_same_run_id_do_not_collide(rooted) -> Non
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tenant", ["", "..", "../..", "Tenant-B", "tenant b", "/abs"])
+async def test_a_run_with_no_tenant_lands_in_the_workers_own(rooted) -> None:
+    """Empty is LEGITIMATE and not an error: it means the run did not come through the Run
+    Controller, which is every Deep Research run (the SDK starts those with `client.start_workflow`,
+    so there is no Temporal memo). The first version of GOV-001g refused it and CI caught that every
+    report stopped being parked — a regression, not isolation.
+
+    It is also the fallback every other surface already makes: `effectiveTenant` answers a request
+    with no X-Aeon-Run-Tenant with the caller's tenant, which for a run's step is this worker.
+    """
+    module, root = rooted
+    out = await module.write_artifact_activity(
+        module.WriteArtifactInput(run_id="sdk-run", name="report.md", content="parked", tenant="")
+    )
+    assert out.note == "", out.note
+    assert (root / module.WORKER_TENANT / out.artifact_id).read_text() == "parked"
+    # And NOT in the root, which is where it used to land and where every tenant could reach it.
+    assert not (root / out.artifact_id).exists()
+
+
+@pytest.mark.asyncio
+async def test_the_workers_fallback_tenant_is_configuration(rooted, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Operator configuration and not a constant, because the operator who shares one worker across
+    tenants is the one who has to name its tenant."""
+    module, root = rooted
+    monkeypatch.setattr(module, "WORKER_TENANT", "ops")
+    out = await module.write_artifact_activity(
+        module.WriteArtifactInput(run_id="sdk-run", name="report.md", content="parked", tenant="")
+    )
+    assert out.note == "", out.note
+    assert (root / "ops" / out.artifact_id).read_text() == "parked"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tenant", ["..", "../..", "Tenant-B", "tenant b", "/abs"])
 async def test_a_tenant_that_is_not_a_tenant_name_parks_nothing(rooted, tenant: str) -> None:
     """REFUSED AND REPORTED, never written one level up.
 
