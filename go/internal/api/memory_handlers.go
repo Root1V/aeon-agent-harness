@@ -95,7 +95,15 @@ func (h *MemoryHandlers) ownedByCaller(w http.ResponseWriter, r *http.Request, t
 }
 
 func (h *MemoryHandlers) writeCandidate(w http.ResponseWriter, r *http.Request) {
-	tenant, ok := callerTenant(w, r)
+	// effectiveTenant and not callerTenant, and this is the ONLY memory route that changes.
+	//
+	// It is the only one the worker calls — memory_activities' own comment says "POST
+	// /memory/candidates and nothing else" — so it is the only one where the caller is a process
+	// executing somebody else's run rather than the consumer who owns the data. The other nine are
+	// reached by the consumer directly, where the caller's tenant IS the right answer, and widening
+	// them would open a door nothing needs. rejectRequestTenant below is untouched: a tenant in the
+	// request BODY is still refused from everyone, which is the defect this route originally had.
+	tenant, ok := effectiveTenant(w, r)
 	if !ok {
 		return
 	}

@@ -52,6 +52,10 @@ class ActivityPolicyInput:
     # tell "forbidden" from "permitted pending a person", and collapsing them would either refuse a
     # legitimate gated node or let an ungated one through.
     requires_approval: bool = False
+    # VRT-AEON-005: the tenant of the RUN, so the gateway evaluates the bundle of whoever submitted
+    # it rather than the bundle of this worker. Veritium measured the consequence on their own
+    # deployment: with one worker, tenant B's permit was never consulted for B's runs.
+    tenant: str = ""
 
 
 @dataclass
@@ -88,7 +92,7 @@ async def check_activity_policy_activity(inp: ActivityPolicyInput) -> ActivityPo
         }
     ).encode()
     request = urllib.request.Request(
-        f"http://{addr}/check-activity-policy", data=payload, headers=service_headers()
+        f"http://{addr}/check-activity-policy", data=payload, headers=service_headers(run_tenant=inp.tenant)
     )
 
     try:

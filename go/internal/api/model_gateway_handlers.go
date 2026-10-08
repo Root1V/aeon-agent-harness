@@ -40,11 +40,21 @@ type ModelGatewayHandlers struct {
 // their old meaning: a deployment without Postgres has no ledger and no ceiling, which is reported
 // at startup, and that is unchanged by tenancy.
 func (h *ModelGatewayHandlers) tenantOf(r *http.Request) (string, bool) {
+	// THE TENANT OF THE RUN. This one line is the worst of the six surfaces Veritium's finding
+	// touched, and the only one with no symptom: `agentsFor` below reads the agent registry the COST
+	// CEILING comes from, and `overBudget` answers a missing manifest by LOGGING IT AND ALLOWING THE
+	// CALL (MDL-017's deliberate choice, so as not to break deployments whose agents are not
+	// registered). So with the worker as caller, a run's agent is not where the gateway looks, no
+	// ceiling is found, and the run spends without limit. Measured: a 1-token ceiling in tenant-b
+	// with the caller in tenant-ops answers 200 on the call that should have been 402.
+	//
+	// It writes no response because this is the nil-safe accessor every caller here treats as
+	// optional; the handler refuses an unentitled header before reaching it.
 	caller, ok := auth.CallerFrom(r.Context())
 	if !ok {
 		return "", false
 	}
-	return caller.Tenant, true
+	return effectiveTenantOrCaller(r), ok && caller.Tenant != ""
 }
 
 // ledgerFor is nil when this deployment has no ledger OR when there is no caller to scope it to.

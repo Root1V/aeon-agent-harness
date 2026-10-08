@@ -82,6 +82,49 @@ type Caller struct {
 	// read `tenant_id` from the request, so the isolation SEC-004 built and tested was real and the
 	// tenant was the caller's choice.
 	Tenant string `yaml:"tenant" json:"tenant"`
+	// MayActForTenants lists the OTHER tenants this caller may name on a request, with
+	// `X-Aeon-Run-Tenant`, when the work it is doing belongs to one of them.
+	//
+	// THE ONE NARROW EXCEPTION TO THE RULE WRITTEN ABOVE, and it is worth being exact about what is
+	// and is not being relaxed. The rule is that a tenant is assigned by the operator and never
+	// declared by the client. That rule is unchanged: this list is operator configuration, in the
+	// same bundle, and a caller with an empty list still cannot name any tenant but its own. What
+	// changes is that an operator can now say "this process executes runs for these tenants", which
+	// is a sentence only an operator can write.
+	//
+	// WHY IT HAS TO EXIST (VRT-AEON-005, Veritium's réplica of 2026-10-08, measured on their own
+	// deployment): for a step of a run, the caller is the AEON WORKER, with one token and therefore
+	// one tenant. So every surface that derived the tenant from the caller was deriving the worker's
+	// — the policy bundle, the tool-execution dedupe, the denial journal, the cost ledger, the agent
+	// registry the cost CEILING is read from, and the memory store. In a shared deployment with one
+	// worker, every run was judged and billed against the worker's tenant whoever submitted it.
+	//
+	// NO WILDCARD, for the same reason MayActAs refuses one: a `*` here is "may act for every tenant",
+	// which is the isolation boundary removed by a credential that still looks configured. And there
+	// is no "all" value, matching the Tenant field's own refusal to have a default.
+	//
+	// SERVICE CALLERS ONLY, enforced at load. A human or an external caller that could speak for
+	// another tenant is an account takeover with extra steps, and the only caller that legitimately
+	// needs this is a process executing somebody else's runs. Relaxing it is a one-line change and
+	// should cost whoever makes it an argument.
+	MayActForTenants []string `yaml:"mayActForTenants" json:"may_act_for_tenants,omitempty"`
+}
+
+// ActsForTenant reports whether this caller may name tenant on a request.
+//
+// Its OWN tenant is always allowed, so a caller that names the tenant it already belongs to needs no
+// privilege — which keeps the worker's single-tenant deployment working with no configuration at all,
+// and means the header is never the thing that breaks an existing install.
+func (c Caller) ActsForTenant(tenant string) bool {
+	if tenant == c.Tenant {
+		return true
+	}
+	for _, allowed := range c.MayActForTenants {
+		if allowed == tenant {
+			return true
+		}
+	}
+	return false
 }
 
 // ActsAs reports whether this caller may present agentManifestRef as its own.
@@ -167,6 +210,44 @@ func Load(doc CallerBundleDoc) (*Authenticator, error) {
 					"a safe part of a database predicate and of a Cedar principal without quoting rules",
 				c.ID, c.Tenant, tenantPattern)
 		}
+
+		// MayActForTenants: the same refusals the Tenant field above makes, plus the kind restriction.
+		// Validated here rather than at use, because a bundle that names an impossible privilege has
+		// to fail to load — a privilege that is silently ignored is indistinguishable from one that
+		// was granted, and the operator who wrote it believes it applies.
+		seenActFor := map[string]bool{}
+		normalisedActFor := make([]string, 0, len(c.MayActForTenants))
+		for _, t := range c.MayActForTenants {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				return nil, fmt.Errorf("auth: caller %q has an empty entry in mayActForTenants", c.ID)
+			}
+			if !tenantPattern.MatchString(t) {
+				return nil, fmt.Errorf(
+					"auth: caller %q may act for tenant %q, which must match %s. There is no wildcard and "+
+						"no \"all tenants\" value: either would remove the isolation boundary while the "+
+						"bundle still looked configured", c.ID, t, tenantPattern)
+			}
+			if seenActFor[t] {
+				return nil, fmt.Errorf("auth: caller %q lists tenant %q twice in mayActForTenants", c.ID, t)
+			}
+			seenActFor[t] = true
+			if t == c.Tenant {
+				// Not an error — it is simply redundant, since ActsForTenant always allows the caller's
+				// own tenant. Dropped so the configured list means "and these others", which is what
+				// an operator reading it will assume.
+				continue
+			}
+			normalisedActFor = append(normalisedActFor, t)
+		}
+		if len(normalisedActFor) > 0 && c.Kind != KindService {
+			return nil, fmt.Errorf(
+				"auth: caller %q has kind %q and may act for other tenants. Only a %s caller may: a human "+
+					"or external credential that can speak for another tenant is an account takeover with "+
+					"extra steps, and the only caller that legitimately needs this is a process executing "+
+					"somebody else's runs", c.ID, c.Kind, KindService)
+		}
+		c.MayActForTenants = normalisedActFor
 
 		hash := strings.ToLower(strings.TrimSpace(c.TokenSHA256))
 		if len(hash) != 64 {

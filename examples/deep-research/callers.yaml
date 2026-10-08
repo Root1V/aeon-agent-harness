@@ -34,6 +34,25 @@ callers:
     mayActAs:
       - deep-research-general@0.1.0
     mayApprove: false
+    # GOV-001f: the tenants whose RUNS this worker may execute, named with X-Aeon-Run-Tenant. Absent
+    # here on purpose, because this example is a single-tenant deployment and that is the whole point
+    # of the field being optional: without it the worker names its own tenant and everything behaves
+    # exactly as it did before the header existed.
+    #
+    # ONLY AN OPERATOR CAN WRITE THIS LINE, which is what keeps `tenant` above still operator-assigned
+    # (see its own note). For a SHARED deployment where one worker executes several tenants' runs:
+    #
+    #   tenant: ops
+    #   mayActForTenants:
+    #     - tenant-a
+    #     - tenant-b
+    #
+    # Without it, every step of every run is judged, billed and journalled against this worker's own
+    # tenant whoever submitted it — including the cost ceiling, which simply stops applying because
+    # the run's agent is not in the registry the gateway looks at. Veritium measured that
+    # (VRT-AEON-005). There is NO WILDCARD and no "all" value, and only a `service` caller may hold
+    # the field: both refused at load, because a privilege that is silently ignored is
+    # indistinguishable from one that was granted.
 
   # A person. May approve, and deliberately may NOT act as any agent: an operator deciding an approval
   # has no reason to be able to execute tools in an agent's name, and the two permissions being

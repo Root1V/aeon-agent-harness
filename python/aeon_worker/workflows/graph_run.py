@@ -57,6 +57,10 @@ with workflow.unsafe.imports_passed_through():
         record_approval_wait_activity,
     )
     from aeon_worker.activities.tool_activities import ExecuteToolInput, ExecuteToolOutput, execute_tool_activity
+    # Pure constants, but imported through the passthrough like everything else in this block: the
+    # comment above records what the sandbox's own reload of this file does to a nested import, and
+    # "it is only constants" is the kind of exception that stops being true later.
+    from aeon_worker.tenancy import TENANT_MEMO_KEY
     from aeon_worker.graph import (
         ApprovalDeniedError,
         ApprovalExpiredError,
@@ -271,6 +275,16 @@ class GraphRunWorkflow:
         state = GraphExecutionState(
             run_id=request["run_id"],
             agent_manifest_ref=request.get("agent_manifest_ref", ""),
+            # FROM THE MEMO AND NOT FROM THE REQUEST, which is the whole point. The memo is set by
+            # the Run Controller at start from the AUTHENTICATED caller's tenant (GOV-001e,
+            # runcontroller.TenantMemoKey) and a workflow cannot change it. A tenant read from
+            # `request` would be the client choosing its own isolation boundary — the defect
+            # SEC-005 and the Memory Store each paid for once.
+            #
+            # memo_value is deterministic under ADR-001: the memo arrives in the workflow's start
+            # attributes, so it is in the history and a replay reads the same value. The default is
+            # "" so a run started before this memo existed replays instead of raising KeyError.
+            tenant=workflow.memo_value(TENANT_MEMO_KEY, ""),
             is_paused=lambda: self._paused,
             budgets=budgets,
             await_approval=self._await_approval,

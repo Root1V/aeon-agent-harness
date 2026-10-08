@@ -33,12 +33,13 @@ var toolGatewayTracer = otel.Tracer("aeon-toolgw")
 // "policy check after argument generation, before execution" rule.
 type ToolGatewayHandlers struct {
 	// Policy is the SET — one Cedar engine per tenant (VRT-AEON-005 T-5). Resolved per request from
-	// the caller's tenant, and a tenant with no bundle is DENIED rather than falling back to
-	// somebody else's permits.
+	// the tenant of the RUN (effectiveTenant: the caller's, unless the operator entitled it to name
+	// another), and a tenant with no bundle is DENIED rather than falling back to somebody else's
+	// permits.
 	Policy   *policy.Set
 	Executor *toolexec.Executor
 	// Executions is the STORE, not a dedupe handle, since VRT-AEON-005: the handle is derived per
-	// request from the caller's tenant (store.ToolExecutionsFor), because a handle built once at
+	// request from the run's tenant (store.ToolExecutionsFor), because a handle built once at
 	// startup would be one tenant's for every caller. Optional only in the sense that a deployment
 	// may not configure it — a request that ASKS for deduplication and finds it missing is refused
 	// rather than executed, because silently running an effect the caller asked to have
@@ -55,38 +56,44 @@ type ToolGatewayHandlers struct {
 	// has nothing to journal AGAINST, and a deployment may have no journal at all. Neither is allowed to
 	// turn a denial into an error — but neither is allowed to look like a recorded denial either, which
 	// is why the response says which of the three happened.
-	// VRT-AEON-005: the store; the journal handle is derived per request from the caller's tenant.
+	// VRT-AEON-005: the store; the journal handle is derived per request from the run's tenant — the
+	// same value the decision was made against, passed into journalDenial rather than recomputed.
 	Checkpointer *store.Store
 }
 
 // Register mounts the tool gateway routes on mux.
 
-// engineFor resolves the Cedar engine for the caller's tenant, writing the refusal itself when there
-// is none.
+// engineFor resolves the Cedar engine for the tenant this request belongs to, writing the refusal
+// itself when there is none.
 //
-// THREE REFUSALS, AND THEY SAY DIFFERENT THINGS ON PURPOSE. No caller means this route was mounted
+// FOUR REFUSALS, AND THEY SAY DIFFERENT THINGS ON PURPOSE. No caller means this route was mounted
 // without auth.Require — a wiring mistake, and answering anyway is how an unauthenticated surface
-// comes back. No bundle for the tenant means governance has not been written for them yet, which is
-// a deployment gap and not a policy decision; it must not resolve to another tenant's engine,
-// because a permit applying where nobody wrote it is the exact defect A2A-002 and RUN-006 both hit.
+// comes back. A malformed X-Aeon-Run-Tenant is a 400. A caller naming a tenant it was not entitled
+// to is a 403 that says so, rather than a silently ignored header. And no bundle for the tenant
+// means governance has not been written for them yet, which is a deployment gap and not a policy
+// decision; it must not resolve to another tenant's engine, because a permit applying where nobody
+// wrote it is the exact defect A2A-002 and RUN-006 both hit.
 func (h *ToolGatewayHandlers) engineFor(w http.ResponseWriter, r *http.Request) (*policy.Engine, string, bool) {
-	caller, ok := auth.CallerFrom(r.Context())
+	// THE TENANT OF THE RUN, not of the caller. This line is the one Veritium measured: for a step of
+	// a run the caller is the worker, so every run was evaluated against the worker's bundle. The
+	// permit of tenant B was never consulted for B's runs — and the obvious workaround, copying B's
+	// permit into the worker's bundle, makes it apply to EVERY tenant's runs, which is criterion 3
+	// inverted. effectiveTenant refuses a header the operator has not entitled, so this is still the
+	// caller's tenant unless an operator said otherwise.
+	tenant, ok := effectiveTenant(w, r)
 	if !ok {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{
-			"error": "unauthenticated: policy is evaluated against the caller's tenant (SEC-005/VRT-AEON-005)",
-		})
 		return nil, "", false
 	}
-	engine, ok := h.Policy.EngineFor(caller.Tenant)
+	engine, ok := h.Policy.EngineFor(tenant)
 	if !ok {
 		writeJSON(w, http.StatusForbidden, map[string]any{
-			"error": "no policy bundle is loaded for this caller's tenant, so nothing is authorized for it. " +
+			"error": "no policy bundle is loaded for this tenant, so nothing is authorized for it. " +
 				"A missing bundle is a denial and never a fallback to another tenant's policies",
-			"tenant": caller.Tenant,
+			"tenant": tenant,
 		})
 		return nil, "", false
 	}
-	return engine, caller.Tenant, true
+	return engine, tenant, true
 }
 
 func (h *ToolGatewayHandlers) Register(mux *http.ServeMux) {
@@ -233,7 +240,7 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	engine, _, ok := h.engineFor(w, r)
+	engine, tenant, ok := h.engineFor(w, r)
 	if !ok {
 		return
 	}
@@ -270,7 +277,7 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 		outcome, isDenial := dispositionOutcome(decision.Disposition)
 		journal := denialResult{Reason: "not a denial: the step is waiting for a person, and its outcome is journalled when the approval is decided"}
 		if isDenial {
-			journal = h.journalDenial(r.Context(), body, outcome, denialReason(decision))
+			journal = h.journalDenial(r.Context(), tenant, body, outcome, denialReason(decision))
 			span.SetAttributes(attribute.String("aeon.step.outcome", string(outcome)))
 		}
 		span.SetAttributes(attribute.Bool("aeon.step.outcome_journalled", journal.Journalled))
@@ -330,18 +337,21 @@ func (h *ToolGatewayHandlers) executeDeduplicated(
 		return
 	}
 
-	// The tenant comes from the credential, never from the request (T-1). A dedupe table keyed
-	// without it meant the same idempotency key in two tenants was one row, so the second tenant's
-	// call came back "already executed" carrying the first tenant's recorded result.
-	caller, ok := auth.CallerFrom(r.Context())
+	// The tenant never comes from the request BODY (T-1). A dedupe table keyed without a tenant meant
+	// the same idempotency key in two tenants was one row, so the second tenant's call came back
+	// "already executed" carrying the first tenant's recorded result.
+	//
+	// It does now come from a HEADER when the operator entitled this caller to name one, which is a
+	// different thing: see RunTenantHeader. Without that entitlement effectiveTenant refuses, so the
+	// value here is the caller's own tenant exactly as before.
+	dedupeTenant, ok := effectiveTenant(w, r)
 	if !ok {
-		span.SetStatus(codes.Error, "unauthenticated")
-		writeJSON(w, http.StatusUnauthorized, map[string]any{
-			"error": "unauthenticated: deduplication is scoped to the caller's tenant (SEC-005/VRT-AEON-005)",
-		})
+		span.SetStatus(codes.Error, "no tenant for this request")
 		return
 	}
-	executions := h.Executions.ToolExecutionsFor(caller.Tenant)
+	// Same tenant the policy was evaluated against, so a run's dedupe records cannot land in one
+	// tenant while its authorization was decided in another.
+	executions := h.Executions.ToolExecutionsFor(dedupeTenant)
 
 	claim, err := executions.Claim(r.Context(), body.IdempotencyKey, body.ToolName, body.AgentManifestRef, body.Args)
 	if claim.ArgsDiverged {
@@ -439,8 +449,11 @@ type denialResult struct {
 // It NEVER fails the request. A denial whose record could not be written is still a denial, and
 // turning it into a 500 would mean a journal outage could get an effect executed on retry — the
 // opposite of what a policy denial is for. The caller learns the record is missing instead.
+// The tenant is a PARAMETER and not read from ctx: this function has no request, and the tenant of a
+// run arrives in a header. Passing it in also means the journal cannot disagree with the tenant the
+// decision was made against — they are the same value, computed once by the handler.
 func (h *ToolGatewayHandlers) journalDenial(
-	ctx context.Context, body toolCallRequest, outcome checkpoint.Outcome, reason string,
+	ctx context.Context, tenant string, body toolCallRequest, outcome checkpoint.Outcome, reason string,
 ) denialResult {
 	if body.RunID == "" || body.StepID == "" {
 		return denialResult{Reason: "no run_id/step_id on the request: there is no journal to record this against"}
@@ -453,7 +466,7 @@ func (h *ToolGatewayHandlers) journalDenial(
 	if err != nil {
 		return denialResult{Reason: err.Error()}
 	}
-	res, err := h.Checkpointer.CheckpointerFor(callerTenantOrEmpty(ctx)).Append(ctx, checkpoint.Entry{
+	res, err := h.Checkpointer.CheckpointerFor(tenant).Append(ctx, checkpoint.Entry{
 		RunID: body.RunID, StepID: body.StepID, Phase: checkpoint.PhaseCompleted, Payload: payload,
 	})
 	if err != nil {

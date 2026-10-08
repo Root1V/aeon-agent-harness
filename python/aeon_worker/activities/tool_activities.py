@@ -45,6 +45,10 @@ class ExecuteToolInput:
     # until TOOL-004, which meant the per-agent policy this platform advertises could not be applied
     # from here even in principle: a call with no principal is a call no policy can deny.
     agent_manifest_ref: str = ""
+    # VRT-AEON-005: the tenant of the RUN. It decides THREE things at the gateway — the Cedar bundle,
+    # the dedupe table this key is claimed in, and the tenant a policy denial is journalled into — and
+    # all three were the worker's before this field existed.
+    tenant: str = ""
     # Test-only hook: when true, the FIRST (non-deduplicated) execution hard-kills the process
     # right after recording the effect but before returning to Temporal — simulating a worker
     # crash after the side effect landed but before the Activity completion was acknowledged.
@@ -140,7 +144,7 @@ async def _execute_through_gateway(inp: ExecuteToolInput, key: str) -> ExecuteTo
         data=payload,
         # Trace context injected here, so the gateway's execute_tool span becomes a CHILD of this one
         # instead of the root of its own trace.
-        headers=service_headers(),
+        headers=service_headers(run_tenant=inp.tenant),
     )
 
     try:

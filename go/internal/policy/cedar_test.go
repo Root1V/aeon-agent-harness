@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -479,4 +480,37 @@ func TestAnExternalActivityDoesNotInheritAToolPermit(t *testing.T) {
 				"worker picks the work up, so a bundle has to be able to say which one")
 		}
 	})
+}
+
+// TestABundleWithNoPoliciesIsRefused is the one-level-up version of the guard right beside it, which
+// refuses an entry whose cedarSource holds no policy.
+//
+// MEASURED RATHER THAN IMAGINED, on 2026-10-08, while writing VRT-AEON-005's propagation test: a
+// bundle whose policies were written under `statements:` instead of `policies:` loaded CLEANLY with
+// zero policies, because an unrecognised key is silently dropped by the YAML decoder. The engine then
+// denied everything — fail-closed, so not a hole — and the only symptom was "denied by policy" on a
+// request the file plainly permits. The time went into debugging Cedar rather than the key.
+func TestABundleWithNoPoliciesIsRefused(t *testing.T) {
+	if _, err := LoadEngine(PolicyBundleDoc{}); err == nil {
+		t.Fatal("a bundle with no policies loaded. It authorizes nothing while reading as though it " +
+			"governs something, which is the same argument the per-entry guard already makes")
+	}
+
+	// The real shape it was found in: valid YAML, right apiVersion, wrong key.
+	var doc PolicyBundleDoc
+	raw := []byte("apiVersion: harness.ai/v1\nkind: PolicyBundle\nstatements:\n  - id: allow-x\n    effect: permit\n")
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	if len(doc.Policies) != 0 {
+		t.Fatalf("the decoder picked up %d policies from a `statements:` key — this test's premise is "+
+			"that it silently picks up none", len(doc.Policies))
+	}
+	if _, err := LoadEngine(doc); err == nil {
+		t.Fatal("the misspelled bundle loaded as an empty engine")
+	} else if !strings.Contains(err.Error(), "policies:") {
+		// The error has to name the likely cause. "This bundle is empty" sends an operator looking at
+		// their Cedar; naming the key sends them to the line that is actually wrong.
+		t.Errorf("the error does not mention the `policies:` key: %v", err)
+	}
 }

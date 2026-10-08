@@ -109,7 +109,11 @@ def test_the_caller_token_is_resolved_through_secretref(tmp_path):
     path.write_text("token-from-a-file\n")
     os.environ[outbound.CALLER_TOKEN_ENV + secretref.FILE_SUFFIX] = str(path)
     try:
-        headers = outbound.service_headers()
+        # run_tenant="" is the right value here: these two tests are about the CREDENTIAL, not about
+        # a run. It is passed explicitly because the parameter has no default, which is deliberate —
+        # a call site that could omit it would fall back to the gateway deriving the tenant from this
+        # worker's own credential, which is the VRT-AEON-005 defect and fails nothing.
+        headers = outbound.service_headers(run_tenant="")
         assert headers["Authorization"] == "Bearer token-from-a-file"
         assert not child_env_contains("token-from-a-file")
     finally:
@@ -134,7 +138,7 @@ def test_building_a_header_does_not_scrub_the_callers_environment():
     previous = os.environ.get(outbound.CALLER_TOKEN_ENV)
     os.environ[outbound.CALLER_TOKEN_ENV] = "token-the-test-process-still-needs"
     try:
-        assert outbound.service_headers()["Authorization"].endswith("token-the-test-process-still-needs")
+        assert outbound.service_headers(run_tenant="")["Authorization"].endswith("token-the-test-process-still-needs")
         assert os.environ.get(outbound.CALLER_TOKEN_ENV) == "token-the-test-process-still-needs", (
             "building a header removed the credential from this process's environment: a subprocess "
             "spawned with os.environ.copy() after this point starts with no credential"

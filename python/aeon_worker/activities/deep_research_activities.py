@@ -31,6 +31,9 @@ class PlanResearchInput:
     # every Deep Research run were unattributable — and the Planner is the one that runs first.
     run_id: str = ""
     agent_manifest_ref: str = ""
+    # VRT-AEON-005: travels wherever run_id and agent_manifest_ref travel — the tenant of the RUN,
+    # so the gateway bills and CAPS it against whoever submitted it rather than against this worker.
+    tenant: str = ""
 
 
 @dataclass
@@ -55,6 +58,7 @@ async def _decide_via_gateway(
     *,
     run_id: str = "",
     agent_manifest_ref: str = "",
+    tenant: str = "",
 ) -> dict[str, Any]:
     """OBS-003b: every stage's model call now says which run and which agent it is for.
 
@@ -71,6 +75,7 @@ async def _decide_via_gateway(
             data_sensitivity=data_sensitivity,
             run_id=run_id,
             agent_manifest_ref=agent_manifest_ref,
+            tenant=tenant,
         )
     )
     return result.output
@@ -81,7 +86,7 @@ async def plan_research_activity(inp: PlanResearchInput) -> PlanResearchOutput:
     async def decide(rendered_context: dict[str, Any]) -> dict[str, Any]:
         return await _decide_via_gateway(
             inp.candidates, inp.data_sensitivity, rendered_context,
-            run_id=inp.run_id, agent_manifest_ref=inp.agent_manifest_ref,
+            run_id=inp.run_id, agent_manifest_ref=inp.agent_manifest_ref, tenant=inp.tenant,
         )
 
     plan = await Planner(model=inp.model).plan(inp.query, decide)
@@ -113,6 +118,9 @@ class ResearchSubtaskInput:
     # nothing. Found running the pipeline against the real platform: DX-001 never hit it, because a
     # run whose tools do nothing still completes.
     agent_manifest_ref: str = ""
+    # VRT-AEON-005: travels wherever run_id and agent_manifest_ref travel — the tenant of the RUN,
+    # so the gateway bills and CAPS it against whoever submitted it rather than against this worker.
+    tenant: str = ""
     # MDL-015: the manifest's own tools.allow list, so the Researcher's prompt names exactly the tools
     # policy permits. Empty means "no tools", which the prompt states outright instead of leaving the
     # model to guess that none exist.
@@ -139,7 +147,7 @@ async def research_subtask_activity(inp: ResearchSubtaskInput) -> ResearchSubtas
     async def decide(rendered_context: dict[str, Any]) -> dict[str, Any]:
         return await _decide_via_gateway(
             inp.candidates, inp.data_sensitivity, rendered_context,
-            run_id=inp.run_id, agent_manifest_ref=inp.agent_manifest_ref,
+            run_id=inp.run_id, agent_manifest_ref=inp.agent_manifest_ref, tenant=inp.tenant,
         )
 
     step_seq = 0
@@ -194,6 +202,9 @@ class BuildReportInput:
     # OBS-003b — see PlanResearchInput.
     run_id: str = ""
     agent_manifest_ref: str = ""
+    # VRT-AEON-005: travels wherever run_id and agent_manifest_ref travel — the tenant of the RUN,
+    # so the gateway bills and CAPS it against whoever submitted it rather than against this worker.
+    tenant: str = ""
 
 
 @dataclass
@@ -207,7 +218,7 @@ async def build_report_activity(inp: BuildReportInput) -> BuildReportOutput:
     async def decide(rendered_context: dict[str, Any]) -> dict[str, Any]:
         return await _decide_via_gateway(
             inp.candidates, inp.data_sensitivity, rendered_context,
-            run_id=inp.run_id, agent_manifest_ref=inp.agent_manifest_ref,
+            run_id=inp.run_id, agent_manifest_ref=inp.agent_manifest_ref, tenant=inp.tenant,
         )
 
     allowed_claims = [{"claim_id": c.claim_id, "claim": c.claim, "quote": c.quote, "source_id": c.source_id} for c in inp.allowed_claims]

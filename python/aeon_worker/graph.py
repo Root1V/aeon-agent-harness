@@ -179,6 +179,14 @@ class GraphExecutionState:
     """
 
     run_id: str
+    # VRT-AEON-005: the tenant the RUN belongs to, read from the Temporal memo by the workflow (see
+    # workflows/graph_run.py). Every governed call a step makes carries it, because the caller the
+    # gateways see is this worker — one token, one tenant — and without it a shared deployment judged
+    # and billed every run against the worker's tenant whoever submitted it.
+    #
+    # Empty is legal and means "not known": a run started before the memo existed, or a graph executed
+    # outside a run. The gateways then fall back to the caller's tenant, which is the old behaviour.
+    tenant: str = ""
     # TOOL-004: the principal the Tool Gateway evaluates Cedar policy against. Empty means the run
     # has no agent identity, which the gateway path refuses rather than defaulting — a call with no
     # principal is a call no policy can deny, and a default principal would make every per-agent
@@ -281,6 +289,7 @@ async def _execute_tool_call(node: dict[str, Any], state: GraphExecutionState) -
         tool_name=node["tool_name"],
         tool_args=node.get("tool_args", {}),
         agent_manifest_ref=state.agent_manifest_ref,
+        tenant=state.tenant,
     )
     output: ExecuteToolOutput = await workflow.execute_activity(
         execute_tool_activity,
@@ -340,6 +349,7 @@ async def _execute_activity(node: dict[str, Any], state: GraphExecutionState) ->
             activity_name=activity_name,
             task_queue=task_queue,
             requires_approval=requires_approval,
+            tenant=state.tenant,
         ),
         start_to_close_timeout=timedelta(seconds=30),
         retry_policy=RetryPolicy(maximum_attempts=5),

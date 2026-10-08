@@ -46,6 +46,10 @@ class ReflectInput:
     model: str
     candidates: list[DecideCandidate]
     data_sensitivity: str = ""
+    # VRT-AEON-005: travels wherever run_id and agent_manifest_ref travel — the tenant of the RUN,
+    # so the gateway bills and CAPS it against whoever submitted it rather than against this worker.
+    tenant: str = ""
+
     agent_manifest_ref: str = ""  # OBS-003b
 
 
@@ -70,7 +74,13 @@ class ReflectOutput:
 @dataclass
 class WriteCandidatesInput:
     run_id: str
-    tenant_id: str
+    # THE TENANT OF THE RUN — and until VRT-AEON-005's propagation this field was DEAD. It was read
+    # nowhere: T-1 removed tenant_id from the request body (correctly: a client that sends it believes
+    # it is choosing the isolation boundary), and the field was left behind on the input. A field whose
+    # name says it controls isolation, carried all the way into an activity and then ignored, is the
+    # worst kind of leftover — a reader has every reason to believe it works. It now travels as the
+    # X-Aeon-Run-Tenant header, which the gateway honours only for a caller the operator entitled.
+    tenant: str
     candidates: list[ReflectedCandidate]
 
 
@@ -118,6 +128,7 @@ async def reflect_activity(inp: ReflectInput) -> ReflectOutput:
                 candidates=inp.candidates,
                 rendered_context=rendered_context,
                 data_sensitivity=inp.data_sensitivity,
+                tenant=inp.tenant,
                 # OBS-003b: reflection is an EXTRA model call per run (see the `reflect` flag's note in
                 # DeepResearchWorkflowInput — a caller who has not thought about memory should not
                 # silently start paying for one). Attributing it to the run is what makes that cost
@@ -194,7 +205,7 @@ async def write_memory_candidates_activity(inp: WriteCandidatesInput) -> WriteCa
             f"http://{CONTROLPLANE_ADDR}/memory/candidates",
             data=body,
             method="POST",
-            headers=service_headers(),
+            headers=service_headers(run_tenant=inp.tenant),
         )
         try:
             with urllib.request.urlopen(request, timeout=30):

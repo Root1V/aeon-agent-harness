@@ -61,6 +61,23 @@ type Engine struct {
 // Found by INT-011, which journals a denial as a durable fact — the moment the id had to survive being
 // read back later, a positional index stopped being good enough.
 func LoadEngine(doc PolicyBundleDoc) (*Engine, error) {
+	// A BUNDLE WITH NO POLICIES IS REFUSED, which is the same argument the per-entry guard below makes
+	// one level up: an entry that authorizes nothing but reads as though it does is worse than a
+	// missing one, and so is a whole file.
+	//
+	// Measured on 2026-10-08 while writing VRT-AEON-005's propagation test: a bundle whose policies
+	// were under `statements:` instead of `policies:` loaded CLEANLY with zero policies, because YAML
+	// ignores an unknown key. The engine then denied everything, which is fail-closed and therefore
+	// not a hole — but the only symptom was "denied by policy" on a request the file plainly permits,
+	// and the time went into debugging Cedar rather than the key. A tenant that should be allowed
+	// nothing needs no bundle at all: policy.Set already treats a missing one as a denial.
+	if len(doc.Policies) == 0 {
+		return nil, fmt.Errorf(
+			"policy: this bundle declares no policies, so it authorizes nothing while reading as though " +
+				"it governs something. The usual cause is the wrong top-level key — they go under " +
+				"`policies:`, and an unrecognised key is silently ignored by the YAML decoder. A tenant " +
+				"that must be allowed nothing needs no bundle: a missing one is already a denial")
+	}
 	ps := cedar.NewPolicySet()
 	dispositions := map[cedar.PolicyID]Disposition{}
 	for i, p := range doc.Policies {
