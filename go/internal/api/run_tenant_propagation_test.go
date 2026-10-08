@@ -243,7 +243,7 @@ func TestAStepOfARunIsJudgedAndBilledAgainstTheRunsTenant(t *testing.T) {
 		// Asserted through the OUTCOME and not just a count: a record exists is weaker than a record
 		// that says the step was denied, and INT-011's whole point is that "denied" and "nobody knows"
 		// must not be the same entry.
-		outcome, _, found := inB.StepOutcome(stepID)
+		outcome, _, found := inB.StepOutcome("", stepID)
 		if !found {
 			t.Fatalf("%s holds no outcome for step %q (it has %d records) — the denial was journalled "+
 				"in another tenant, so the run has a hole in its journal where it was submitted",

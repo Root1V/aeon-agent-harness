@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // TestAMalformedMigrationSetStopsTheService covers the paths that must refuse at startup. They need
@@ -178,6 +181,8 @@ func TestMigrationsAreRecordedAndNotReapplied(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer conn.Release()
+		// Its OWN schema, so replaying the real set lands on empty tables — see sandboxSchema.
+		sandboxSchema(t, ctx, dsn, conn)
 
 		// Create the sandbox ledger the way the runner would, then plant the row.
 		if err := applyMigrationsTo(ctx, conn, set, ledger); err != nil {
@@ -224,6 +229,10 @@ func TestAFailedMigrationLeavesNothingBehind(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Release()
+	// Its OWN schema: this test replays the real set plus a synthetic migration, and the real set
+	// includes 0002's ADD PRIMARY KEY on run_checkpoints — which cannot be re-created over rows that
+	// 0003 made legal. See sandboxSchema for the measurement.
+	sandboxSchema(t, ctx, dsn, conn)
 
 	// Synthetic versions well past the real set, and removed afterwards: applyMigrations writes to
 	// the real ledger, so a test that used low numbers would claim a version the repository does not
@@ -249,12 +258,11 @@ func TestAFailedMigrationLeavesNothingBehind(t *testing.T) {
 	// reach the real one, or the next startup refuses with a rollback message about a rollback that
 	// never happened.
 	const ledger = "schema_migrations_scratch_test"
-	cleanup := func() {
-		_, _ = s.pool.Exec(context.Background(), `DROP TABLE IF EXISTS migration_scratch`)
-		_, _ = s.pool.Exec(context.Background(), `DROP TABLE IF EXISTS `+ledger)
-	}
-	cleanup()
-	t.Cleanup(cleanup)
+	// NO EXPLICIT TABLE CLEANUP. It used to drop migration_scratch and this ledger, and both now live
+	// in the sandbox schema that sandboxSchema drops CASCADE — so the explicit version was redundant
+	// AND broken: registered with t.Cleanup, it ran after `defer conn.Release()` and panicked on a
+	// released connection. Third time that ordering has bitten this file, which is why the sandbox
+	// does its own cleanup on a connection it opens itself.
 
 	t.Run("a migration whose second statement fails applies neither", func(t *testing.T) {
 		err := applyMigrationsTo(ctx, conn, withSynthetic(migration{
@@ -273,7 +281,7 @@ func TestAFailedMigrationLeavesNothingBehind(t *testing.T) {
 		}
 
 		var exists bool
-		if qerr := s.pool.QueryRow(ctx,
+		if qerr := conn.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'migration_scratch')`,
 		).Scan(&exists); qerr != nil {
 			t.Fatal(qerr)
@@ -284,7 +292,7 @@ func TestAFailedMigrationLeavesNothingBehind(t *testing.T) {
 		}
 
 		var recorded int
-		if qerr := s.pool.QueryRow(ctx,
+		if qerr := conn.QueryRow(ctx,
 			`SELECT count(*) FROM `+ledger+` WHERE version = $1`, failing).Scan(&recorded); qerr != nil {
 			t.Fatal(qerr)
 		}
@@ -294,16 +302,16 @@ func TestAFailedMigrationLeavesNothingBehind(t *testing.T) {
 	})
 
 	t.Run("a destructive migration really changes a primary key", func(t *testing.T) {
-		if _, err := s.pool.Exec(ctx,
+		if _, err := conn.Exec(ctx,
 			`CREATE TABLE migration_scratch (tenant_id TEXT NOT NULL DEFAULT '', id TEXT NOT NULL, PRIMARY KEY (id))`); err != nil {
 			t.Fatal(err)
 		}
 		// Two rows that CANNOT coexist under the old key and must under the new one. That is the
 		// whole shape of T-3: the same idempotency key in two tenants is two independent executions.
-		if _, err := s.pool.Exec(ctx, `INSERT INTO migration_scratch (tenant_id, id) VALUES ('a', 'same-key')`); err != nil {
+		if _, err := conn.Exec(ctx, `INSERT INTO migration_scratch (tenant_id, id) VALUES ('a', 'same-key')`); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.pool.Exec(ctx, `INSERT INTO migration_scratch (tenant_id, id) VALUES ('b', 'same-key')`); err == nil {
+		if _, err := conn.Exec(ctx, `INSERT INTO migration_scratch (tenant_id, id) VALUES ('b', 'same-key')`); err == nil {
 			t.Fatal("the old single-column key already allowed a duplicate — this test proves nothing")
 		}
 
@@ -317,15 +325,63 @@ func TestAFailedMigrationLeavesNothingBehind(t *testing.T) {
 			t.Fatalf("the destructive migration failed: %v", err)
 		}
 
-		if _, err := s.pool.Exec(ctx, `INSERT INTO migration_scratch (tenant_id, id) VALUES ('b', 'same-key')`); err != nil {
+		if _, err := conn.Exec(ctx, `INSERT INTO migration_scratch (tenant_id, id) VALUES ('b', 'same-key')`); err != nil {
 			t.Fatalf("after the migration the same key in another tenant is still refused: %v", err)
 		}
 		var version int
-		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM `+ledger+` WHERE version = $1`, succeeding).Scan(&version); err != nil {
+		if err := conn.QueryRow(ctx, `SELECT count(*) FROM `+ledger+` WHERE version = $1`, succeeding).Scan(&version); err != nil {
 			t.Fatal(err)
 		}
 		if version != 1 {
 			t.Error("the migration ran but was not recorded, so it would run again")
 		}
 	})
+}
+
+// sandboxSchema gives a test its own Postgres schema and points the connection at it, so replaying
+// the REAL migration set lands on empty tables.
+//
+// WHY IT HAD TO EXIST, found on 2026-10-08 by INT-009b rather than reasoned about: these tests
+// re-apply the real migrations against the shared test database under a sandbox LEDGER name, which
+// means every migration runs again — including 0002's `ADD PRIMARY KEY (tenant_id, run_id, step_id,
+// phase)` on run_checkpoints. That only ever worked because whatever rows happened to be in the
+// database satisfied it. The moment 0003 made `sub_run_id` part of the key, a legitimate pair of
+// rows differing only in sub-run existed, and re-running 0002 failed with a duplicate-key violation:
+//
+//	applying migration 0002_tenant_isolation: could not create unique index
+//	"run_checkpoints_pkey" (SQLSTATE 23505)
+//
+// Nothing was wrong with 0002 or with 0003 — in forward order 0002 runs first, on data that cannot
+// yet violate it. What was wrong is that a test of the migration RUNNER depended on the contents of
+// a shared database, so it passed or failed according to what other tests had written. Its own
+// schema makes the replay hermetic while keeping everything else real.
+func sandboxSchema(t *testing.T, ctx context.Context, dsn string, conn interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}) string {
+	t.Helper()
+	name := "mig_sandbox_" + randSuffix(t)
+	if _, err := conn.Exec(ctx, `CREATE SCHEMA `+name); err != nil {
+		t.Fatalf("creating the sandbox schema: %v", err)
+	}
+	t.Cleanup(func() {
+		// ITS OWN CONNECTION, opened here. The store's pool is closed by `defer s.Close()` in the
+		// test body, and a deferred close runs BEFORE t.Cleanup — so dropping through the pool failed
+		// with "closed pool" and left the schema behind. Same family as the defect GOV-002b's own
+		// tests hit once (`defer conn.Release()` before t.Cleanup), and a leaked schema per run is
+		// exactly the kind that makes the NEXT run fail for an unrelated reason.
+		cleanupConn, err := pgx.Connect(context.Background(), dsn)
+		if err != nil {
+			t.Errorf("connecting to drop the sandbox schema %s: %v", name, err)
+			return
+		}
+		defer cleanupConn.Close(context.Background())
+		if _, err := cleanupConn.Exec(context.Background(), `DROP SCHEMA IF EXISTS `+name+` CASCADE`); err != nil {
+			t.Errorf("dropping the sandbox schema %s: %v", name, err)
+		}
+	})
+	// public stays on the path so the migrations' references to extensions resolve.
+	if _, err := conn.Exec(ctx, `SET search_path TO `+name+`, public`); err != nil {
+		t.Fatalf("pointing the connection at %s: %v", name, err)
+	}
+	return name
 }

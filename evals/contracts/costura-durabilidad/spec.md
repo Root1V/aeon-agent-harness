@@ -1,7 +1,21 @@
 # Costura de durabilidad — `Checkpointer`
 
-**Versión:** `0.1-draft` · **Implementación de referencia:** Aeon `INT-009`, verificada contra
-Postgres y Temporal reales.
+**Versión:** `0.2-draft` · **Implementación de referencia:** Aeon `INT-009` + `INT-009b`, verificada
+contra Postgres y Temporal reales.
+
+**Qué cambió en `0.2` y por qué no rompe a nadie** (`VRT-AEON-004`, pedido por Veritium): la
+identidad gana un cuarto componente, `sub_run_id`, **opcional en la petición**. Un cliente que lo
+omite se comporta exactamente como en `0.1` — el centinela `''` lo escribe el esquema de la
+implementación, no el cliente —, así que una implementación de `0.1` sigue siendo conforme para
+runs sin delegación. Lo que `0.1` no podía expresar es un run con delegación anidada: ver abajo.
+
+**Y `0.2` declara `durability` en `run-state`, que la implementación de referencia devolvía desde
+`INT-011` sin que este documento lo dijera.** Eso era un defecto del contrato y no del servicio: el
+schema tiene `additionalProperties: false` en la raíz, así que **toda** respuesta de la referencia era
+inválida contra el documento publicado — y nada lo notaba, porque nada validaba nada contra estos
+schemas. Ahora hay un test que valida la petición y las dos respuestas reales contra ellos
+(`TestTheDurabilitySeamMatchesTheSharedContract`), que es lo que hace que una versión signifique
+algo. `durability` **no es obligatoria**: una implementación que no la calcule es conforme.
 
 El arnés persiste el diario de un run y **no decide nada sobre él**. Dos operaciones, y
 deliberadamente ninguna tercera: un endpoint que responda «¿debo reejecutar este paso?» movería una
@@ -9,7 +23,22 @@ decisión al lado de la costura que se comprometió a no tomar ninguna.
 
 ## Identidad e idempotencia
 
-Una entrada del diario se identifica por **`(run_id, step_id, phase)`**.
+Una entrada del diario se identifica por **`(run_id, sub_run_id, step_id, phase)`**.
+
+`sub_run_id` es la **ruta de delegación** y es **opaca**: nadie la parsea, la parte ni le lee
+profundidad. Un nieto es una cadena más larga. Omitirla significa el **run raíz**, y el centinela
+(`''`) lo decide quien guarda los datos — el cliente no tiene que elegir uno.
+
+**Por qué está en la identidad**, que es la parte que `0.1` no podía expresar: dos sub-runs
+distintos de un mismo run usan legítimamente el mismo `step_id`, porque son bucles separados y cada
+uno numera sus propios pasos. Sin este componente, la entrada del segundo era un **duplicado** de la
+del primero: `append` no escribía nada, devolvía `duplicate: true` y **reportaba éxito**. El diario
+decía entonces que un paso ya había corrido cuando no, y un resume se lo saltaba. Una implementación
+puede estar entera en verde sobre esto: un test que compruebe que un duplicado **no** crea una
+segunda entrada pasa en los dos casos.
+
+**El componente no puede ser nulable.** NULL no es igual a NULL en un índice único, así que cada
+entrada del run raíz sería única contra sí misma y la deduplicación dejaría de funcionar del todo.
 
 `append` es idempotente bajo esa identidad. Un duplicado es un **no-op y nunca un error** — quien
 llama corre bajo ejecución *at-least-once* y genuinamente no puede distinguir un reintento de un

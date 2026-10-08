@@ -1,10 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://aeon-ai.dev/contracts/costura-durabilidad/0.1/append-result.schema.json",
+  "$id": "https://aeon-ai.dev/contracts/costura-durabilidad/0.2/append-result.schema.json",
   "title": "CheckpointAppendResult",
   "description": "Hechos sobre la escritura. Ninguna decision.",
   "type": "object",
-  "required": ["seq", "duplicate", "payload_diverged"],
+  "required": [
+    "seq",
+    "duplicate",
+    "payload_diverged"
+  ],
   "additionalProperties": false,
   "properties": {
     "seq": {

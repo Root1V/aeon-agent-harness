@@ -3,7 +3,8 @@
 //
 // Two rules give the seam its shape, both from the tripartite agreement:
 //
-//   - Append is idempotent by (run_id, step_id, phase). A duplicate is a no-op and never an error,
+//   - Append is idempotent by (run_id, sub_run_id, step_id, phase). A duplicate is a no-op and never
+//     an error,
 //     because a caller running under at-least-once execution genuinely cannot tell a retry from a
 //     first attempt — making it ask would push the hard part back across the seam.
 //   - Load reconstructs a state that answers three questions and nothing else: was this step
@@ -21,6 +22,10 @@ import (
 	"sort"
 	"time"
 )
+
+// maxSubRunIDLen bounds the delegation path. Postgres TEXT has no limit of its own, so without this
+// the only thing stopping an unbounded key is nothing.
+const maxSubRunIDLen = 512
 
 // Phase says whether an entry was written before or after the step's effect.
 //
@@ -46,10 +51,23 @@ func (p Phase) Valid() bool {
 // Entry is one journal append. Payload is opaque to the seam — the harness stores and returns it
 // without interpreting it, which is what keeps "persists but never decides" true at the type level.
 type Entry struct {
-	RunID   string          `json:"run_id"`
-	StepID  string          `json:"step_id"`
-	Phase   Phase           `json:"phase"`
-	Payload json.RawMessage `json:"payload,omitempty"`
+	RunID string `json:"run_id"`
+	// SubRunID is the delegation path this entry belongs to, and it is part of the idempotency key
+	// (VRT-AEON-004). Empty is the ROOT run and is a real value rather than a missing one — the
+	// column is NOT NULL DEFAULT '', so the key is total and no caller has to invent a placeholder.
+	//
+	// WHY IT HAD TO BE IN THE KEY, in Veritium's words: "que un nieto de una delegación perdiera
+	// registros sin error sería justo el tipo de fallo que no detectaríamos". Two different sub-runs
+	// of one run legitimately use the same step_id — separate loops, each numbering its own steps —
+	// so without this the second one's entry was a DUPLICATE of the first's: nothing written,
+	// Duplicate=true, success reported, and a resume would skip work that never ran.
+	//
+	// AN OPAQUE PATH, agreed by both sides: nothing in this package parses it, splits it or reads
+	// depth out of it. A grandchild is a longer string and that is all the seam knows.
+	SubRunID string          `json:"sub_run_id,omitempty"`
+	StepID   string          `json:"step_id"`
+	Phase    Phase           `json:"phase"`
+	Payload  json.RawMessage `json:"payload,omitempty"`
 }
 
 // Validate checks the identity fields the idempotency key is built from.
@@ -65,6 +83,14 @@ func (e Entry) Validate() error {
 	}
 	if len(e.Payload) > 0 && !json.Valid(e.Payload) {
 		return fmt.Errorf("checkpoint: payload is not valid JSON")
+	}
+	// SubRunID is NOT required — empty is the root run, a real value. What is refused is a length
+	// nothing could key on reliably, so a runaway path cannot silently truncate in the column and
+	// turn two sub-runs into one. The limit is generous: it is a path, and a deep delegation is a
+	// long string rather than a wrong one.
+	if len(e.SubRunID) > maxSubRunIDLen {
+		return fmt.Errorf("checkpoint: sub_run_id is %d characters, longer than the %d this seam keys on",
+			len(e.SubRunID), maxSubRunIDLen)
 	}
 	return nil
 }
@@ -101,8 +127,16 @@ type Checkpointer interface {
 type RunState struct {
 	runID   string
 	records []Record
-	byStep  map[string]map[Phase]Record
+	byStep  map[stepKey]map[Phase]Record
 	nextSeq int64
+}
+
+// stepKey is why the accessors below take TWO arguments instead of one. A step is identified by its
+// sub-run AND its id, and making the sub-run a required argument is what stops a caller reading
+// another delegation's record by forgetting a scope it did not know existed.
+type stepKey struct {
+	subRunID string
+	stepID   string
 }
 
 // NewRunState builds the queryable state from a run's records, in any order.
@@ -110,12 +144,13 @@ func NewRunState(runID string, records []Record) *RunState {
 	sorted := append([]Record(nil), records...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Seq < sorted[j].Seq })
 
-	s := &RunState{runID: runID, records: sorted, byStep: map[string]map[Phase]Record{}}
+	s := &RunState{runID: runID, records: sorted, byStep: map[stepKey]map[Phase]Record{}}
 	for _, rec := range sorted {
-		if s.byStep[rec.StepID] == nil {
-			s.byStep[rec.StepID] = map[Phase]Record{}
+		key := stepKey{subRunID: rec.SubRunID, stepID: rec.StepID}
+		if s.byStep[key] == nil {
+			s.byStep[key] = map[Phase]Record{}
 		}
-		s.byStep[rec.StepID][rec.Phase] = rec
+		s.byStep[key][rec.Phase] = rec
 		if rec.Seq >= s.nextSeq {
 			s.nextSeq = rec.Seq + 1
 		}
@@ -128,8 +163,8 @@ func (s *RunState) RunID() string { return s.runID }
 
 // Completed reports a recorded result for stepID: the effect happened, so it must not be repeated,
 // and the returned record carries the result the loop should continue from.
-func (s *RunState) Completed(stepID string) (Record, bool) {
-	rec, ok := s.byStep[stepID][PhaseCompleted]
+func (s *RunState) Completed(subRunID, stepID string) (Record, bool) {
+	rec, ok := s.byStep[stepKey{subRunID, stepID}][PhaseCompleted]
 	return rec, ok
 }
 
@@ -141,8 +176,8 @@ func (s *RunState) Completed(stepID string) (Record, bool) {
 // after a crash such a step simply has no record at all and gets re-run, which is safe precisely
 // when the effect is idempotent — which is the same condition under which skipping the second
 // durable write was safe in the first place.
-func (s *RunState) Attempted(stepID string) bool {
-	phases := s.byStep[stepID]
+func (s *RunState) Attempted(subRunID, stepID string) bool {
+	phases := s.byStep[stepKey{subRunID, stepID}]
 	if phases == nil {
 		return false
 	}
@@ -296,8 +331,8 @@ func OutcomePayloadDecidedBy(outcome Outcome, reason, decidedBy string, result j
 // The three answers a resuming loop needs, and they have to stay three: concluded-with-an-outcome,
 // attempted-and-unknown, and never-seen. Collapsing the last two is what made a denied step
 // unresumable in the first place.
-func (s *RunState) StepOutcome(stepID string) (Outcome, string, bool) {
-	rec, ok := s.Completed(stepID)
+func (s *RunState) StepOutcome(subRunID, stepID string) (Outcome, string, bool) {
+	rec, ok := s.Completed(subRunID, stepID)
 	if !ok {
 		return "", "", false
 	}
@@ -321,8 +356,8 @@ func (s *RunState) StepOutcome(stepID string) (Outcome, string, bool) {
 // SEC-005, and reporting those as decided by "unknown" would invent a principal; reporting them as
 // decided by nobody would claim the step was never approved. The caller gets the distinction and
 // decides what to say about it.
-func (s *RunState) ApprovalActor(stepID string) (string, bool) {
-	rec, ok := s.Completed(stepID)
+func (s *RunState) ApprovalActor(subRunID, stepID string) (string, bool) {
+	rec, ok := s.Completed(subRunID, stepID)
 	if !ok || len(rec.Payload) == 0 {
 		return "", false
 	}

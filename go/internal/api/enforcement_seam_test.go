@@ -183,7 +183,7 @@ func TestEnforcementSeamDeniesWithDisposition(t *testing.T) {
 
 		// And the journal agrees: the step has NO outcome, which is what leaves it resumable.
 		state := loadRunState(t, srv, runID)
-		if _, _, ok := state.StepOutcome("n0"); ok {
+		if _, _, ok := state.StepOutcome("", "n0"); ok {
 			t.Error("the journal holds an outcome for a step that is waiting for a person")
 		}
 	})
@@ -206,7 +206,7 @@ func TestEnforcementSeamDeniesWithDisposition(t *testing.T) {
 				if !body.Journalled {
 					t.Fatalf("the refusal was not journalled")
 				}
-				outcome, _, ok := loadRunState(t, srv, runID).StepOutcome("n0")
+				outcome, _, ok := loadRunState(t, srv, runID).StepOutcome("", "n0")
 				if !ok || !outcome.Denied() {
 					t.Errorf("journal outcome = %q (found=%v), want a denied one", outcome, ok)
 				}

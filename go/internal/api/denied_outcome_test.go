@@ -141,7 +141,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 
 		// The point of the whole feature: the step now HAS an outcome, where before it had nothing.
 		state := loadRunState(t, srv, runID)
-		outcome, reason, ok := state.StepOutcome("n0")
+		outcome, reason, ok := state.StepOutcome("", "n0")
 		if !ok {
 			t.Fatal("the denied step has no completed record — it is still indistinguishable from a step whose fate nobody knows, which is the exact bug INT-011 is about")
 		}
@@ -159,7 +159,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 
 		// A denied step is NOT "attempted". Both used to be an absence of a completed record, and the
 		// distinction between them is the entire point.
-		if state.Attempted("n0") {
+		if state.Attempted("", "n0") {
 			t.Error("the denied step reports Attempted — the two states INT-011 separated have collapsed back together")
 		}
 	})
@@ -185,7 +185,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 			t.Fatalf("POST /execute = %d, want 403", status)
 		}
 
-		outcome, reason, ok := loadRunState(t, srv, runID).StepOutcome("n0")
+		outcome, reason, ok := loadRunState(t, srv, runID).StepOutcome("", "n0")
 		if !ok {
 			t.Fatal("a default-denied step has no record")
 		}
@@ -209,7 +209,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 			Args: map[string]any{}, RunID: runID, StepID: "n0",
 		})
 
-		rec, ok := loadRunState(t, srv, runID).Completed("n0")
+		rec, ok := loadRunState(t, srv, runID).Completed("", "n0")
 		if !ok {
 			t.Fatal("no completed record for the denied step")
 		}
@@ -320,7 +320,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 		// hand-written prefix, so nobody derives it differently.
 		stepID := checkpoint.ApprovalStep(approvalID)
 		state := loadRunState(t, srv, runID)
-		outcome, _, ok := state.StepOutcome(stepID)
+		outcome, _, ok := state.StepOutcome("", stepID)
 		if !ok {
 			t.Fatalf("no record for %s — the person's decision left no trace, so a resuming loop cannot tell a rejected run from one still waiting", stepID)
 		}
@@ -334,7 +334,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 		// The hash travels with the record. Without it the journal says a person said no, but not to WHAT —
 		// and an approval that cannot be tied back to the parameters it covered is the hole the triple
 		// (step_id, tool_name, tool_args) was agreed to close.
-		rec, _ := state.Completed(stepID)
+		rec, _ := state.Completed("", stepID)
 		if !bytes.Contains(rec.Payload, []byte(toolCallHash)) {
 			t.Errorf("the record does not carry the tool_call_hash the person decided on: %s", rec.Payload)
 		}
@@ -375,7 +375,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 			t.Fatalf("POST /runs/%s/approve = %d, want 202", runID, resp.StatusCode)
 		}
 
-		outcome, _, ok := loadRunState(t, srv, runID).StepOutcome(checkpoint.ApprovalStep(approvalID))
+		outcome, _, ok := loadRunState(t, srv, runID).StepOutcome("", checkpoint.ApprovalStep(approvalID))
 		if !ok {
 			t.Fatal("the granted approval was not journalled")
 		}
@@ -392,7 +392,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 		// run controller" — and nothing verified any of that: the endpoint was unauthenticated, so the
 		// only true statement was "something that could reach the port". An audit line asserting a
 		// person was involved, on the one step whose entire purpose is that a person was involved.
-		decidedBy, named := loadRunState(t, srv, runID).ApprovalActor(checkpoint.ApprovalStep(approvalID))
+		decidedBy, named := loadRunState(t, srv, runID).ApprovalActor("", checkpoint.ApprovalStep(approvalID))
 		if !named {
 			t.Fatalf("the approval record names no decider, so the audit trail of an irreversible call " +
 				"says it was approved and cannot say by whom")
@@ -430,7 +430,7 @@ func TestPreInt011RecordsStillMeanWhatTheyMeant(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state := checkpoint.NewRunState("r", []checkpoint.Record{rec(tc.payload)})
-			outcome, _, ok := state.StepOutcome("s")
+			outcome, _, ok := state.StepOutcome("", "s")
 			if !ok {
 				t.Fatal("a pre-INT-011 completed record stopped counting as completed")
 			}

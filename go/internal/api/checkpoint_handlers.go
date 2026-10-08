@@ -34,9 +34,19 @@ func (h *CheckpointHandlers) Register(mux *http.ServeMux) {
 }
 
 type appendCheckpointRequest struct {
-	StepID  string          `json:"step_id"`
-	Phase   string          `json:"phase"`
-	Payload json.RawMessage `json:"payload,omitempty"`
+	StepID string `json:"step_id"`
+	// SubRunID is OPTIONAL and omitting it means the root run (VRT-AEON-004). The sentinel lives in
+	// the schema — `sub_run_id TEXT NOT NULL DEFAULT ''` — which is what Veritium asked for beyond
+	// the key itself: "el centinela lo decide quien guarda los datos; solo pedimos que quede escrito
+	// en el esquema y que el cliente no tenga que elegir". So an HttpCheckpointer with no delegation
+	// sends nothing and the row still has a definite value.
+	//
+	// It is NOT a tenant and nothing here parses it: an opaque path, agreed by both sides. Unlike the
+	// tenant, a client naming its own sub-run grants it nothing — the row is already confined to the
+	// caller's tenant, and a sub-run id only separates one of that caller's journals from another.
+	SubRunID string          `json:"sub_run_id,omitempty"`
+	Phase    string          `json:"phase"`
+	Payload  json.RawMessage `json:"payload,omitempty"`
 }
 
 // append journals one entry. A duplicate answers 200 with duplicate=true; a genuinely new entry
@@ -58,10 +68,11 @@ func (h *CheckpointHandlers) append(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entry := checkpoint.Entry{
-		RunID:   r.PathValue("run_id"),
-		StepID:  body.StepID,
-		Phase:   checkpoint.Phase(body.Phase),
-		Payload: body.Payload,
+		RunID:    r.PathValue("run_id"),
+		SubRunID: body.SubRunID,
+		StepID:   body.StepID,
+		Phase:    checkpoint.Phase(body.Phase),
+		Payload:  body.Payload,
 	}
 	if err := entry.Validate(); err != nil {
 		writeError(w, http.StatusBadRequest, err)

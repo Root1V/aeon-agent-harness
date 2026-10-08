@@ -613,7 +613,16 @@ fichero mal nombrado. Sin `down`, a propósito.
   el mismo `name`? ¿un `SuiteReport` guardado explícitamente en el publish anterior?
 - **Coste:** M.
 
-### `sub_run_id` en la identidad de un checkpoint (`VRT-AEON-004`)
+### ~~`sub_run_id` en la identidad de un checkpoint (`VRT-AEON-004`)~~ — CERRADA como `INT-009b` el 2026-10-08
+
+> **Cerrada**, con el control negativo que esta entrada describía y que resultó exacto: con la PK
+> anterior el segundo `Append` deduplica contra el primero y el test nuevo cae, mientras
+> `TestCheckpointerDeduplicatesByStepIdentity` pasa sus cinco subtests. Veritium lo había avisado
+> al pedirlo. Lo que esta entrada no preveía: los accesores de `RunState` pasan a exigir el
+> sub-run, lo que rompió 26 llamadas — **todas en tests**, así que ningún código de producción
+> consultaba un paso por su id a secas. Ver la fila `INT-009b`.
+
+### `sub_run_id` en la identidad de un checkpoint (`VRT-AEON-004`) — descripción original
 
 - **Descripción:** la clave primaria de `run_checkpoints` es hoy
   `(tenant_id, run_id, step_id, phase)`. Veritium pidió

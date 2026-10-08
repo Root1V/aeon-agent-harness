@@ -54,8 +54,9 @@ func (c *Checkpointer) Append(ctx context.Context, entry checkpoint.Entry) (chec
 	var same bool
 	err = tx.QueryRow(ctx,
 		`SELECT seq, payload IS NOT DISTINCT FROM $4::jsonb
-		   FROM run_checkpoints WHERE tenant_id = $5 AND run_id = $1 AND step_id = $2 AND phase = $3`,
-		entry.RunID, entry.StepID, string(entry.Phase), payload, c.tenant,
+		   FROM run_checkpoints
+		  WHERE tenant_id = $5 AND run_id = $1 AND sub_run_id = $6 AND step_id = $2 AND phase = $3`,
+		entry.RunID, entry.StepID, string(entry.Phase), payload, c.tenant, entry.SubRunID,
 	).Scan(&existingSeq, &same)
 	switch {
 	case err == nil:
@@ -69,11 +70,15 @@ func (c *Checkpointer) Append(ctx context.Context, entry checkpoint.Entry) (chec
 
 	var seq int64
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO run_checkpoints (tenant_id, run_id, step_id, phase, seq, payload)
-		 SELECT $5, $1, $2, $3, COALESCE(MAX(seq), -1) + 1, $4::jsonb
+		// MAX(seq) is over the whole RUN and not over the sub-run, deliberately: NextSeq answers
+		// "where does this run's journal continue", and one sequence per run keeps a delegation's
+		// entries ordered against its parent's. Per-sub-run numbering would produce two entries
+		// sharing a seq, which is the one thing the ordering relies on not happening.
+		`INSERT INTO run_checkpoints (tenant_id, run_id, sub_run_id, step_id, phase, seq, payload)
+		 SELECT $5, $1, $6, $2, $3, COALESCE(MAX(seq), -1) + 1, $4::jsonb
 		   FROM run_checkpoints WHERE tenant_id = $5 AND run_id = $1
 		 RETURNING seq`,
-		entry.RunID, entry.StepID, string(entry.Phase), payload, c.tenant,
+		entry.RunID, entry.StepID, string(entry.Phase), payload, c.tenant, entry.SubRunID,
 	).Scan(&seq); err != nil {
 		return checkpoint.AppendResult{}, fmt.Errorf("store: appending checkpoint: %w", err)
 	}
@@ -89,7 +94,7 @@ func (c *Checkpointer) Load(ctx context.Context, runID string) (*checkpoint.RunS
 		return nil, fmt.Errorf("store: run_id is required to load checkpoints")
 	}
 	rows, err := c.pool.Query(ctx,
-		`SELECT step_id, phase, seq, payload, recorded_at
+		`SELECT sub_run_id, step_id, phase, seq, payload, recorded_at
 		   FROM run_checkpoints WHERE tenant_id = $2 AND run_id = $1 ORDER BY seq`,
 		runID, c.tenant,
 	)
@@ -103,7 +108,7 @@ func (c *Checkpointer) Load(ctx context.Context, runID string) (*checkpoint.RunS
 		var rec checkpoint.Record
 		var phase string
 		var payload []byte
-		if err := rows.Scan(&rec.StepID, &phase, &rec.Seq, &payload, &rec.RecordedAt); err != nil {
+		if err := rows.Scan(&rec.SubRunID, &rec.StepID, &phase, &rec.Seq, &payload, &rec.RecordedAt); err != nil {
 			return nil, fmt.Errorf("store: scanning checkpoint: %w", err)
 		}
 		rec.RunID = runID
