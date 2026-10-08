@@ -6,8 +6,13 @@
 # and the refusal names the policy that refused it.
 set -euo pipefail
 
-RUNCONTROLLER=${RUNCONTROLLER:-127.0.0.1:9404}
-TOOLGW=${TOOLGW:-127.0.0.1:9403}
+# The port follows the SAME variable the compose file publishes on (DX-006). It used to default to a
+# hardcoded 9404/9403, so setting AEON_RUNCONTROLLER_PORT moved the port and left this script looking
+# at the old one — "configured but not picked up", which is the shape TOOL-004 already paid for with
+# a compose variable that was set and never read. RUNCONTROLLER/TOOLGW still win when set, since they
+# can name a host as well as a port.
+RUNCONTROLLER=${RUNCONTROLLER:-127.0.0.1:${AEON_RUNCONTROLLER_PORT:-9404}}
+TOOLGW=${TOOLGW:-127.0.0.1:${AEON_TOOLGW_PORT:-9403}}
 TOKEN=${AEON_CALLER_TOKEN:-dev-first-use-case-token-not-a-secret}
 AGENT=first-use-case@0.1.0
 RUN_ID="first-use-case-$(date +%s)"

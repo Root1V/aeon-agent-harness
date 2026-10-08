@@ -187,8 +187,11 @@ test-vrt-aeon-003: ## Run VRT-AEON-003's adapter-fidelity acceptance tests (real
 	#
 	# Credentials come from .env, which is gitignored and never committed; see .env.example.
 	$(COMPOSE) --profile core up -d --wait postgres
+	# The port follows AEON_POSTGRES_PORT, which the compose file now honours: hardcoding 5442 here
+	# would make this target the one thing that breaks when somebody reassigns it, which is the whole
+	# point of the variable existing.
 	set -a && . ./.env && set +a && cd go && \
-		AEON_TEST_PG_DSN="postgres://aeon:aeon@localhost:5442/aeon?sslmode=disable" \
+		AEON_TEST_PG_DSN="postgres://aeon:aeon@127.0.0.1:$${AEON_POSTGRES_PORT:-5442}/aeon?sslmode=disable" \
 		go test ./internal/api/ -count=1 -v \
 			-run 'TestAdapterFidelityAgainstRealPrometheus|TestIdempotencyHeaderIsNotBilledTwiceThroughTheOpenAISurface'
 
@@ -221,7 +224,7 @@ eval-run: ## Run an EvalSuite offline (EVAL-002): make eval-run SUITE=deep_resea
 	docker run --rm -v "$(PWD):/repo" -w /repo/python python:3.13-slim sh -c \
 		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' python -m aeon_evalops.cli run $(SUITE) --trials $(or $(TRIALS),1)"
 
-lint: ## Lint proto/schemas, the shared contract schemas, Go and Python sources
+lint: ## Lint proto/schemas, the shared contract schemas, the compose ports, Go and Python sources
 	# evals/contracts/*/schema is in this list since INT-009b, and it was not before: the durability
 	# seam's three schemas live under evals/ rather than proto/, so this target never even PARSED
 	# them. A malformed one would have been found by whoever implemented against it.
@@ -232,6 +235,10 @@ lint: ## Lint proto/schemas, the shared contract schemas, Go and Python sources
 	# and so every response we sent was invalid against the published contract with nothing saying so.
 	for f in proto/schemas/*.json proto/manifests/*.json evals/contracts/*/schema/*.json; do python3 -m json.tool "$$f" >/dev/null || exit 1; done
 	@echo "schemas OK"
+	# Published ports: loopback and overridable, the two rules adopted with Veritium. Here rather than
+	# in a Go test because it is a property of the compose files, and both regressions are silent — a
+	# port on 0.0.0.0 comes up fine and is simply reachable by anyone on the network.
+	python3 scripts/compose_ports_check.py
 
 roadmap-check: ## Fail if roadmap.md references a DONE feature without a matching test name in the repo
 	python3 scripts/roadmap_check.py

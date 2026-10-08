@@ -141,6 +141,19 @@ datos, llega como solicitud aparte.
   promesa incumplida— o quitarlo del manifiesto. Lo primero cierra además el hueco de CI.
 - **Coste:** S.
 
+### ~~Puertos publicados: a loopback y overridables~~ — CERRADA como `DX-006` el 2026-10-08
+
+> **Esta entrada nunca existió hasta el día que se cerró, y eso es lo primero que hay que decir.**
+> El 2026-10-07 contesté en el canal de los seis equipos que lo nuestro —dejar de publicar MinIO,
+> atar a loopback, hacer overridables los puertos de Temporal y su UI— *«queda anotado en nuestro
+> `backlog.md` como entrada propia; no está hecho todavía»*. No quedó anotado en ninguna parte:
+> `grep` por 9000, 127.0.0.1 o «puerto» sobre este fichero no devolvía nada el 2026-10-08. **Segunda
+> vez en dos días** con la misma forma — la otra fue `sub_run_id` (`VRT-AEON-004`) —, y las dos veces
+> el único síntoma habría sido otro equipo esperando algo que nadie iba a construir. Lo que falla no
+> es el criterio, es que una respuesta en un canal no es una anotación.
+>
+> Ver la fila `DX-006`.
+
 ### MinIO corre en el stack de referencia y nadie le habla
 
 - **Descripción:** el servicio `minio` está en los cuatro perfiles de `deploy/compose` y **ni una línea
@@ -154,6 +167,10 @@ datos, llega como solicitud aparte.
   MinIO del compose**. Un servicio corriendo para nadie es un recurso consumido y una capacidad
   aparente — la misma familia que `deploy/helm` vacío. Lo segundo es gratis y honesto hasta que lo
   primero haga falta.
+- **Nota del 2026-10-08 (`DX-006`):** **ya no publica puertos en el host.** Colisionaba con
+  `PROMETHEUS_AUTH_URL` en el 9000, y ese era el daño medible de tener un servicio sin consumidor.
+  El servicio sigue ahí y **esta entrada sigue abierta**: la decisión que pide —implementar el
+  `ObservationStore` sobre S3 o borrar el servicio— no la resuelve dejar de publicar un puerto.
 - **Coste:** S (quitarlo) / M (cliente S3 real detrás del mismo Protocol).
 
 ### ~~El corpus dorado solo se puede verificar en este portátil~~ — MEDIO CERRADA el 2026-10-03

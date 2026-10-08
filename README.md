@@ -71,6 +71,8 @@ make test                # go test + pytest, both in throwaway containers
 ```
 
 Temporal UI: http://localhost:8080 · Grafana: http://localhost:3000 · Tempo: http://localhost:3200.
+Son los puertos por defecto: cada uno es overridable (`AEON_TEMPORAL_UI_PORT`, `AEON_GRAFANA_PORT`,
+`AEON_TEMPO_PORT`, …) y **todos atan `127.0.0.1`**, no `0.0.0.0` — ver `.env.example`.
 (MinIO is in the compose file and nothing uses it yet — see backlog.md.)
 
 Two agents to start from:
