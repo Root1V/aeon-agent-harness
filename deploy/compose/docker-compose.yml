@@ -28,7 +28,22 @@ x-common-env: &common-env
   #
   # The default points at the DEVELOPMENT bundle, whose tokens are public because they are committed.
   # Override both this and AEON_CALLER_TOKEN for anything reachable by anyone else.
-  AEON_CALLERS_PATH: ${AEON_CALLERS_PATH:-/examples/deep-research/callers.yaml}
+  # SEC-005 / GOV-001h. One of these two, never both — setting both is refused at startup rather
+  # than one winning, because whichever lost would be a file an operator believes is loaded.
+  #
+  # The default stays the single file, so nothing about a one-tenant deployment changes. A SHARED
+  # deployment wants the directory: one `<tenant>.yaml` per tenant, the file name IS the tenant, and
+  # a file may only declare callers for its own — so one team's pull request cannot add a caller in
+  # another team's tenant, and nobody has to review a document holding everyone's token hashes.
+  # Veritium asked for exactly this when they closed VRT-AEON-005. See examples/callers/.
+  # `${VAR-default}` AND NOT `${VAR:-default}`, one character, and the mode is unreachable without
+  # it. `:-` substitutes the default when the variable is set but EMPTY, so `AEON_CALLERS_PATH=` plus
+  # a directory left both set — and the startup refusal below fired, correctly, making the directory
+  # mode impossible to select without editing this file. Measured: the gateway exited with
+  # "AEON_CALLERS_PATH and AEON_CALLERS_DIR are both set". `-` substitutes only when UNSET, so an
+  # empty value passes through and means "I am not using this one".
+  AEON_CALLERS_PATH: ${AEON_CALLERS_PATH-/examples/deep-research/callers.yaml}
+  AEON_CALLERS_DIR: ${AEON_CALLERS_DIR-}
 
   # TOOL-009: where artifacts live. The worker writes here and the Tool Gateway's artifact.read reads
   # here; the gateway mounts it READ-ONLY, so a tool cannot write one even if a future bug tried.

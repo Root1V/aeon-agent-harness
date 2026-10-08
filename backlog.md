@@ -13,7 +13,19 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
 
 ---
 
-### `AEON_CALLERS_DIR`: un `<tenant>.yaml` por tenant, como el bundle de políticas
+### ~~`AEON_CALLERS_DIR`: un `<tenant>.yaml` por tenant, como el bundle de políticas~~ — CERRADA como `GOV-001h` el 2026-10-08
+
+> **Cerrada el mismo día que se escribió**, que es el punto: esta entrada existió **antes** de
+> contestar en el canal, a diferencia de las dos anteriores. Los cinco criterios de aceptación se
+> cumplen, incluido el que importaba —un token repetido entre **dos** ficheros— y el de rechazar
+> ambas variables a la vez.
+>
+> **Lo que esta entrada no preveía, y solo apareció al correrlo**: el compose usaba
+> `${AEON_CALLERS_PATH:-default}`, y `:-` sustituye el default también cuando la variable está
+> vacía — así que el modo directorio **era inalcanzable** y el gateway salía con mi propio guard,
+> «are both set». Un carácter (`${VAR-default}`). Ver la fila `GOV-001h`.
+
+### `AEON_CALLERS_DIR`: un `<tenant>.yaml` por tenant — descripción original
 
 - **Descripción:** el bundle de callers se carga de **un solo fichero** (`auth.LoadFile`,
   `AEON_CALLERS_PATH`, hoy `examples/deep-research/callers.yaml`). No hay opción de directorio.
