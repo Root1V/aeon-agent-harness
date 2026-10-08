@@ -41,6 +41,28 @@ ARTIFACT_ROOT = os.environ.get("AEON_ARTIFACT_ROOT", "")
 # rewritten into something that does.
 _TENANT_DIR = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
+# The tenant an artifact is parked under when the RUN's tenant is unknown.
+#
+# WHY A FALLBACK AND NOT A REFUSAL, found by CI rather than reasoned about. The first version of
+# GOV-001g refused an empty tenant, and that broke every Deep Research run: `DeepResearchWorkflow` is
+# started by the Python SDK (`client.start_workflow`) and NOT by `POST /runs`, so it has no Temporal
+# memo and therefore no run tenant — no Go service starts it, so this is production and not just the
+# test that caught it. A report that is never parked because its run did not come through the Run
+# Controller is a regression, not isolation.
+#
+# AND IT IS THE SAME FALLBACK EVERY OTHER SURFACE ALREADY MAKES. `effectiveTenant` answers a request
+# with no X-Aeon-Run-Tenant with the CALLER's tenant, which for a run's step is this worker — so
+# policy, cost and the journal all land in the worker's tenant when the run's is unknown. Refusing
+# here made artifacts the one surface that behaved differently, and that inconsistency is what CI
+# surfaced.
+#
+# THE MEMO ALWAYS WINS. This is only reached when there is nothing to lose to: a run started through
+# the Run Controller carries its tenant and is parked under it. A deployment where ONE worker executes
+# several tenants' runs must rely on that memo (see GOV-001f); if such a worker also starts runs
+# directly through the SDK, those land here together, which is why this is operator configuration and
+# not a constant — the operator who shares a worker is the one who has to name its tenant.
+WORKER_TENANT = os.environ.get("AEON_WORKER_TENANT", "default")
+
 
 def artifact_id(run_id: str, name: str) -> str:
     """The id a run reports and `artifact.read` accepts.
@@ -97,18 +119,20 @@ async def write_artifact_activity(inp: WriteArtifactInput) -> WriteArtifactOutpu
     aid = artifact_id(inp.run_id, inp.name)
     if not ARTIFACT_ROOT:
         return WriteArtifactOutput(artifact_id=aid, note="AEON_ARTIFACT_ROOT is not set, so there is nowhere to park artifacts")
-    if not _TENANT_DIR.match(inp.tenant):
-        # REFUSED AND REPORTED rather than written to the root (GOV-001g). Writing it one level up
-        # would put it exactly where the shared directory used to be — readable by every tenant —
-        # and the run's output would say it was parked successfully. A tenant name is also a path
-        # component here, so this is the line between a name and a path: `..` is not a tenant.
+    # Empty means "this run did not come through the Run Controller", which is legitimate and gets
+    # the worker's own tenant. Anything else that is not a tenant name is REFUSED and reported, never
+    # written one level up: that would put it exactly where the shared directory used to be —
+    # readable by every tenant — while the run's output said it was parked successfully. The tenant
+    # is a path component here, so this is the line between a name and a path: `..` is not a tenant.
+    tenant = inp.tenant or WORKER_TENANT
+    if not _TENANT_DIR.match(tenant):
         return WriteArtifactOutput(
             artifact_id=aid,
-            note=f"the run's tenant is {inp.tenant!r}, which is not a tenant name, so there is no "
-            "per-tenant artifact store to park this in",
+            note=f"the artifact store tenant would be {tenant!r}, which is not a tenant name, so "
+            "there is nowhere to park this",
         )
 
-    root = Path(ARTIFACT_ROOT) / inp.tenant
+    root = Path(ARTIFACT_ROOT) / tenant
     target = root / aid
     try:
         root.mkdir(parents=True, exist_ok=True)

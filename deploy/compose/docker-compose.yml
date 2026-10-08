@@ -33,6 +33,11 @@ x-common-env: &common-env
   # TOOL-009: where artifacts live. The worker writes here and the Tool Gateway's artifact.read reads
   # here; the gateway mounts it READ-ONLY, so a tool cannot write one even if a future bug tried.
   AEON_ARTIFACT_ROOT: ${AEON_ARTIFACT_ROOT:-/artifacts}
+  # GOV-001g: artifacts are parked at <root>/<tenant>/<id>. This is the tenant used when a run's own
+  # is unknown — every run not started through POST /runs — and it MUST match the `tenant` of the
+  # worker's entry in the caller bundle, because the reader resolves the tenant from the credential.
+  # Disagree and the worker writes into one directory while artifact.read opens another.
+  AEON_WORKER_TENANT: ${AEON_WORKER_TENANT:-default}
 
 services:
   # ---- Durable execution -----------------------------------------------------------------
