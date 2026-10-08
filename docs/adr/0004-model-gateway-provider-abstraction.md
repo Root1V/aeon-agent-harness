@@ -77,10 +77,11 @@ providers/prometheus_inference/):
     that none is granted to us.
   - **A client CAN enumerate its own grants, and this is how**: request a token with no `scope`
     parameter and the response's `scope` field comes back with the full granted scope. Measured
-    2026-10-09, when it turned up three vision models (`qwen3-vl-8b`, `fara-7b`,
-    `qwen3vl-30b-a3b`), a `fara-7b` and `qwen3-embedding` — six in all, where `/v1/models` had been
-    showing two. The day before, this bullet said asking the operator was the only way to know;
-    that is true of what the deployment HOSTS and was wrong about what we HOLD. Worth having
+    2026-10-08, when it returned six models where `/v1/models` had been showing two: `qwen3-vl-8b`,
+    `fara-7b` and `qwen3vl-30b-a3b` (all `modality=vision`), `gpt-oss-20b-mxfp4` and `qwen3-0.6b`
+    (`text`), and `qwen3-embedding`. Seventeen minutes earlier the bullet above said asking the
+    operator was the only way to know; that is true of what the deployment HOSTS and was wrong
+    about what we HOLD. Worth having
     written down: a scope-filtered catalogue cannot reveal a grant whose model id you have not
     already guessed, so the token response is the only discovery path.
 - **`POST /v1/chat/completions` is genuinely OpenAI-compatible** — same request shape (`model`,
