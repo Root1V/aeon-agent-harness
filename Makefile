@@ -221,8 +221,16 @@ eval-run: ## Run an EvalSuite offline (EVAL-002): make eval-run SUITE=deep_resea
 	docker run --rm -v "$(PWD):/repo" -w /repo/python python:3.13-slim sh -c \
 		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' python -m aeon_evalops.cli run $(SUITE) --trials $(or $(TRIALS),1)"
 
-lint: ## Lint proto/schemas, Go and Python sources
-	for f in proto/schemas/*.json proto/manifests/*.json; do python3 -m json.tool "$$f" >/dev/null || exit 1; done
+lint: ## Lint proto/schemas, the shared contract schemas, Go and Python sources
+	# evals/contracts/*/schema is in this list since INT-009b, and it was not before: the durability
+	# seam's three schemas live under evals/ rather than proto/, so this target never even PARSED
+	# them. A malformed one would have been found by whoever implemented against it.
+	#
+	# Parsing is the floor and not the point. What actually validates our wire shape against those
+	# schemas is TestTheDurabilitySeamMatchesTheSharedContract, which found the real drift: the run
+	# state we return carries `durability`, the schema has additionalProperties: false at its root,
+	# and so every response we sent was invalid against the published contract with nothing saying so.
+	for f in proto/schemas/*.json proto/manifests/*.json evals/contracts/*/schema/*.json; do python3 -m json.tool "$$f" >/dev/null || exit 1; done
 	@echo "schemas OK"
 
 roadmap-check: ## Fail if roadmap.md references a DONE feature without a matching test name in the repo

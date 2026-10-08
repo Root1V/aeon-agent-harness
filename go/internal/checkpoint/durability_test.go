@@ -98,7 +98,7 @@ func TestRunReportsDurabilityLevel(t *testing.T) {
 		if d.Level != checkpoint.DurabilityPerStep || d.StepsWithIntent != 1 {
 			t.Errorf("Level=%q StepsWithIntent=%d, want per_step and 1", d.Level, d.StepsWithIntent)
 		}
-		if !s.Attempted("a") {
+		if !s.Attempted("", "a") {
 			t.Error("Attempted is false for a step with intent and no result — the two answers disagree about the same journal")
 		}
 	})

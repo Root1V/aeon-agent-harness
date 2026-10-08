@@ -97,10 +97,10 @@ func TestCheckpointerDeduplicatesByStepIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
-		if state.Attempted("s1") {
+		if state.Attempted("", "s1") {
 			t.Error("a step with both phases must report completed, not attempted")
 		}
-		if _, ok := state.Completed("s1"); !ok {
+		if _, ok := state.Completed("", "s1"); !ok {
 			t.Error("expected s1 to report completed")
 		}
 		if state.NextSeq() != 2 {
@@ -126,7 +126,7 @@ func TestCheckpointerDeduplicatesByStepIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
-		got, _ := state.Completed("s1")
+		got, _ := state.Completed("", "s1")
 		if string(got.Payload) != `{"answer": 41}` && string(got.Payload) != `{"answer":41}` {
 			t.Errorf("stored payload = %s, want the first write to have won", got.Payload)
 		}
@@ -311,7 +311,7 @@ func testCheckpointerUnderTemporalRetry(t *testing.T, cp *Checkpointer) {
 	if len(state.Records()) != 1 {
 		t.Fatalf("the journal holds %d entries after %d real Activity attempts, want exactly 1", len(state.Records()), len(results))
 	}
-	if _, ok := state.Completed("charge-card"); !ok {
+	if _, ok := state.Completed("", "charge-card"); !ok {
 		t.Error("the step is not reported completed after the workflow succeeded")
 	}
 	t.Logf("real Temporal ran the Activity %d times; the journal holds %d entry", len(results), len(state.Records()))

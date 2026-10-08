@@ -116,10 +116,10 @@ func TestCheckpointerPassesSharedSeamFixtures(t *testing.T) {
 					if err := json.Unmarshal(op.Expect, &want); err != nil {
 						t.Fatalf("op %d: bad expectation in fixture: %v", j, err)
 					}
-					_, completed := state.Completed(op.StepID)
-					if completed != want.Completed || state.Attempted(op.StepID) != want.Attempted {
+					_, completed := state.Completed("", op.StepID)
+					if completed != want.Completed || state.Attempted("", op.StepID) != want.Attempted {
 						t.Fatalf("op %d: %s -> completed=%v attempted=%v, want completed=%v attempted=%v\nwhy this case exists: %s",
-							j, op.StepID, completed, state.Attempted(op.StepID), want.Completed, want.Attempted, tc.Why)
+							j, op.StepID, completed, state.Attempted("", op.StepID), want.Completed, want.Attempted, tc.Why)
 					}
 
 				default:

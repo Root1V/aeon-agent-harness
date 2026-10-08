@@ -1,10 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://aeon-ai.dev/contracts/costura-durabilidad/0.1/append-request.schema.json",
+  "$id": "https://aeon-ai.dev/contracts/costura-durabilidad/0.2/append-request.schema.json",
   "title": "CheckpointAppendRequest",
   "description": "Una entrada del diario. run_id viaja en la ruta, no en el cuerpo.",
   "type": "object",
-  "required": ["step_id", "phase"],
+  "required": [
+    "step_id",
+    "phase"
+  ],
   "additionalProperties": false,
   "properties": {
     "step_id": {
@@ -13,11 +16,19 @@
       "description": "Identidad determinista del paso dentro del run. Estable entre reintentos: es la mitad de la clave de idempotencia."
     },
     "phase": {
-      "enum": ["attempted", "completed"],
+      "enum": [
+        "attempted",
+        "completed"
+      ],
       "description": "Un valor fuera de este enum se rechaza con 400. Aceptarlo no fallaria: registraria en silencio una segunda entrada de un paso que ya se ejecuto."
     },
     "payload": {
       "description": "Opaco para la costura. Ausente y nulo son cosas distintas: ausente es 'no se registro resultado', nulo es 'el resultado registrado fue nulo'."
+    },
+    "sub_run_id": {
+      "type": "string",
+      "maxLength": 512,
+      "description": "La ruta de delegacion a la que pertenece la entrada. OPCIONAL: omitirla significa el run raiz, y el centinela ('' ) lo escribe el esquema, no el cliente. Es parte de la clave de idempotencia desde 0.2 (VRT-AEON-004): dos sub-runs de un mismo run usan legitimamente el mismo step_id, asi que sin ella la entrada del segundo era un duplicado de la del primero — nada escrito, exito reportado. Ruta OPACA: nadie la parsea ni le lee profundidad."
     }
   }
 }

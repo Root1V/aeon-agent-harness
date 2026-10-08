@@ -27,10 +27,10 @@ func TestRunStateAnswersTheThreeReadings(t *testing.T) {
 			rec("s1", PhaseAttempted, 0, ""),
 			rec("s1", PhaseCompleted, 1, `{"ok":true}`),
 		})
-		if s.Attempted("s1") {
+		if s.Attempted("", "s1") {
 			t.Error("a finished step must not also report as attempted — the caller needs one answer, not two")
 		}
-		got, ok := s.Completed("s1")
+		got, ok := s.Completed("", "s1")
 		if !ok {
 			t.Fatal("expected s1 to report completed")
 		}
@@ -41,10 +41,10 @@ func TestRunStateAnswersTheThreeReadings(t *testing.T) {
 
 	t.Run("a step journalled only as attempted is the crash-in-the-middle case", func(t *testing.T) {
 		s := NewRunState("run-1", []Record{rec("s1", PhaseAttempted, 0, "")})
-		if !s.Attempted("s1") {
+		if !s.Attempted("", "s1") {
 			t.Error("expected s1 to report attempted — the effect may have happened")
 		}
-		if _, ok := s.Completed("s1"); ok {
+		if _, ok := s.Completed("", "s1"); ok {
 			t.Error("expected s1 not to report completed")
 		}
 	})
@@ -54,10 +54,10 @@ func TestRunStateAnswersTheThreeReadings(t *testing.T) {
 		// mid-effect the step has no record at all, so the caller re-runs it — safe exactly when the
 		// effect is idempotent, which is the same condition that made skipping the write safe.
 		s := NewRunState("run-1", []Record{rec("s1", PhaseCompleted, 0, `1`)})
-		if s.Attempted("s1") {
+		if s.Attempted("", "s1") {
 			t.Error("a completed-only step must not report attempted")
 		}
-		if s.Attempted("s2") || func() bool { _, ok := s.Completed("s2"); return ok }() {
+		if s.Attempted("", "s2") || func() bool { _, ok := s.Completed("", "s2"); return ok }() {
 			t.Error("an unjournalled step must report neither")
 		}
 	})
