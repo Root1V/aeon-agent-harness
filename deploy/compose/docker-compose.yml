@@ -49,7 +49,7 @@ services:
       POSTGRES_PWD: temporal
       POSTGRES_SEEDS: temporal-db
     ports:
-      - "7233:7233"
+      - "127.0.0.1:${AEON_TEMPORAL_PORT:-7233}:7233"
     healthcheck:
       test: ["CMD", "tctl", "--address", "temporal:7233", "cluster", "health"]
       interval: 5s
@@ -64,7 +64,7 @@ services:
       TEMPORAL_ADDRESS: temporal:7233
       TEMPORAL_CORS_ORIGINS: "http://localhost:3000"
     ports:
-      - "8080:8080"
+      - "127.0.0.1:${AEON_TEMPORAL_UI_PORT:-8080}:8080"
 
   temporal-db:
     image: postgres:17-alpine
@@ -92,7 +92,7 @@ services:
       # Host-side port intentionally non-default (5442, not 5432): 5432 is commonly already taken
       # by another local project's Postgres. Container-internal port and AEON_PG_DSN (below) are
       # unaffected — only the host-side mapping changes.
-      - "5442:5432"
+      - "127.0.0.1:${AEON_POSTGRES_PORT:-5442}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -109,9 +109,18 @@ services:
     environment:
       MINIO_ROOT_USER: aeon
       MINIO_ROOT_PASSWORD: aeon-dev-secret
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+    # NO PUBLICA PUERTOS, y es el arreglo más barato de una colisión real (VRT-ARG-001 punto 4).
+    #
+    # Publicaba 9000 y 9001 en el host, y 9000 es exactamente el puerto que nuestro propio
+    # `.env.example` documenta para `PROMETHEUS_AUTH_URL=http://127.0.0.1:9000`. Levantar este compose
+    # y la plataforma Prometheus en la misma máquina colisionaba — y el servicio que colisionaba es el
+    # que `backlog.md` tiene registrado como **sin un solo consumidor** («MinIO corre en el stack de
+    # referencia y nadie le habla»: ni una línea de Go o de Python lo usa).
+    #
+    # El servicio se queda, porque quitarlo depende de una decisión que esa entrada del backlog aún
+    # tiene abierta (implementar el ObservationStore sobre S3 o borrarlo). Lo que no se sostiene es
+    # ocupar dos puertos del host para nadie. Dentro de la red sigue alcanzable como `minio:9000`, que
+    # es como lo alcanzaría el primer cliente que exista.
     volumes:
       - minio-data:/data
     healthcheck:
@@ -138,8 +147,8 @@ services:
       # Container-internal ports are unchanged, so everything inside the compose network (the test
       # container included) still reaches otel-collector:4318 by service name. These publications
       # exist only for a process running on the host; set the variables if these collide too.
-      - "${AEON_OTLP_GRPC_PORT:-24317}:4317"  # OTLP gRPC
-      - "${AEON_OTLP_HTTP_PORT:-24318}:4318"  # OTLP HTTP
+      - "127.0.0.1:${AEON_OTLP_GRPC_PORT:-24317}:4317"  # OTLP gRPC
+      - "127.0.0.1:${AEON_OTLP_HTTP_PORT:-24318}:4318"  # OTLP HTTP
     depends_on: [tempo]
 
   tempo:
@@ -153,7 +162,7 @@ services:
       - ./tempo-config.yaml:/etc/tempo.yaml:ro
       - tempo-data:/var/tempo
     ports:
-      - "3200:3200"
+      - "127.0.0.1:${AEON_TEMPO_PORT:-3200}:3200"
 
   prometheus-metrics:
     image: prom/prometheus:latest
@@ -162,7 +171,7 @@ services:
       - ./prometheus-metrics-config.yaml:/etc/prometheus/prometheus.yml:ro
       - prometheus-metrics-data:/prometheus
     ports:
-      - "9090:9090"
+      - "127.0.0.1:${AEON_PROMETHEUS_METRICS_PORT:-9090}:9090"
 
   grafana:
     image: grafana/grafana:latest
@@ -172,7 +181,7 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
     depends_on: [tempo, prometheus-metrics]
     ports:
-      - "3000:3000"
+      - "127.0.0.1:${AEON_GRAFANA_PORT:-3000}:3000"
     volumes:
       - grafana-data:/var/lib/grafana
 
@@ -185,7 +194,7 @@ services:
     profiles: ["local-llm", "full"]
     command: ["--model", "${AEON_DEV_LOCAL_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}"]
     ports:
-      - "8000:8000"
+      - "127.0.0.1:${AEON_VLLM_PORT:-8000}:8000"
     volumes:
       - vllm-cache:/root/.cache/huggingface
 
@@ -221,7 +230,7 @@ services:
       # SEC-005: the caller bundle (AEON_CALLERS_PATH). Read-only, like the policy bundle beside it.
       - ../../examples:/examples:ro
     ports:
-      - "9401:9401"
+      - "127.0.0.1:${AEON_CONTROLPLANE_PORT:-9401}:9401"
 
   modelgw:
     build:
@@ -282,7 +291,7 @@ services:
     volumes:
       - ../../examples:/examples:ro
     ports:
-      - "9402:9402"
+      - "127.0.0.1:${AEON_MODELGW_PORT:-9402}:9402"
 
   # TOOL-007: search.web's provider. Self-hosted on purpose — the query is written by the model
   # from the run's context, so it can carry fragments of whatever the run is reading, and sending
@@ -305,7 +314,7 @@ services:
     ports:
       # Published for debugging a query by hand; nothing in Aeon uses the host port. Overridable
       # because 8080 is the single most contended port on a developer machine.
-      - "${AEON_SEARXNG_PORT:-18080}:8080"
+      - "127.0.0.1:${AEON_SEARXNG_PORT:-18080}:8080"
     healthcheck:
       # Checks the JSON API specifically, not just that the process is up: a misconfigured
       # settings.yml serves HTML happily and answers 403 to exactly the request we depend on.
@@ -390,7 +399,7 @@ services:
       # backlog.md).
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
-      - "9403:9403"
+      - "127.0.0.1:${AEON_TOOLGW_PORT:-9403}:9403"
 
   worker:
     build:
@@ -493,7 +502,7 @@ services:
       # SEC-005: the caller bundle (AEON_CALLERS_PATH). Read-only, like the policy bundle beside it.
       - ../../examples:/examples:ro
     ports:
-      - "9404:9404"
+      - "127.0.0.1:${AEON_RUNCONTROLLER_PORT:-9404}:9404"
 
 volumes:
   temporal-db-data:

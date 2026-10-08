@@ -10,6 +10,7 @@ uses, on the real Temporal server, picked up by the real aeon-worker-1 container
 """
 import asyncio
 import json
+import os
 import uuid
 from pathlib import Path
 
@@ -31,7 +32,10 @@ async def main() -> None:
         task_queue="aeon-agent-run",
     )
     print(f"started workflow_id={handle.id} run_id={handle.result_run_id or handle.first_execution_run_id}")
-    print(f"watch it live at: http://localhost:8080/namespaces/default/workflows/{handle.id}")
+    # The UI's port is overridable (AEON_TEMPORAL_UI_PORT), so the hint reads it rather than
+    # printing a URL that is wrong on any machine where somebody reassigned it.
+    ui_port = os.environ.get("AEON_TEMPORAL_UI_PORT", "8080")
+    print(f"watch it live at: http://localhost:{ui_port}/namespaces/default/workflows/{handle.id}")
 
     result = await handle.result()
     print("\n--- final result ---")
