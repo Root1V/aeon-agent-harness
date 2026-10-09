@@ -66,8 +66,8 @@ func TestADivergentResponseModelIsFindable(t *testing.T) {
 	if _, err := gw.Decide(ctx, []modelgateway.Candidate{{Provider: "renaming", Model: requested, Priority: 0}}, map[string]any{}, ""); err != nil {
 		t.Fatalf("Gateway.Decide: %v", err)
 	}
-	// Y un segundo span cuyo proveedor NO reporta modelo: el estado "ausente" que se conserva a
-	// proposito, y el que decide si `!=` sirve como consulta.
+	// And a second span whose provider reports NO model: the "absent" state that is preserved on
+	// purpose, and the one that decides whether `!=` is usable as a query at all.
 	silent := fmt.Sprintf("obs012-silent-%d", time.Now().UnixNano())
 	gw.RegisterProvider("silent", renamingFakeProvider{served: ""})
 	if _, err := gw.Decide(ctx, []modelgateway.Candidate{{Provider: "silent", Model: silent, Priority: 0}}, map[string]any{}, ""); err != nil {
@@ -85,17 +85,15 @@ func TestADivergentResponseModelIsFindable(t *testing.T) {
 	waitForTempoSpan(t, tempoURL,
 		fmt.Sprintf(`{ name = "chat" && span.gen_ai.response.model = "%s" }`, served), 30*time.Second)
 
-	// 2. The divergence is FINDABLE and not merely recorded: one query, no prior knowledge of either
-	//    model name, which is what an operator asking "did anything get served by something else
-	//    today" actually has.
-	waitForTempoSpan(t, tempoURL,
-		`{ name = "chat" && span.aeon.model.response_differs = true }`, 30*time.Second)
+	// EVERY QUERY IN THIS TEST IS SCOPED TO A UNIQUE MARKER, and that is not style — it is the only
+	// thing that makes a green run mean anything here. Tempo keeps what previous runs sent it, so an
+	// UNSCOPED query reads another run's data, including a run of a previous version of this code.
+	//
+	// That is exactly how this test lied once. It still asserted an `aeon.model.response_differs`
+	// flag after the flag had been removed, with no marker on the query, and it PASSED locally
+	// against a Tempo that still held the flagged span from the run before the removal. CI's Tempo
+	// was clean and said so. The local green was worthless for that one assertion.
 
-	// 3. THE MEASUREMENT BEHIND THE FLAG. recordResponseModel's comment says the flag exists because
-	//    TraceQL compares an attribute against a literal rather than against another attribute. If
-	//    that is wrong the flag is redundant and the comment is a false claim, so it is measured
-	//    rather than asserted — and reported either way rather than failed, because what a query
-	//    language supports is not this repository's behaviour to fix.
 	// CONTROL: the silent span has to BE there, or the zeros below prove nothing about the absent
 	// state — they would prove the span never arrived.
 	waitForTempoSpan(t, tempoURL,
