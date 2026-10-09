@@ -140,7 +140,7 @@ func (g *Gateway) Decide(
 
 		spanCtx, span := tracer.Start(ctx, "chat", trace.WithAttributes(
 			attribute.String("gen_ai.operation.name", "chat"),
-			attribute.String("gen_ai.system", c.Provider),
+			providerNameAttr(c.Provider),
 			attribute.String("gen_ai.request.model", c.Model),
 		))
 		output, err := provider.Decide(spanCtx, input)
@@ -171,6 +171,8 @@ func (g *Gateway) Decide(
 			continue
 		}
 		recordResponseModel(span, responseModelOf(output))
+		inputTokens, outputTokens := usageOf(output)
+		recordUsage(span, inputTokens, outputTokens)
 		span.SetStatus(codes.Ok, "")
 		span.End()
 
@@ -278,4 +280,75 @@ func recordResponseModel(span trace.Span, served string) {
 		return
 	}
 	span.SetAttributes(attribute.String("gen_ai.response.model", served))
+}
+
+// providerNameAttr emits `gen_ai.provider.name` and NOT the deprecated `gen_ai.system`.
+//
+// WE REPORTED THIS DEFECT TO SOMEBODY ELSE AND HAD IT OURSELVES. VRT-AXO-002 is Veritium asking
+// Axonium to stop emitting `gen_ai.system` because the convention deprecated it; Axonium delivered
+// it across three SDKs and asserted the old attribute ABSENT rather than only the new one present,
+// with the argument that "un emisor que mandara los dos pasaría cualquier test que solo comprobara
+// el nuevo". These two spans kept emitting it the whole time. Found while adding the usage
+// attributes, by reading what that entry actually agreed to.
+//
+// SO IT IS A REPLACEMENT AND NOT AN ADDITION, for exactly that reason, and the test asserts the old
+// name is gone.
+//
+// THE VALUE IS OUR ADAPTER NAME (prometheus_inference, openai, anthropic...) and not an inference
+// engine. Argus's A-10 maps this attribute to the engine (llama.cpp, vllm, ollama), which is right
+// for a span emitted BY a gateway that knows its backend and wrong for one emitted by a client that
+// does not: we would have to guess. Axonium reached the same conclusion for the same reason and
+// emits their own `prometheus-gateway`; the convention permits a custom value when no known one
+// applies, and a true custom value beats a guessed standard one.
+func providerNameAttr(provider string) attribute.KeyValue {
+	return attribute.String("gen_ai.provider.name", provider)
+}
+
+// usageOf reads the two base token counters out of a normalized response, PRESERVING ABSENCE.
+//
+// Both are pointers because providers.usageBlock OMITS a counter the provider did not report
+// (MDL-014), and the distinction has to survive all the way here: a provider that reported nothing
+// and one that genuinely used zero tokens are different facts.
+func usageOf(output map[string]any) (input, out *int) {
+	usage, _ := output["usage"].(map[string]any)
+	return intFrom(usage["prompt_tokens"]), intFrom(usage["completion_tokens"])
+}
+
+// intFrom tolerates both a real int (the in-process case, which is what a Provider returns) and a
+// float64 (were the response ever JSON-decoded first). Defensive rather than expected, and the same
+// tolerance model_gateway_handlers.optionalInt already applies for the ledger.
+func intFrom(v any) *int {
+	switch n := v.(type) {
+	case int:
+		return &n
+	case int64:
+		asInt := int(n)
+		return &asInt
+	case float64:
+		asInt := int(n)
+		return &asInt
+	}
+	return nil
+}
+
+// recordUsage puts OTel GenAI's two token counters on the span.
+//
+// ABSENT WHEN THE PROVIDER REPORTED NOTHING, never zero. This is the same rule MDL-014 established
+// for the ledger and OBS-008 for the dashboard, and the reason it matters on a span is that a trace
+// is where somebody goes to ask "what did this call cost": a fabricated 0 reads as a measured zero
+// and sums into a total that looks exact. An absent attribute is at worst ambiguous; a zero is a
+// positive claim nothing supports.
+//
+// THE NAMES ARE THE CURRENT ONES. `gen_ai.usage.input_tokens` / `output_tokens` replaced
+// `prompt_tokens` / `completion_tokens` in the convention — the normalized response still carries
+// the old spellings because that is OpenAI's wire format and INT-002's consumers depend on it, so
+// this is the boundary where the two vocabularies meet and the mapping is explicit rather than
+// implied by a matching name.
+func recordUsage(span trace.Span, input, output *int) {
+	if input != nil {
+		span.SetAttributes(attribute.Int("gen_ai.usage.input_tokens", *input))
+	}
+	if output != nil {
+		span.SetAttributes(attribute.Int("gen_ai.usage.output_tokens", *output))
+	}
 }

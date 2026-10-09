@@ -5,27 +5,92 @@
   "description": "OTel GenAI semantic-conventions-aligned span emitted by the runtime (OBS-001). Span tree: invoke_agent -> chat / execute_tool. Never carries chain-of-thought; rationale lives behind rationale_ref pointers only.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["trace_id", "span_id", "name", "kind", "start_time", "attributes"],
+  "required": [
+    "trace_id",
+    "span_id",
+    "name",
+    "kind",
+    "start_time",
+    "attributes"
+  ],
   "properties": {
-    "trace_id": { "type": "string" },
-    "span_id": { "type": "string" },
-    "parent_span_id": { "type": ["string", "null"] },
-    "name": { "type": "string", "enum": ["invoke_agent", "chat", "execute_tool", "context_assemble", "policy_check", "approval_wait"] },
-    "kind": { "type": "string", "enum": ["INTERNAL", "CLIENT", "SERVER"] },
-    "start_time": { "type": "string", "format": "date-time" },
-    "end_time": { "type": ["string", "null"], "format": "date-time" },
+    "trace_id": {
+      "type": "string"
+    },
+    "span_id": {
+      "type": "string"
+    },
+    "parent_span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "type": "string",
+      "enum": [
+        "invoke_agent",
+        "chat",
+        "execute_tool",
+        "context_assemble",
+        "policy_check",
+        "approval_wait"
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "INTERNAL",
+        "CLIENT",
+        "SERVER"
+      ]
+    },
+    "start_time": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "end_time": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "date-time"
+    },
     "attributes": {
       "type": "object",
       "description": "gen_ai.* attributes per OTel GenAI semantic conventions, plus aeon.* extensions.",
       "properties": {
-        "gen_ai.system": { "type": "string" },
-        "gen_ai.request.model": { "type": "string" },
-        "gen_ai.usage.input_tokens": { "type": "integer" },
-        "gen_ai.usage.output_tokens": { "type": "integer" },
-        "gen_ai.evaluation.score": { "type": "number" },
-        "aeon.run_id": { "type": "string" },
-        "aeon.tenant_id": { "type": "string" },
-        "aeon.idempotency_key": { "type": "string" }
+        "gen_ai.request.model": {
+          "type": "string"
+        },
+        "gen_ai.usage.input_tokens": {
+          "type": "integer",
+          "description": "Contador de tokens, AUSENTE cuando el proveedor no reportó ninguno y nunca cero (MDL-014). Declarado en este schema desde que se escribió y **sin productor hasta OBS-013**: una traza es donde alguien va a preguntar qué costó una llamada, así que un 0 fabricado se lee como un cero medido y suma en un total que parece exacto."
+        },
+        "gen_ai.usage.output_tokens": {
+          "type": "integer",
+          "description": "Contador de tokens, AUSENTE cuando el proveedor no reportó ninguno y nunca cero (MDL-014). Declarado en este schema desde que se escribió y **sin productor hasta OBS-013**: una traza es donde alguien va a preguntar qué costó una llamada, así que un 0 fabricado se lee como un cero medido y suma en un total que parece exacto."
+        },
+        "gen_ai.evaluation.score": {
+          "type": "number"
+        },
+        "aeon.run_id": {
+          "type": "string"
+        },
+        "aeon.tenant_id": {
+          "type": "string"
+        },
+        "aeon.idempotency_key": {
+          "type": "string"
+        },
+        "gen_ai.provider.name": {
+          "type": "string",
+          "description": "Reemplaza a `gen_ai.system`, que la convención deprecó — y que estos spans seguían emitiendo mientras VRT-AXO-002 era precisamente Veritium pidiendo a Axonium que dejara de hacerlo (GOV/OBS-013, 2026-10-08). El valor es el nombre de NUESTRO adaptador (prometheus_inference, openai, anthropic...) y no un motor de inferencia: la tabla A-10 de Argus mapea este atributo al motor, lo cual es correcto para un span emitido POR un gateway que conoce su backend y no para uno emitido por un cliente que tendría que adivinarlo. Un valor propio verdadero es mejor que un valor estándar adivinado."
+        },
+        "gen_ai.response.model": {
+          "type": "string",
+          "description": "El modelo que CONTESTÓ (OBS-012). Ausente cuando el proveedor no reporta ninguno — nunca igualado al pedido, que fabricaría acuerdo. Difiere del pedido por diseño (un llamante pide un perfil de capacidad, no un modelo) y porque la plataforma puede servir otra cosa."
+        }
       }
     }
   }

@@ -14,10 +14,16 @@ import (
 
 // renamingFakeProvider answers with a model that is NOT the one it was asked for, which is the case
 // the pair exists to detect: a platform that served something else, or a rename in its catalogue.
-type renamingFakeProvider struct{ served string }
+type renamingFakeProvider struct {
+	served string
+	// reportsUsage false builds a response with NO usage block, which is the state MDL-014 exists to
+	// preserve: a provider that reported nothing is not a provider that used zero tokens.
+	reportsUsage               bool
+	promptTokens, outputTokens int
+}
 
 func (p renamingFakeProvider) Decide(ctx context.Context, renderedContext map[string]any) (map[string]any, error) {
-	return map[string]any{
+	out := map[string]any{
 		// Deliberately not renderedContext["model"]. OBS-005's measurement is that this CAN differ,
 		// and OBS-008 came from the platform changing what the field meant.
 		"model": p.served,
@@ -25,8 +31,14 @@ func (p renamingFakeProvider) Decide(ctx context.Context, renderedContext map[st
 			"index": 0, "finish_reason": "stop",
 			"message": map[string]any{"role": "assistant", "content": "hola"},
 		}},
-		"usage": map[string]any{"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-	}, nil
+	}
+	if p.reportsUsage {
+		out["usage"] = map[string]any{
+			"prompt_tokens": p.promptTokens, "completion_tokens": p.outputTokens,
+			"total_tokens": p.promptTokens + p.outputTokens,
+		}
+	}
+	return out, nil
 }
 func (renamingFakeProvider) CachingCapability() string { return "none" }
 func (renamingFakeProvider) CostModel() string         { return "token_based" }
@@ -62,13 +74,19 @@ func TestADivergentResponseModelIsFindable(t *testing.T) {
 	served := fmt.Sprintf("obs012-answered-%d", time.Now().UnixNano())
 
 	gw := modelgateway.New()
-	gw.RegisterProvider("renaming", renamingFakeProvider{served: served})
+	// Token counts that cannot be confused with a default: not 0, not 1, and different from each
+	// other, so a span that swapped input for output would fail rather than look right.
+	const promptTokens, outputTokens = 137, 42
+	gw.RegisterProvider("renaming", renamingFakeProvider{
+		served: served, reportsUsage: true, promptTokens: promptTokens, outputTokens: outputTokens,
+	})
 	if _, err := gw.Decide(ctx, []modelgateway.Candidate{{Provider: "renaming", Model: requested, Priority: 0}}, map[string]any{}, ""); err != nil {
 		t.Fatalf("Gateway.Decide: %v", err)
 	}
 	// And a second span whose provider reports NO model: the "absent" state that is preserved on
 	// purpose, and the one that decides whether `!=` is usable as a query at all.
 	silent := fmt.Sprintf("obs012-silent-%d", time.Now().UnixNano())
+	// Reports NEITHER a model NOR usage: the absent state for both.
 	gw.RegisterProvider("silent", renamingFakeProvider{served: ""})
 	if _, err := gw.Decide(ctx, []modelgateway.Candidate{{Provider: "silent", Model: silent, Priority: 0}}, map[string]any{}, ""); err != nil {
 		t.Fatalf("Gateway.Decide (silent): %v", err)
@@ -130,6 +148,35 @@ func TestADivergentResponseModelIsFindable(t *testing.T) {
 		t.Errorf("the divergence query matches a span with NO response model (matched=%d err=%v) — then "+
 			"every provider that reports none reads as a discrepancy", n, err)
 	}
+
+	// OBS-013: the two token counters, by VALUE and not just by presence. Querying the exact numbers
+	// is what catches input and output being swapped — a pair of equal counts, or a check for
+	// "> 0", would pass through that.
+	waitForTempoSpan(t, tempoURL, fmt.Sprintf(
+		`{ name = "chat" && span.gen_ai.request.model = "%s" && span.gen_ai.usage.input_tokens = %d && span.gen_ai.usage.output_tokens = %d }`,
+		requested, promptTokens, outputTokens), 30*time.Second)
+
+	// ABSENT AND NOT ZERO when the provider reported nothing. A trace is where somebody asks what a
+	// call cost, so a fabricated 0 reads as a measured zero and sums into a total that looks exact —
+	// MDL-014's rule, on the surface that publishes it.
+	for _, attr := range []string{"gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"} {
+		q := fmt.Sprintf(`{ name = "chat" && span.gen_ai.request.model = "%s" && span.%s != nil }`, silent, attr)
+		if n, err := tempoSearchCount(t, tempoURL, q); err != nil || n != 0 {
+			t.Errorf("the span of a provider that reported no usage carries %s (matched=%d err=%v)", attr, n, err)
+		}
+	}
+
+	// AND THE DEPRECATED ATTRIBUTE IS GONE, asserted as ABSENT rather than by the new one being
+	// present — which is Axonium's own argument on VRT-AXO-002, the entry where Veritium asked THEM
+	// to stop emitting gen_ai.system: "un emisor que mandara los dos pasaría cualquier test que solo
+	// comprobara el nuevo". These spans had been emitting it the whole time.
+	if n, err := tempoSearchCount(t, tempoURL, fmt.Sprintf(
+		`{ name = "chat" && span.gen_ai.request.model = "%s" && span.gen_ai.system != nil }`, requested)); err != nil || n != 0 {
+		t.Errorf("the span still carries the deprecated gen_ai.system (matched=%d err=%v)", n, err)
+	}
+	waitForTempoSpan(t, tempoURL, fmt.Sprintf(
+		`{ name = "chat" && span.gen_ai.request.model = "%s" && span.gen_ai.provider.name = "renaming" }`,
+		requested), 30*time.Second)
 }
 
 // tempoSearchCount runs one TraceQL query and reports how many traces matched, or the error Tempo

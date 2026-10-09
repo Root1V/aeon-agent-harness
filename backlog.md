@@ -54,6 +54,29 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   y la identidad del audit trail la decide el orden de lectura del directorio.
 - **Coste:** S.
 
+### El nombre de nuestros spans no sigue la convención acordada (`{operation} {model}`)
+
+- **Descripción:** `VRT-AXO-002` fijó la convención OTel GenAI del ecosistema, y el nombre del span
+  forma parte: **`{operation} {model}`** → `chat qwen3-0.6b`. Más `server.address`, el host del
+  gateway. Los nuestros se llaman **`chat`** a secas y no emiten `server.address`.
+- **Y el nombre no es un detalle de estilo**: Argus lo pidió **explícitamente** cuando Prometheus se
+  ofreció a apartarse de él por comodidad de cardinalidad — *«seguid el estándar, la cardinalidad es
+  nuestro problema»*. Así que es su decisión y ya está tomada.
+- **Encontrado en `OBS-013`**, leyendo qué acordaba esa entrada antes de añadir los atributos de
+  usage. En el mismo sitio estaba el `gen_ai.system` deprecado, que **sí** se arregló ahí: era un
+  atributo, no un nombre.
+- **Por qué no se hizo de paso, que es la única razón:** cambiar el nombre de un span **rompe toda
+  consulta y todo panel que lo use**. Nuestro propio `tracing_integration_test.go` busca
+  `{ name = "chat" && ... }`, y Veritium y Argus pueden tener lo suyo. Eso es una decisión que se
+  comunica antes, no un cambio que se cuela.
+- **Criterio de entrada:** avisar en el canal y acordar el momento, porque el corte es simultáneo
+  para quien consulte. Si alguien tiene paneles, el nombre viejo y el nuevo no coexisten.
+- **Criterio de aceptación:** un span de chat se llama `chat <modelo>` y trae `server.address`; la
+  suite de `argus-obs-semconv` lo acepta (eso lo verifican ellos, es su criterio y no el nuestro);
+  y nuestras propias consultas de test se actualizan en el mismo cambio.
+  **Control negativo:** con el nombre viejo, la consulta nueva no casa.
+- **Coste:** S el cambio, y el coste real es la coordinación.
+
 ### `run_state.schema.json` describe un documento que nadie implementa
 
 - **Descripción:** el schema dice ser *«the shape checkpointed by Temporal at each superstep»*, y
