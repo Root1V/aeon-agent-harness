@@ -54,6 +54,30 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   y la identidad del audit trail la decide el orden de lectura del directorio.
 - **Coste:** S.
 
+### `run_state.schema.json` describe un documento que nadie implementa
+
+- **Descripción:** el schema dice ser *«the shape checkpointed by Temporal at each superstep»*, y
+  `graph_cursor` y `no_progress_counter` **no aparecen en ningún sitio del repositorio fuera de ese
+  fichero** (medido el 2026-10-08). `run_id`, `agent_manifest_ref` y `created_at` son obligatorios
+  ahí y no los emite nada. La mitad que sí es real —`status`, `pending_approval`,
+  `budgets_consumed` y, desde `OBS-011`, `failure`— la comparte con `GET /runs/{run_id}`, pero esa
+  respuesta **no es ese documento**: emite `workflow_id` y `paused`, que el schema no declara, con
+  `additionalProperties: false`.
+- **Encontrado al añadir `failure`** (`OBS-011`): antes de meter un campo en un schema conviene
+  saber si algo lo implementa. Tres comentarios del código lo citaban y uno afirmaba que la
+  respuesta del endpoint **es** un `RunState`; corregidos, y el propio schema dice ahora qué mitad
+  tiene productor. **Lo que queda abierto es la decisión**, no la mentira.
+- **Criterio de entrada:** decidir una de dos, y **no las dos a la vez**: (a) el endpoint tiene su
+  propio schema, validado contra la respuesta real por un test como el de
+  `evals/contracts/costura-durabilidad` —que existe precisamente porque allí nada validaba nada y
+  la respuesta llevaba años siendo inválida—, y `RunState` se queda como diseño marcado como tal;
+  o (b) `RunState` se implementa de verdad (un documento durable con cursor de grafo y contador de
+  no-progreso), que es trabajo de `RUN-002`/replanning y no de un schema.
+- **Por qué importa más de lo que parece:** `proto/schemas/` es lo que otro equipo lee para
+  construir contra nosotros. Un consumidor que programe contra `graph_cursor` espera un campo que
+  no va a llegar nunca, y nada se lo va a decir.
+- **Coste:** S (a) / L (b).
+
 ### Ningún perfil de agente usa todavía `shell.exec` real (`TOOL-003`)
 
 - **Descripción:** `TOOL-003` construyó el motor de ejecución real (`go/internal/sandbox`), pero el

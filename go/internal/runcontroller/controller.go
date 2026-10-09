@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	enumspb "go.temporal.io/api/enums/v1"
+	failurepb "go.temporal.io/api/failure/v1"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
 
@@ -208,7 +209,14 @@ func stringField(m map[string]any, key string) string {
 	return s
 }
 
-// Status is RunState's status field (proto/schemas/run_state.schema.json), derived from Temporal's
+// Status is the response of GET /runs/{run_id}. It is NOT a RunState document, and saying so is a
+// correction: this comment claimed it was, and run_state.schema.json describes durable state whose
+// `graph_cursor` and `no_progress_counter` appear NOWHERE in this repository outside that file
+// (measured 2026-10-08). The fields the two genuinely share are `status`, `pending_approval`,
+// `budgets_consumed` and now `failure`; `run_id`/`agent_manifest_ref`/`created_at` are required
+// there and absent here, which is why nothing could ever have validated this against it.
+//
+// Status itself is derived from Temporal's
 // own execution status plus (while RUNNING) the workflow's own is_paused/pending_approval queries.
 type Status struct {
 	WorkflowID      string         `json:"workflow_id"`
@@ -216,6 +224,134 @@ type Status struct {
 	Paused          bool           `json:"paused"`
 	PendingApproval map[string]any `json:"pending_approval,omitempty"`
 	BudgetsConsumed map[string]any `json:"budgets_consumed,omitempty"`
+	// Failure is why a run ended badly, and it is ABSENT unless something went wrong in a way
+	// `Status` cannot express (OBS-011 — numbered 011 and not 010 because roadmap_check's duplicate-id
+	// guard caught me reusing an id that already names another feature; this index is cited by id
+	// across teams, so one id names one thing).
+	//
+	// WHY IT EXISTS: Veritium asked for it as a second-consumer note on VRT-AEON-001 — "GET
+	// /runs/{id} no dice por qué falló un run. Como aeon no avisa, marcamos nuestra corrida fallida
+	// con un reconciliador que consulta el estado" — and said they were not asking for anything. A
+	// consumer running a reconciliator that can see THAT a run failed and not WHY has to go to
+	// Temporal's own UI to find out, which is the one place a platform consumer should not have to
+	// look.
+	//
+	// Not set for CANCELLED: `Status` already says that, and a Temporal cancellation carries no
+	// reason, so a `failure` object there would be a field that exists to say nothing.
+	Failure *Failure `json:"failure,omitempty"`
+}
+
+// Failure is the reason a run ended badly, read from the workflow's CLOSE EVENT.
+//
+// THE THREE KINDS ARE THE POINT. `mapStatus` maps Temporal's FAILED, TIMED_OUT and TERMINATED onto
+// one `FAILED`, because run_state.schema.json's status enum has one value for all three and widening
+// it would break every consumer that switches on it. That merge is fine for a category and wrong as
+// the whole answer: a workflow that raised an error, one that ran out of time and one an operator
+// killed are three different incidents with three different next actions. `Kind` is where the
+// distinction lives.
+type Failure struct {
+	// Kind is "failed", "timed_out" or "terminated".
+	Kind string `json:"kind"`
+	// Message is the ROOT CAUSE's message and not the outermost one, measured: an activity failure's
+	// outer message is the literal string "activity error" and the useful text is one level down.
+	Message string `json:"message,omitempty"`
+	// Type is the application error type when the failure carries one (`BudgetExceeded`,
+	// `PolicyDenied`). It is the workflow's own vocabulary, which is what makes it worth recording:
+	// a consumer can branch on it without parsing a message.
+	Type string `json:"type,omitempty"`
+	// Activity names which activity failed, when the failure came from one. It is at the OUTER level
+	// of the chain while the message is at the inner, so both have to be collected separately.
+	Activity string `json:"activity,omitempty"`
+	// Retryable is a POINTER because it has three states: Temporal said non-retryable, Temporal said
+	// retryable, or the failure carried no application info to say either. A bool would make the
+	// third indistinguishable from the second — the same fabricated-default shape MDL-014 removed
+	// from the token counters.
+	Retryable *bool `json:"retryable,omitempty"`
+	// TerminatedBy is Temporal's `identity` on a termination: a worker or CLI identity string, NOT an
+	// authenticated Aeon caller. Named for what it is, because calling it an actor would overclaim —
+	// nothing here proves who the person was.
+	TerminatedBy string `json:"terminated_by,omitempty"`
+}
+
+// MESSAGES COME FROM THE WORKFLOW AND ARE PASSED THROUGH UNCHANGED, which is a decision and not an
+// oversight. They are the activity's or the workflow's own text, so they can contain whatever that
+// code put in them. Two things make that acceptable here and both are load-bearing: the route is
+// gated by `ownedRun`, so only the run's OWN tenant can read it (GOV-001e), and the alternative —
+// a sanitised or truncated message — would reproduce the defect this feature exists to fix, a
+// consumer that can see a failure and not act on it.
+//
+// What must never arrive here is a chain of thought. run_state.schema.json says the durable state
+// "must never contain a chain-of-thought field", and a failure message is the obvious back door: an
+// activity that puts a model's reasoning into an error message publishes it. That is a rule for
+// whoever writes an activity, and it is written down here because this is the surface that would
+// carry it out of the process.
+func (c *Controller) failureOf(ctx context.Context, workflowID string) *Failure {
+	iter := c.Client.GetWorkflowHistory(ctx, workflowID, "", false, enumspb.HISTORY_EVENT_FILTER_TYPE_CLOSE_EVENT)
+	for iter.HasNext() {
+		event, err := iter.Next()
+		if err != nil {
+			// Best-effort, like the budget query above: a status read must not fail because the reason
+			// could not be fetched. The caller still gets the status, which is what it had before.
+			log.Printf("aeon-runcontroller: reading the close event for run %s: %v", workflowID, err)
+			return nil
+		}
+		switch event.GetEventType() {
+		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_FAILED:
+			return failureFromProto(event.GetWorkflowExecutionFailedEventAttributes().GetFailure())
+		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_TIMED_OUT:
+			return &Failure{
+				Kind: "timed_out",
+				// Temporal reports no message for a timeout, so this one is ours — and it says which
+				// timeout, because "the run exceeded its execution timeout" and "a step did" are
+				// different problems and the close event only ever means the first.
+				Message: "the run exceeded its workflow execution timeout",
+			}
+		case enumspb.EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED:
+			attrs := event.GetWorkflowExecutionTerminatedEventAttributes()
+			return &Failure{
+				Kind: "terminated",
+				// The operator's reason, which is the ONE piece of this that `WorkflowRun.Get` does not
+				// return — measured: it answers the bare string "terminated". That is why this reads the
+				// history rather than the run's error.
+				Message:      attrs.GetReason(),
+				TerminatedBy: attrs.GetIdentity(),
+			}
+		}
+		// Any other close event (completed, cancelled, continued-as-new) is not a failure, and the
+		// caller already decided not to ask about those.
+		return nil
+	}
+	return nil
+}
+
+// failureFromProto walks the cause chain once, collecting what each level is the only place to find.
+func failureFromProto(f *failurepb.Failure) *Failure {
+	if f == nil {
+		return nil
+	}
+	out := &Failure{Kind: "failed"}
+	// Bounded, because a cause chain is attacker-influenced in the same sense a payload is: it comes
+	// from whatever the activity constructed. Ten is far past anything real.
+	for depth := 0; f != nil && depth < 10; depth++ {
+		if name := f.GetActivityFailureInfo().GetActivityType().GetName(); name != "" && out.Activity == "" {
+			out.Activity = name
+		}
+		if app := f.GetApplicationFailureInfo(); app != nil {
+			if app.GetType() != "" {
+				out.Type = app.GetType()
+			}
+			nonRetryable := app.GetNonRetryable()
+			retryable := !nonRetryable
+			out.Retryable = &retryable
+		}
+		// The message of the DEEPEST level wins: the outer one is a wrapper ("activity error") and the
+		// inner one is what the code actually said.
+		if msg := f.GetMessage(); msg != "" {
+			out.Message = msg
+		}
+		f = f.GetCause()
+	}
+	return out
 }
 
 // Status fetches a run's current status. budgets_consumed (RUN-003) is queried regardless of
@@ -243,18 +379,35 @@ func (c *Controller) Status(ctx context.Context, workflowID, tenant string) (*St
 	}
 	c.addLedgerSpend(ctx, workflowID, tenant, &budgetsConsumed)
 
+	// ONLY for the three closes that have a reason, so the common paths cost nothing extra: a RUNNING
+	// run and a SUCCEEDED one never read the history. That matters because a consumer's reconciliator
+	// polls this endpoint — Veritium's does — and the happy path is almost all of the traffic.
+	var failure *Failure
+	switch temporalStatus {
+	case enumspb.WORKFLOW_EXECUTION_STATUS_FAILED,
+		enumspb.WORKFLOW_EXECUTION_STATUS_TIMED_OUT,
+		enumspb.WORKFLOW_EXECUTION_STATUS_TERMINATED:
+		failure = c.failureOf(ctx, workflowID)
+	}
+
 	return &Status{
 		WorkflowID:      workflowID,
 		Status:          mapStatus(temporalStatus, paused, pendingApproval != nil),
 		Paused:          paused,
 		PendingApproval: pendingApproval,
 		BudgetsConsumed: budgetsConsumed,
+		Failure:         failure,
 	}, nil
 }
 
-// mapStatus translates Temporal's execution status into RunState's status enum
-// (proto/schemas/run_state.schema.json). A pending approval takes precedence over a plain pause —
-// PAUSED_FOR_APPROVAL is the more actionable of the two if somehow both were true at once.
+// mapStatus translates Temporal's execution status into the status enum
+// (proto/schemas/run_state.schema.json's `status`). A pending approval takes precedence over a plain
+// pause — PAUSED_FOR_APPROVAL is the more actionable of the two if somehow both were true at once.
+//
+// IT MERGES FAILED, TIMED_OUT AND TERMINATED INTO ONE `FAILED`, and that merge is kept rather than
+// fixed: the enum has one value for all three and widening it would break every consumer that
+// switches on it. What changed in OBS-011 is that the distinction is no longer LOST — `Status.Failure.Kind`
+// carries it, so the category stays stable and the three facts stay separable.
 func mapStatus(s enumspb.WorkflowExecutionStatus, paused, hasPendingApproval bool) string {
 	switch s {
 	case enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING:

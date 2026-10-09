@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aeon.dev/schemas/run_state.schema.json",
   "title": "RunState",
-  "description": "Durable state of an AgentRun workflow (RUN-001/RUN-004). This is the shape checkpointed by Temporal at each superstep; it must remain serializable and must never contain a chain-of-thought field.",
+  "description": "Durable state of an AgentRun workflow (RUN-001/RUN-004). This is the shape checkpointed by Temporal at each superstep; it must remain serializable and must never contain a chain-of-thought field.\n\nWHAT IS ACTUALLY IMPLEMENTED, stated because this document described a shape nothing emitted and three code comments cited it as the contract for GET /runs/{run_id}. Measured 2026-10-08: `graph_cursor` and `no_progress_counter` appear NOWHERE in the repository outside this file, and the status endpoint returns `workflow_id`/`status`/`paused`/`pending_approval`/`budgets_consumed`/`failure` — not this document. `status`, `pending_approval`, `budgets_consumed` and `failure` are real and shared with that endpoint; the rest is design that has no producer yet. A schema nobody implements is not a contract, and pretending otherwise is how a consumer builds against a field that will never arrive.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -106,6 +106,44 @@
     "updated_at": {
       "type": "string",
       "format": "date-time"
+    },
+    "failure": {
+      "type": "object",
+      "description": "Why the run ended badly (OBS-011). ABSENT unless something went wrong in a way `status` cannot express, and absent for CANCELLED — a Temporal cancellation carries no reason, so a failure object there would exist to say nothing. Asked for by Veritium as a second-consumer note: a reconciliator could see THAT a run failed and not WHY.",
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "failed",
+            "timed_out",
+            "terminated"
+          ],
+          "description": "The distinction `status` loses: it maps Temporal's FAILED, TIMED_OUT and TERMINATED onto one FAILED, because this schema's status enum has one value for all three and widening it would break every consumer that switches on it. A workflow that raised an error, one that ran out of time and one an operator killed are three incidents with three next actions."
+        },
+        "message": {
+          "type": "string",
+          "description": "The ROOT CAUSE's message, not the outermost one — measured: an activity failure's outer message is the literal string 'activity error' and the useful text is one level down. For a termination it is the operator's reason. Passed through from the workflow unchanged, so whoever writes an activity owns what lands here: a failure message is the obvious back door for the chain-of-thought this document forbids."
+        },
+        "type": {
+          "type": "string",
+          "description": "The application error type when the failure carries one (BudgetExceeded, PolicyDenied). The workflow's own vocabulary, so a consumer can branch without parsing a message."
+        },
+        "activity": {
+          "type": "string",
+          "description": "Which activity failed, when the failure came from one. It sits at the OUTER level of the cause chain while the message sits at the inner."
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "Three states and not two: present and false (Temporal said non-retryable), present and true, or ABSENT because the failure carried no application info to say either. An absent value is not a false one."
+        },
+        "terminated_by": {
+          "type": "string",
+          "description": "Temporal's `identity` on a termination: a worker or CLI identity string, NOT an authenticated Aeon caller. Named for what it is, because nothing here proves who the person was."
+        }
+      }
     }
   }
 }
