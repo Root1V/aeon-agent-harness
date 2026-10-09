@@ -170,6 +170,7 @@ func (g *Gateway) Decide(
 			attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model, Err: unusable})
 			continue
 		}
+		recordResponseModel(span, responseModelOf(output))
 		span.SetStatus(codes.Ok, "")
 		span.End()
 
@@ -227,4 +228,54 @@ func emptyAnswer(output map[string]any) string {
 		return "provider returned only reasoning and no answer"
 	}
 	return "provider returned empty content"
+}
+
+// responseModelOf reads the model the provider says answered, out of the normalized response.
+func responseModelOf(output map[string]any) string {
+	served, _ := output["model"].(string)
+	return served
+}
+
+// recordResponseModel puts OTel GenAI's `gen_ai.response.model` on the span beside the
+// `gen_ai.request.model` already there, and marks a divergence when the two differ.
+//
+// WHY THE PAIR IS WORTH ANYTHING HERE AND NOT IN A GATEWAY, which is the argument Argus's own P-21
+// makes in the other direction: from a gateway both attributes come from the same already-resolved
+// variable, so they can never disagree and the pair cannot detect anything. From a CLIENT they come
+// from two different places — the name this gateway picked out of the ModelPolicyBundle, and the name
+// that came back in the response body — so a disagreement is observable. That makes this an
+// independent second witness of a discrepancy the gateway structurally cannot report.
+//
+// AND THE TWO DISAGREE FOR TWO UNRELATED REASONS, both of which matter:
+//
+//   - BY DESIGN. A caller asks for a capability profile and never a model (docs/adr/0004), so
+//     routing and fallback mean "what was asked" and "what answered" are different things. A silent
+//     fall-through to a local candidate is the case that costs money: MDL-018 exists because local
+//     inference is never priced, so the moment routing falls there a dollar ceiling stops capping
+//     anything.
+//   - BECAUSE THE PLATFORM SERVED SOMETHING ELSE. OBS-005's case, measured by Axonium against an
+//     instance-specific name, and the shape OBS-008 came from — the platform changed what model_id
+//     meant in its usage export, and a model with no configured rate left NO ledger row at all. A
+//     rename shows up as request != response before it shows up as a hole in the books.
+//
+// ABSENT WHEN THE PROVIDER REPORTED NONE, not set equal to the request. Three states: present and
+// equal, present and different, absent because nothing said. Defaulting an absent value to the
+// requested model would manufacture agreement, which is the one answer this pair must never give.
+//
+// TWO CONVENTION ATTRIBUTES AND NOTHING OF OUR OWN, and the first version of this function had a
+// third. It set `aeon.model.response_differs` on a divergence, with a comment arguing that the pair
+// alone makes a divergence *recorded* and not *findable* because TraceQL compares an attribute
+// against a literal rather than against another attribute.
+//
+// THAT CLAIM WAS FALSE, measured against a real Tempo in TestADivergentResponseModelIsFindable:
+// `{ span.gen_ai.request.model != span.gen_ai.response.model }` is accepted and matches. And the
+// absent state does not produce a false positive — a span carrying no response model is NOT matched
+// by that query, measured with a span that arrived and whose attribute is genuinely missing. So the
+// flag was redundant, it was a non-standard attribute for Argus's semconv suite to reject, and it
+// existed because I asserted something about a query language instead of asking it.
+func recordResponseModel(span trace.Span, served string) {
+	if served == "" {
+		return
+	}
+	span.SetAttributes(attribute.String("gen_ai.response.model", served))
 }

@@ -74,8 +74,15 @@ func (g *Gateway) DecideStream(
 
 		streamer, streamable := provider.(providers.StreamingProvider)
 		delivered := false
+		// The model a streamed response was served by arrives IN A CHUNK — StreamResult carries no
+		// output — so it is captured on the way past. The last one seen wins, which is the same rule
+		// the non-streamed path uses on the response body.
+		servedModel := ""
 		wrapped := func(chunk providers.Chunk) error {
 			delivered = true
+			if chunk.Model != "" {
+				servedModel = chunk.Model
+			}
 			return yield(chunk)
 		}
 
@@ -98,6 +105,7 @@ func (g *Gateway) DecideStream(
 			continue
 		}
 
+		recordResponseModel(span, servedModel)
 		span.SetStatus(codes.Ok, "")
 		span.End()
 		attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model})
