@@ -67,7 +67,7 @@ func (g *Gateway) DecideStream(
 
 		spanCtx, span := tracer.Start(ctx, "chat", trace.WithAttributes(
 			attribute.String("gen_ai.operation.name", "chat"),
-			attribute.String("gen_ai.system", c.Provider),
+			providerNameAttr(c.Provider),
 			attribute.String("gen_ai.request.model", c.Model),
 			attribute.Bool("gen_ai.request.stream", true),
 		))
@@ -78,10 +78,22 @@ func (g *Gateway) DecideStream(
 		// output — so it is captured on the way past. The last one seen wins, which is the same rule
 		// the non-streamed path uses on the response body.
 		servedModel := ""
+		// Usage arrives in a chunk too, and usually in the LAST one — a provider reports it once the
+		// generation is done. The last non-nil wins, and nil stays nil: a stream that reported no
+		// usage must leave the attributes absent rather than claim zero (MDL-014).
+		var inputTokens, outputTokens *int
 		wrapped := func(chunk providers.Chunk) error {
 			delivered = true
 			if chunk.Model != "" {
 				servedModel = chunk.Model
+			}
+			if chunk.Usage != nil {
+				if chunk.Usage.PromptTokens != nil {
+					inputTokens = chunk.Usage.PromptTokens
+				}
+				if chunk.Usage.CompletionTokens != nil {
+					outputTokens = chunk.Usage.CompletionTokens
+				}
 			}
 			return yield(chunk)
 		}
@@ -106,6 +118,7 @@ func (g *Gateway) DecideStream(
 		}
 
 		recordResponseModel(span, servedModel)
+		recordUsage(span, inputTokens, outputTokens)
 		span.SetStatus(codes.Ok, "")
 		span.End()
 		attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model})
