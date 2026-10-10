@@ -309,20 +309,25 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 
 	// The SAME tenant the policy was evaluated against (engineFor), so a tool that is tenant-scoped
 	// cannot be served from one tenant's store while being authorized by another's bundle.
-	result, err := h.Executor.Execute(tenant, body.ToolName, body.Args)
+	out, err := h.Executor.Execute(r.Context(), h.invocation(tenant, body, toolexec.DoorHTTP))
 	if err != nil {
+		// The error is reported to the caller AND recorded by Execute: a tool that ran and failed is
+		// as much a fact as one that succeeded, and an audit that only holds successes answers the
+		// wrong question during an incident. Only an unknown tool goes unrecorded, because nothing ran.
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
+		recordedAttr(span, out)
 		writeError(w, http.StatusNotFound, err)
 		return
 	}
 	span.SetStatus(codes.Ok, "")
-	writeJSON(w, http.StatusOK, map[string]any{
+	recordedAttr(span, out)
+	writeJSON(w, http.StatusOK, response(map[string]any{
 		"allowed":      true,
 		"policy_id":    decision.PolicyID,
-		"result":       result,
+		"result":       out.Result,
 		"deduplicated": false,
-	})
+	}, out))
 }
 
 // executeDeduplicated is TOOL-005's path: claim the key, execute only if the claim was won, and
@@ -397,7 +402,8 @@ func (h *ToolGatewayHandlers) executeDeduplicated(
 		return
 	}
 
-	result, execErr := h.Executor.Execute(dedupeTenant, body.ToolName, body.Args)
+	out, execErr := h.Executor.Execute(r.Context(), h.invocation(dedupeTenant, body, toolexec.DoorHTTPDedupe))
+	result := out.Result
 	if execErr != nil {
 		if relErr := executions.Release(r.Context(), body.IdempotencyKey); relErr != nil {
 			log.Printf("aeon-toolgw: releasing idempotency key after a failed execution: %v", relErr)
@@ -412,22 +418,23 @@ func (h *ToolGatewayHandlers) executeDeduplicated(
 		// deduplicated, so the honest answer is the result plus the fact that it is unprotected.
 		log.Printf("aeon-toolgw: recording a completed execution: %v", err)
 		span.SetStatus(codes.Error, "executed but not recorded")
-		writeJSON(w, http.StatusOK, map[string]any{
+		writeJSON(w, http.StatusOK, response(map[string]any{
 			"allowed": true, "policy_id": policyID, "result": result,
 			"deduplicated": false,
 			"warning":      "executed, but the result could not be recorded: a retry with this key would execute again",
-		})
+		}, out))
 		return
 	}
 
 	span.SetStatus(codes.Ok, "")
-	writeJSON(w, http.StatusOK, map[string]any{
+	recordedAttr(span, out)
+	writeJSON(w, http.StatusOK, response(map[string]any{
 		"allowed":         true,
 		"policy_id":       policyID,
 		"result":          result,
 		"deduplicated":    false,
 		"failed_attempts": claim.FailedAttempts,
-	})
+	}, out))
 }
 
 // denialResult reports what happened to the journal write for a denial.
@@ -530,3 +537,35 @@ func outcomeOrEmpty(o checkpoint.Outcome) any {
 // What remains a guardrail here is nothing: the tool gateway's refusals are all policy decisions. Fan-out
 // and undeclared destinations still are guardrails, in the A2A egress path, because a runaway and a
 // misconfiguration are both rare and both worth a page.
+
+// invocation assembles what the executor needs to both run and record a call. One helper for every
+// door so a door cannot pass half the attribution: the fields are gathered in one place, and a new
+// one added to Invocation surfaces here rather than being silently empty in two of three doors.
+func (h *ToolGatewayHandlers) invocation(tenant string, body toolCallRequest, door string) toolexec.Invocation {
+	return toolexec.Invocation{
+		Tenant: tenant, ToolName: body.ToolName, Args: body.Args,
+		RunID: body.RunID, StepID: body.StepID, AgentManifestRef: body.AgentManifestRef,
+		Door: door,
+	}
+}
+
+// response adds INT-013's recording status to a successful body, mirroring exactly how INT-011
+// reports `journalled` on a denial: the caller is told whether the fact was written down, because
+// an execution nobody recorded is the silence both features exist to remove. `recorded` is absent
+// when this gateway has no bitácora configured at all — absent and false are different claims, and
+// false would assert that a configured log refused the write.
+func response(body map[string]any, out toolexec.Outcome) map[string]any {
+	if out.Recorded {
+		body["recorded"] = true
+		return body
+	}
+	if out.RecordErr != nil {
+		body["recorded"] = false
+		body["record_error"] = out.RecordErr.Error()
+	}
+	return body
+}
+
+func recordedAttr(span trace.Span, out toolexec.Outcome) {
+	span.SetAttributes(attribute.Bool("aeon.tool.invocation_recorded", out.Recorded))
+}

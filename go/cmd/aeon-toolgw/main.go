@@ -244,6 +244,30 @@ func main() {
 		handlers.Checkpointer = s
 		log.Println("aeon-toolgw: policy denials journalled as known outcomes (INT-011)")
 
+		// INT-013: the bitácora. Attached to the EXECUTOR and not to a handler, which is the point —
+		// the same pointer serves all three doors (two HTTP, one MCP), so none of them can execute
+		// without recording and a fourth added later inherits it without anyone remembering to.
+		//
+		// THE TENANT HERE IS WHERE THE ROW IS FILED, NOT AN AUTHORIZATION. An MCP call executes with an
+		// empty tenant on purpose (GOV-001g: tenant-scoped tools must refuse it rather than fall back
+		// to a deployment-wide store), and that already happened by the time this runs. Filing its
+		// record under the deployment tenant is what makes it readable by the operator who runs this
+		// gateway; leaving it '' would write rows no tenant can query, which is a log that exists and
+		// cannot be read. The row still carries door=mcp and an empty run_id, so nothing about the
+		// call is misrepresented by where it is filed.
+		executor.WithRecorder(func(ctx context.Context, rec toolexec.InvocationRecord) error {
+			filedUnder := rec.Tenant
+			if filedUnder == "" {
+				filedUnder = deploymentTenant
+			}
+			return s.ToolInvocationsFor(filedUnder).Record(ctx, store.ToolInvocation{
+				ToolName: rec.ToolName, Door: rec.Door, Outcome: rec.Outcome,
+				ErrorMessage: rec.ErrorMessage, RunID: rec.RunID, StepID: rec.StepID,
+				AgentManifestRef: rec.AgentManifestRef, DurationMS: rec.DurationMS,
+			})
+		})
+		log.Println("aeon-toolgw: tool invocations recorded through every door (INT-013)")
+
 		// A2A-002: governed A2A egress as a data-plane proxy. A framework points its A2A client at
 		// /a2a/egress/{remote_agent_id} and changes no code; the destination must be declared, Cedar must
 		// permit it, the credential is injected here, and the delegation is recorded.

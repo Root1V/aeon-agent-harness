@@ -10,14 +10,15 @@ import (
 
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/store"
+	"github.com/aeon-ai/aeon/go/internal/toolexec"
 )
 
 // fakeExecutor stands in for toolexec.Executor: this file is about which tools are LISTED, not about
 // what happens when one runs — that is TestToolGatewayServerEndToEndWithRealAdapter's job.
 type fakeExecutor struct{}
 
-func (fakeExecutor) Execute(_, _ string, _ map[string]any) (map[string]any, error) {
-	return map[string]any{"status": "ok"}, nil
+func (fakeExecutor) Execute(_ context.Context, _ toolexec.Invocation) (toolexec.Outcome, error) {
+	return toolexec.Outcome{Result: map[string]any{"status": "ok"}}, nil
 }
 
 func permitEverything(t *testing.T) *policy.Engine {

@@ -46,7 +46,7 @@ func newRepositoryFixture(t *testing.T) (*Executor, string, string) {
 
 func callRead(t *testing.T, e *Executor, args map[string]any) (map[string]any, error) {
 	t.Helper()
-	return e.Execute("", "repository.read", args)
+	return execTool(e, "", "repository.read", args)
 }
 
 // TestRepositoryReadReturnsRealFileContents is TOOL-008's happy path: a real file off a real disk.

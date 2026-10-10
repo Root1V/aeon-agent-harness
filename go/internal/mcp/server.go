@@ -9,6 +9,7 @@ import (
 
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/store"
+	"github.com/aeon-ai/aeon/go/internal/toolexec"
 )
 
 // McpClientPrincipalType is the Cedar entity type every external MCP caller is authorized as
@@ -54,7 +55,7 @@ func NewToolGatewayCatalog(tools []*store.ToolRecord, eng *policy.Engine, execut
 // second handler for the MCP path would be a second place the policy-then-execute ordering has to be kept
 // right, which is the one thing INT-003 must not duplicate.
 func toolCallHandler(toolName string, eng *policy.Engine, executor ToolExecutor) sdkmcp.ToolHandler {
-	return func(_ context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
+	return func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
 		var args map[string]any
 		if len(req.Params.Arguments) > 0 {
 			if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
@@ -85,21 +86,49 @@ func toolCallHandler(toolName string, eng *policy.Engine, executor ToolExecutor)
 		// run tenant to pass. The empty string is deliberate and the tenant-scoped tools refuse it
 		// rather than fall back to a deployment-wide store — an external caller reading artifacts
 		// somebody's run produced is exactly what GOV-001g closed.
-		result, err := executor.Execute("", toolName, args)
+		// Door, and no run attribution: an external MCP caller is not a run (see above), so RunID and
+		// StepID stay empty and the bitácora records that honestly instead of inventing one. Before
+		// INT-013 this door recorded NOTHING — not the execution, and not even the denial above, which
+		// the HTTP door has journalled since INT-011. Which entrance you used decided whether your call
+		// existed in the record.
+		out, err := executor.Execute(ctx, toolexec.Invocation{ToolName: toolName, Args: args, Door: toolexec.DoorMCP})
 		if err != nil {
 			return &sdkmcp.CallToolResult{
 				IsError: true,
 				Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: err.Error()}},
+				Meta:    recordingMeta(out),
 			}, nil
 		}
 
-		raw, err := json.Marshal(result)
+		raw, err := json.Marshal(out.Result)
 		if err != nil {
 			return nil, fmt.Errorf("mcp: marshal result for %s: %w", toolName, err)
 		}
 		return &sdkmcp.CallToolResult{
 			Content:           []sdkmcp.Content{&sdkmcp.TextContent{Text: string(raw)}},
-			StructuredContent: result,
+			StructuredContent: out.Result,
+			Meta:              recordingMeta(out),
 		}, nil
 	}
+}
+
+// recordingMeta puts INT-013's recording status in `_meta` rather than in the result text.
+//
+// `_meta` and not the text: the HTTP doors answer `recorded` as a field beside the result, and a
+// consumer of this door should be able to read the same fact without parsing prose or having the
+// tool's own JSON polluted with gateway bookkeeping. It is the protocol's own channel for exactly
+// this — "reserved by the protocol to allow clients and servers to attach additional metadata".
+// Absent when the gateway has no bitácora configured, because absent and false are different
+// claims: false would say a configured log refused the write.
+func recordingMeta(out toolexec.Outcome) map[string]any {
+	if out.Recorded {
+		return map[string]any{"aeon.tool.invocation_recorded": true}
+	}
+	if out.RecordErr != nil {
+		return map[string]any{
+			"aeon.tool.invocation_recorded": false,
+			"aeon.tool.record_error":        out.RecordErr.Error(),
+		}
+	}
+	return nil
 }

@@ -1,6 +1,7 @@
 package toolexec
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,7 +40,7 @@ func newArtifactFixture(t *testing.T) (*Executor, string, string) {
 func TestArtifactReadReturnsWhatARunProduced(t *testing.T) {
 	e, _, _ := newArtifactFixture(t)
 
-	out, err := e.Execute(testTenant, "artifact.read", map[string]any{"artifact_id": "art_deadbeefcafe1234"})
+	out, err := execTool(e, testTenant, "artifact.read", map[string]any{"artifact_id": "art_deadbeefcafe1234"})
 	if err != nil {
 		t.Fatalf("artifact.read: %v", err)
 	}
@@ -54,7 +55,7 @@ func TestArtifactReadReturnsWhatARunProduced(t *testing.T) {
 	}
 
 	t.Run("a line range works here too", func(t *testing.T) {
-		out, err := e.Execute(testTenant, "artifact.read", map[string]any{
+		out, err := execTool(e, testTenant, "artifact.read", map[string]any{
 			"artifact_id": "art_deadbeefcafe1234", "start_line": 2.0, "end_line": 2.0,
 		})
 		if err != nil {
@@ -101,7 +102,7 @@ func TestArtifactReadTakesAnIDAndNotAPath(t *testing.T) {
 		{"a valid id that is a symlink out of the root", "art_00000000", "escapes"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := e.Execute(testTenant, "artifact.read", map[string]any{"artifact_id": tc.id})
+			out, err := execTool(e, testTenant, "artifact.read", map[string]any{"artifact_id": tc.id})
 			if err == nil {
 				t.Fatalf("the read SUCCEEDED and returned %v", out["content"])
 			}
@@ -115,13 +116,13 @@ func TestArtifactReadTakesAnIDAndNotAPath(t *testing.T) {
 	}
 
 	t.Run("a missing artifact_id is named", func(t *testing.T) {
-		if _, err := e.Execute(testTenant, "artifact.read", map[string]any{}); err == nil {
+		if _, err := execTool(e, testTenant, "artifact.read", map[string]any{}); err == nil {
 			t.Fatal("a call with no artifact_id succeeded")
 		}
 	})
 
 	t.Run("an id that is well-formed but absent reads as absent", func(t *testing.T) {
-		_, err := e.Execute(testTenant, "artifact.read", map[string]any{"artifact_id": "art_ffffffffffff"})
+		_, err := execTool(e, testTenant, "artifact.read", map[string]any{"artifact_id": "art_ffffffffffff"})
 		if err == nil {
 			t.Fatal("reading an artifact that does not exist succeeded")
 		}
@@ -130,4 +131,12 @@ func TestArtifactReadTakesAnIDAndNotAPath(t *testing.T) {
 				"thing: %v", err)
 		}
 	})
+}
+
+// execTool keeps these tests about the TOOL rather than about Execute's signature: INT-013 made
+// Execute take an Invocation and return an Outcome so a recording could not be skipped, and every
+// test here predates that and cares only about the result map.
+func execTool(e *Executor, tenant, name string, args map[string]any) (map[string]any, error) {
+	out, err := e.Execute(context.Background(), Invocation{Tenant: tenant, ToolName: name, Args: args})
+	return out.Result, err
 }
