@@ -13,6 +13,7 @@ import (
 
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/store"
+	"github.com/aeon-ai/aeon/go/internal/toolexec"
 )
 
 // Catalog keeps a live MCP server's tool list in step with the Tool Registry (INT-003).
@@ -50,7 +51,7 @@ type ToolExecutor interface {
 	// MCP caller (INT-003) shares one Cedar principal and is not a run, so there is no run tenant —
 	// and the tenant-scoped tools refuse an empty one rather than fall back to a deployment-wide
 	// store, which is the behaviour that let a caller read artifacts somebody else's run produced.
-	Execute(tenant, name string, args map[string]any) (map[string]any, error)
+	Execute(ctx context.Context, inv toolexec.Invocation) (toolexec.Outcome, error)
 }
 
 // CatalogChange reports what one Apply did. Returned rather than logged from inside, because the caller

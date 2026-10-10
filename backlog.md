@@ -974,6 +974,47 @@ fichero mal nombrado. Sin `down`, a propósito.
 - **Criterio de entrada:** un caller real no confiable de estas rutas.
 - **Coste:** S.
 
+### Lo que `INT-013` deja fuera de la bitácora de tools
+
+- **Descripción:** `INT-013` registra toda invocación que se ejecuta, por las tres puertas y por
+  construcción (el registro vive dentro de `Execute`). Quedan tres huecos, nombrados aquí en vez de
+  descubiertos:
+  1. **Denegaciones sin run.** Una denegación con `run_id` va al journal del run desde `INT-011`;
+     una sin run (todo llamador MCP) sigue sin registrarse en ninguna parte. No se arregló con esta
+     feature porque una denegación **no llega a `Execute`** —la comprobación de política es
+     estrictamente anterior, y esa separación es de lo que depende el test de aceptación de
+     `SEC-001`—, así que registrarla exige que las puertas escriban sus propias filas, que es
+     exactamente la forma olvidadiza que `INT-013` eliminó. Merece su propio diseño: un punto de
+     paso común para la decisión, no un `Record` copiado en cada puerta.
+  2. **Replays no se cuentan.** Un replay servido desde la caché de `tool_executions` responde
+     `deduplicated: true` sin ejecutar, así que no pasa por `Execute` y no deja fila. El llamador
+     llamó y le respondimos: es una invocación que ocurrió. Va con el punto 1, por el mismo motivo.
+  3. **La ventana de caída.** La fila se escribe DESPUÉS de ejecutar, porque el desenlace y la
+     duración no se conocen antes. Si el proceso muere entre ambas cosas, un tool que corrió no
+     deja rastro. `run_checkpoints` resolvió esto con dos fases (`attempted`/`completed`) y aquí
+     costaría el doble de escrituras por llamada; para `shell.exec` el caso malo es real.
+- **Criterio de entrada:** que alguien necesite auditar denegaciones de llamadores sin run, o que
+  una caída observada pierda el registro de un efecto que ocurrió.
+- **Coste:** M los puntos 1+2 juntos (el diseño del punto de paso es lo que cuesta), S el punto 3
+  si se acepta duplicar la escritura.
+
+### Costo de tools en la bitácora, cuando exista quien lo informe
+
+- **Descripción:** `tool_invocations` (INT-013) no tiene columna de costo, y es deliberado: ningún
+  tool del repo tiene precio, así que la columna quedaría NULL en el 100% de las filas. Ese es
+  exactamente el patrón que venimos reportando a otros equipos como defecto —`mcp_origin` en
+  `tool_descriptor.schema.json` lleva desde F0 sin productor ni consumidor— y añadirla ahora sería
+  cometerlo. El `CostEntry` del FinOps Ledger es `{Provider, Model, tokens, CostUSD}`: modela
+  inferencia, y no menciona tools en ninguna parte.
+- **Fase objetivo:** con la fuente de tools MCP federada, que es el primer productor plausible — un
+  servidor externo que cobra por llamada e informa lo que cobró. Veritium lo pidió explícitamente
+  («auditoría, costo») en `VRT-AEON-006`.
+- **Criterio de entrada:** que exista algo que pueda rellenar la columna. Y tres estados desde el
+  principio: NULL = nadie lo tarificó, 0 = tarificado y salió gratis — la misma regla que `OBS-008`
+  fijó para `cost_usd` de inferencia.
+- **Coste:** S una vez haya productor (una columna y un camino), porque la decisión difícil —qué
+  significa un costo que no medimos nosotros— se resuelve en la feature de federación.
+
 ### Fuente de tools MCP federada (`TOOL-002` cliente → Tool Gateway real)
 
 - **Descripción:** `go/internal/mcp/adapter.go` (cliente — Aeon consumiendo servidores MCP
