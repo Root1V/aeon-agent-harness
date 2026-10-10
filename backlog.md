@@ -1053,6 +1053,15 @@ fichero mal nombrado. Sin `down`, a propósito.
      con qué credencial sale la llamada; la cuota por cliente de la fuente verá *un* cliente
      (Aeon), no nuestros agentes, así que la granularidad por agente vive en nuestro lado o no
      existe.
+  5. **Deriva del descriptor, y en cada refresco.** `Catalog.Watch` hace poll, así que una fuente
+     puede cambiar el `input_schema` de un tool —o su *significado* con el mismo schema— entre dos
+     polls, sin redespliegue ni revisión nuestra. La clasificación que exige ADR-0001 se hizo para
+     tools que revisamos una vez. Hace falta registrar la **huella del descriptor aprobado** y dejar
+     de servir el tool si deriva, en vez de servirlo callando. **Hoy esto es irrealizable y por eso
+     no está construido:** el registry es append-only (`Create`/`Get`/`List`, sin `Update`) y
+     `Create` rechaza la misma versión con `ErrAlreadyExists`, así que un descriptor no puede mutar
+     en sitio. Un control sobre algo sin productor es el defecto que venimos reportando; este llega
+     con la federación, que es cuando el descriptor empieza a venir de fuera.
 - **`mcp_origin` ya está en el schema y no lo produce ni lo lee nadie.**
   `tool_descriptor.schema.json` declara `mcp_origin: {server, spec_version}` desde F0; cero
   productores y cero consumidores en `go/` y `python/`. Le falta la URL/credencial de la fuente y
