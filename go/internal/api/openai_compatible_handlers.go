@@ -173,6 +173,13 @@ func (h *OpenAICompatibleHandlers) chatCompletions(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// VRT-SYN-004: under `aeon` and not at the response root, for the same reason the cost fields
+	// are — a client parsing a ChatCompletion must not meet unknown top-level keys. Absent when
+	// nothing was dropped: absence says the request went out as the caller built it.
+	if result.UnsendableTurnsDropped > 0 {
+		governance["unsendable_turns_dropped"] = result.UnsendableTurnsDropped
+	}
+
 	response := toOpenAIChatCompletionResponse(result.Output)
 	if h.Governance != nil {
 		// The ledger write, OBS-003/006/008 and all. Writing into `governance` rather than into the
