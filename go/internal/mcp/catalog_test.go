@@ -21,6 +21,10 @@ func (fakeExecutor) Execute(_ context.Context, _ toolexec.Invocation) (toolexec.
 	return toolexec.Outcome{Result: map[string]any{"status": "ok"}}, nil
 }
 
+func (fakeExecutor) RecordRefusal(_ context.Context, _ toolexec.Invocation, _, _ string) toolexec.Outcome {
+	return toolexec.Outcome{}
+}
+
 func permitEverything(t *testing.T) *policy.Engine {
 	t.Helper()
 	eng, err := policy.LoadEngine(policy.PolicyBundleDoc{Policies: []policy.PolicyBundleItem{

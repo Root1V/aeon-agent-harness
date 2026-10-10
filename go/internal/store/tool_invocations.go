@@ -23,13 +23,17 @@ func (s *Store) ToolInvocationsFor(tenant string) *ToolInvocations {
 	return &ToolInvocations{pool: s.pool, tenant: tenant}
 }
 
-// Outcome values. Only two, because only two can happen today: Execute either returned a result or
-// an error. A denial never reaches Execute (the policy check is before it), so "denied" is not a
-// value here — recording it would require the doors to write their own rows, which is the
-// forgettable shape this table exists to avoid. See the roadmap row for that follow-up.
+// Outcome values: the four ways a tool call is resolved. `ok`/`error` are written from inside
+// Execute (INT-013); `denied`/`replayed` are written by the doors (INT-014), because neither fact
+// passes through Execute and the one chokepoint that would cover them was rejected on purpose —
+// see migrations/0005 for why an audit gap was preferred to an enforcement branch in the executor.
 const (
 	ToolInvocationOK    = "ok"
 	ToolInvocationError = "error"
+	// INT-014: the two resolutions that never reach Execute. A denial is decided strictly before it
+	// (ADR-0001), and a replay is served from the dedupe cache without executing.
+	ToolInvocationDenied   = "denied"
+	ToolInvocationReplayed = "replayed"
 )
 
 // ToolInvocation is one row. Attribution fields are empty rather than absent when the call has no
@@ -42,7 +46,14 @@ type ToolInvocation struct {
 	RunID            string
 	StepID           string
 	AgentManifestRef string
-	DurationMS       int64
+	// DurationMS is nil when nothing executed — a denial or a replay. Writing 0 would say "it ran
+	// and took no time", which is the same lie OBS-008 removed from cost_usd.
+	DurationMS *int64
+	// Disposition is INT-010's vocabulary and is REQUIRED on a denial (the database enforces it):
+	// "refused" and "refused, but a person could approve this" are different facts, and an audit
+	// that conflates them cannot say why a run stopped.
+	Disposition string
+	PolicyID    string
 }
 
 // Record appends one invocation.
@@ -64,10 +75,11 @@ func (l *ToolInvocations) Record(ctx context.Context, inv ToolInvocation) error 
 
 	_, err := l.pool.Exec(ctx,
 		`INSERT INTO tool_invocations
-		   (tenant_id, tool_name, door, outcome, error_message, run_id, step_id, agent_manifest_ref, duration_ms)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		   (tenant_id, tool_name, door, outcome, error_message, run_id, step_id, agent_manifest_ref,
+		    duration_ms, disposition, policy_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		l.tenant, inv.ToolName, inv.Door, inv.Outcome, errMessage,
-		inv.RunID, inv.StepID, inv.AgentManifestRef, inv.DurationMS,
+		inv.RunID, inv.StepID, inv.AgentManifestRef, inv.DurationMS, inv.Disposition, inv.PolicyID,
 	)
 	if err != nil {
 		return fmt.Errorf("store: record tool invocation: %w", err)
@@ -80,7 +92,7 @@ func (l *ToolInvocations) Record(ctx context.Context, inv ToolInvocation) error 
 func (l *ToolInvocations) ForRun(ctx context.Context, runID string, limit int) ([]ToolInvocation, error) {
 	return l.query(ctx,
 		`SELECT tool_name, door, outcome, COALESCE(error_message, ''), run_id, step_id,
-		        agent_manifest_ref, COALESCE(duration_ms, 0)
+		        agent_manifest_ref, duration_ms, disposition, policy_id
 		   FROM tool_invocations
 		  WHERE tenant_id = $1 AND run_id = $2
 		  ORDER BY occurred_at DESC, id DESC
@@ -93,7 +105,7 @@ func (l *ToolInvocations) ForRun(ctx context.Context, runID string, limit int) (
 func (l *ToolInvocations) ForTool(ctx context.Context, toolName string, limit int) ([]ToolInvocation, error) {
 	return l.query(ctx,
 		`SELECT tool_name, door, outcome, COALESCE(error_message, ''), run_id, step_id,
-		        agent_manifest_ref, COALESCE(duration_ms, 0)
+		        agent_manifest_ref, duration_ms, disposition, policy_id
 		   FROM tool_invocations
 		  WHERE tenant_id = $1 AND tool_name = $2
 		  ORDER BY occurred_at DESC, id DESC
@@ -112,7 +124,8 @@ func (l *ToolInvocations) query(ctx context.Context, sql string, args ...any) ([
 	for rows.Next() {
 		var inv ToolInvocation
 		if err := rows.Scan(&inv.ToolName, &inv.Door, &inv.Outcome, &inv.ErrorMessage,
-			&inv.RunID, &inv.StepID, &inv.AgentManifestRef, &inv.DurationMS); err != nil {
+			&inv.RunID, &inv.StepID, &inv.AgentManifestRef, &inv.DurationMS,
+			&inv.Disposition, &inv.PolicyID); err != nil {
 			return nil, fmt.Errorf("store: scan tool invocation: %w", err)
 		}
 		out = append(out, inv)

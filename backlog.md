@@ -974,29 +974,25 @@ fichero mal nombrado. Sin `down`, a propósito.
 - **Criterio de entrada:** un caller real no confiable de estas rutas.
 - **Coste:** S.
 
-### Lo que `INT-013` deja fuera de la bitácora de tools
+### La ventana de caída de la bitácora, que resultó más pequeña de lo que esta entrada decía
 
-- **Descripción:** `INT-013` registra toda invocación que se ejecuta, por las tres puertas y por
-  construcción (el registro vive dentro de `Execute`). Quedan tres huecos, nombrados aquí en vez de
-  descubiertos:
-  1. **Denegaciones sin run.** Una denegación con `run_id` va al journal del run desde `INT-011`;
-     una sin run (todo llamador MCP) sigue sin registrarse en ninguna parte. No se arregló con esta
-     feature porque una denegación **no llega a `Execute`** —la comprobación de política es
-     estrictamente anterior, y esa separación es de lo que depende el test de aceptación de
-     `SEC-001`—, así que registrarla exige que las puertas escriban sus propias filas, que es
-     exactamente la forma olvidadiza que `INT-013` eliminó. Merece su propio diseño: un punto de
-     paso común para la decisión, no un `Record` copiado en cada puerta.
-  2. **Replays no se cuentan.** Un replay servido desde la caché de `tool_executions` responde
-     `deduplicated: true` sin ejecutar, así que no pasa por `Execute` y no deja fila. El llamador
-     llamó y le respondimos: es una invocación que ocurrió. Va con el punto 1, por el mismo motivo.
-  3. **La ventana de caída.** La fila se escribe DESPUÉS de ejecutar, porque el desenlace y la
-     duración no se conocen antes. Si el proceso muere entre ambas cosas, un tool que corrió no
-     deja rastro. `run_checkpoints` resolvió esto con dos fases (`attempted`/`completed`) y aquí
-     costaría el doble de escrituras por llamada; para `shell.exec` el caso malo es real.
-- **Criterio de entrada:** que alguien necesite auditar denegaciones de llamadores sin run, o que
-  una caída observada pierda el registro de un efecto que ocurrió.
-- **Coste:** M los puntos 1+2 juntos (el diseño del punto de paso es lo que cuesta), S el punto 3
-  si se acepta duplicar la escritura.
+- **Corrección de esta entrada.** Decía que si el proceso muere entre ejecutar y registrar, «un tool
+  que corrió no deja rastro», y pedía dos fases (`attempted`/`completed`) como en `run_checkpoints`.
+  Medido, eso estaba exagerado: `ToolExecutions.Claim` **escribe antes de ejecutar**, a propósito y
+  con esa razón en su propia cabecera, y `executeDeduplicated` reclama antes de ejecutar. Así que
+  toda llamada con `idempotency_key` ya tiene un registro durable previo a la ejecución, y una caída
+  deja esa fila en `in_flight` con `failed_attempts`: «puede haber ocurrido un efecto y no tenemos
+  desenlace» ya es visible con los datos que existen. Lo que queda sin cubrir son las llamadas SIN
+  clave, que son las que el llamador declaró que no necesitan protección — correcto para un tool de
+  lectura, y si alguien omite la clave en un tool con efectos ya perdió la deduplicación, que es un
+  problema mayor que la auditoría.
+- **Por eso no se construyó.** Dos fases en cada llamada duplican las escrituras de la bitácora para
+  cubrir, sobre todo, el caso que menos importa. El subconjunto peligroso ya tiene registro previo.
+- **Lo que lo reabriría:** una caída observada que pierda el desenlace de un efecto que ocurrió y
+  cuya llamada no llevaba clave; o que `toolexec` llegue a conocer el `side_effect` del tool (hoy no
+  lo conoce, lo conoce el registry), que permitiría dos fases solo para lo que tiene efectos.
+- **Coste:** S si se acepta duplicar la escritura en todas; M para hacerlo solo en las que tienen
+  efectos, porque hace falta llevar el `side_effect` hasta el sitio de ejecución.
 
 ### Costo de tools en la bitácora, cuando exista quien lo informe
 

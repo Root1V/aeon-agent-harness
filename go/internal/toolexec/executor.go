@@ -73,7 +73,10 @@ type InvocationRecord struct {
 	RunID            string
 	StepID           string
 	AgentManifestRef string
-	DurationMS       int64
+	// DurationMS is nil when nothing executed: a denial or a replay. 0 would claim it ran instantly.
+	DurationMS  *int64
+	Disposition string
+	PolicyID    string
 }
 
 // The two outcomes Execute can produce. A denial is not among them because a denial never reaches
@@ -82,6 +85,11 @@ type InvocationRecord struct {
 const (
 	OutcomeOK    = "ok"
 	OutcomeError = "error"
+	// INT-014's two, written by the doors rather than from inside Execute, because neither passes
+	// through it: a denial is decided strictly before execution and a replay is served from the
+	// dedupe cache without executing.
+	OutcomeDenied   = "denied"
+	OutcomeReplayed = "replayed"
 )
 
 // Recorder appends the fact that a tool ran. A func rather than an interface because there is one
@@ -195,29 +203,74 @@ func (e *Executor) Execute(ctx context.Context, inv Invocation) (Outcome, error)
 		return out, execErr
 	}
 
+	ms := elapsed.Milliseconds()
 	rec := InvocationRecord{
 		Tenant: inv.Tenant, ToolName: inv.ToolName, Door: inv.Door,
 		Outcome: OutcomeOK, RunID: inv.RunID, StepID: inv.StepID,
-		AgentManifestRef: inv.AgentManifestRef, DurationMS: elapsed.Milliseconds(),
+		AgentManifestRef: inv.AgentManifestRef, DurationMS: &ms,
 	}
 	if execErr != nil {
 		rec.Outcome, rec.ErrorMessage = OutcomeError, execErr.Error()
 	}
 
-	// WithoutCancel, with its own deadline: a client that hangs up after its tool ran must not erase
-	// the record of the thing that ran. Dropping cancellation keeps the trace context (so the write
-	// stays on the same span tree) while making the caller's disconnect stop deciding whether the
-	// execution is auditable. The deadline is what keeps that from becoming an unbounded wait.
-	recCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
-	defer cancel()
-	if err := e.recorder(recCtx, rec); err != nil {
-		out.RecordErr = err
-		return out, execErr
-	}
-	out.Recorded = true
+	written := e.record(ctx, rec)
+	out.Recorded, out.RecordErr = written.Recorded, written.RecordErr
 	return out, execErr
 }
 
-// recordTimeout bounds the bitácora write. Short on purpose: the execution already happened, so a
-// slow audit write must not extend the caller's request much beyond it.
+// recordTimeout bounds the bitácora write. Short on purpose: whatever is being recorded already
+// happened, so a slow audit write must not extend the caller's request much beyond it.
+//
+// Paired with WithoutCancel in record(): a client that hangs up after its tool ran must not erase
+// the record of the thing that ran. Dropping cancellation keeps the trace context, so the write
+// stays on the same span tree, while making the caller's disconnect stop deciding whether the call
+// is auditable; the deadline is what keeps that from becoming an unbounded wait.
 const recordTimeout = 5 * time.Second
+
+// RecordRefusal writes the fact that a tool call was refused by policy (INT-014).
+//
+// THIS METHOD ONLY RECORDS. It has no execution branch and never consults the decision to choose
+// whether to run something — that is the whole reason the denial is recorded here, by the door that
+// already made the decision, instead of by handing the decision to Execute and letting it refuse.
+// The elegant version was available and was rejected: a branch inside the executor asking "may I
+// run this?" would make the executor a second place capable of running a denied tool, and today it
+// is incapable of that because it never sees one (ADR-0001). An audit row that a new door forgets
+// is cheaper than that, and `scripts/tool_audit_sites_check.py` is what notices the forgetting.
+//
+// The caller passes the disposition rather than a boolean because INT-010 already established that
+// "refused" and "refused, but a person could approve this" are different outcomes; the database
+// requires a non-empty disposition on a denial for the same reason.
+func (e *Executor) RecordRefusal(ctx context.Context, inv Invocation, disposition, policyID string) Outcome {
+	return e.record(ctx, InvocationRecord{
+		Tenant: inv.Tenant, ToolName: inv.ToolName, Door: inv.Door, Outcome: OutcomeDenied,
+		RunID: inv.RunID, StepID: inv.StepID, AgentManifestRef: inv.AgentManifestRef,
+		Disposition: disposition, PolicyID: policyID,
+	})
+}
+
+// RecordReplay writes the fact that a call was answered from the deduplication cache (INT-014).
+//
+// The caller called and we answered, so it happened — but nothing executed, which is why the row
+// carries no duration. Without this, the bitácora undercounts exactly the retries that TOOL-005
+// exists to absorb: the dedupe table itself cannot show them, since a replay leaves its single row
+// per key untouched.
+func (e *Executor) RecordReplay(ctx context.Context, inv Invocation, policyID string) Outcome {
+	return e.record(ctx, InvocationRecord{
+		Tenant: inv.Tenant, ToolName: inv.ToolName, Door: inv.Door, Outcome: OutcomeReplayed,
+		RunID: inv.RunID, StepID: inv.StepID, AgentManifestRef: inv.AgentManifestRef,
+		PolicyID: policyID,
+	})
+}
+
+// record is the one place a row is written, whichever of the four resolutions it describes.
+func (e *Executor) record(ctx context.Context, rec InvocationRecord) Outcome {
+	if e.recorder == nil {
+		return Outcome{}
+	}
+	recCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
+	if err := e.recorder(recCtx, rec); err != nil {
+		return Outcome{RecordErr: err}
+	}
+	return Outcome{Recorded: true}
+}

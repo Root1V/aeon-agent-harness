@@ -31,6 +31,12 @@ func TestTheBitacoraRefusesARowThatLies(t *testing.T) {
 			 VALUES ('int-013-check', 'probe', 'http', $1, $2)`, outcome, errMessage)
 		return err
 	}
+	insertWithDisposition := func(outcome, disposition string) error {
+		_, err := conn.Exec(ctx,
+			`INSERT INTO tool_invocations (tenant_id, tool_name, door, outcome, disposition)
+			 VALUES ('int-013-check', 'probe', 'http', $1, $2)`, outcome, disposition)
+		return err
+	}
 	msg := "something went wrong"
 
 	t.Run("a success carrying an error message is refused", func(t *testing.T) {
@@ -47,10 +53,42 @@ func TestTheBitacoraRefusesARowThatLies(t *testing.T) {
 		}
 	})
 
+	// 'denied' USED TO BE THE CASE HERE, and when INT-014 made it a legal outcome this subtest kept
+	// passing — on the disposition constraint, not on the one its name claims. A test that survives
+	// the thing it names becoming legal is naming something else, so the undefined outcome is now
+	// one that is genuinely undefined.
 	t.Run("an outcome nobody defined is refused", func(t *testing.T) {
-		if err := insert("denied", nil); err == nil {
-			t.Fatal(`'denied' was accepted: a denial never reaches Execute, so a row claiming one would ` +
-				`assert something the gateway cannot observe here — see the roadmap row for that follow-up`)
+		if err := insert("maybe", nil); err == nil {
+			t.Fatal(`'maybe' was accepted: an outcome outside the four the gateway can observe would ` +
+				`put rows in the bitácora that no reader can interpret`)
+		} else if !strings.Contains(err.Error(), "tool_invocations_outcome_valid") {
+			t.Errorf("refused, but not by the outcome constraint: %v", err)
+		}
+	})
+
+	// INT-014's own constraint: the disposition is what makes a denial actionable (INT-010), and it
+	// is required on a denial and forbidden anywhere else.
+	t.Run("a denial with no disposition is refused", func(t *testing.T) {
+		if err := insertWithDisposition(ToolInvocationDenied, ""); err == nil {
+			t.Fatal(`a denial with no disposition was accepted: "refused" and "refused, but a person ` +
+				`could approve this" are different facts, and a row that states neither cannot say why a run stopped`)
+		} else if !strings.Contains(err.Error(), "tool_invocations_disposition_iff_denied") {
+			t.Errorf("refused, but not by the disposition constraint: %v", err)
+		}
+	})
+
+	t.Run("a disposition on something that was not denied is refused", func(t *testing.T) {
+		if err := insertWithDisposition(ToolInvocationOK, "deny_step"); err == nil {
+			t.Fatal("a successful invocation carrying a denial disposition was accepted")
+		}
+	})
+
+	t.Run("a denial WITH its disposition is accepted, and a replay with none", func(t *testing.T) {
+		if err := insertWithDisposition(ToolInvocationDenied, "deny_step"); err != nil {
+			t.Fatalf("a denial with its disposition was refused: %v", err)
+		}
+		if err := insertWithDisposition(ToolInvocationReplayed, ""); err != nil {
+			t.Fatalf("a replay was refused: %v", err)
 		}
 	})
 

@@ -52,6 +52,11 @@ type ToolExecutor interface {
 	// and the tenant-scoped tools refuse an empty one rather than fall back to a deployment-wide
 	// store, which is the behaviour that let a caller read artifacts somebody else's run produced.
 	Execute(ctx context.Context, inv toolexec.Invocation) (toolexec.Outcome, error)
+	// RecordRefusal is in this interface deliberately: a thing that can execute a tool must also be
+	// able to record that one was refused (INT-014). Stating it here is stronger than a lint for
+	// this door — a replacement executor that only knows how to run things does not compile — and
+	// it is why the test double in catalog_test.go has to implement it too.
+	RecordRefusal(ctx context.Context, inv toolexec.Invocation, disposition, policyID string) toolexec.Outcome
 }
 
 // CatalogChange reports what one Apply did. Returned rather than logged from inside, because the caller
