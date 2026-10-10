@@ -974,6 +974,49 @@ fichero mal nombrado. Sin `down`, a propósito.
 - **Criterio de entrada:** un caller real no confiable de estas rutas.
 - **Coste:** S.
 
+### Dirección *request* en el corpus de normalización (propuesta de SYN en `VRT-SYN-004`)
+
+- **Descripción:** Synaptum propone añadir a `normalizacion/fixtures` un caso de dirección
+  **request**, porque `VRT-SYN-004` demostró que las dos direcciones no son independientes: la
+  dirección *response* **produce** la parte (`Thinking`) que la *request* no sabe mandar, y por eso
+  el corpus dorado que ejecutan los dos lados no podía ver el defecto en ninguno de los dos
+  lenguajes. Aceptamos la propuesta. Lo que hace falta de nuestro lado:
+  `TestNormalizationCorpusAgainstThisAdapter` **solo conoce la dirección response**: lee el
+  `body_file` de cada caso y lo proyecta con `projectNonStreaming`/`projectStreaming`. No hay campo
+  `direction` y un caso que lo traiga lo ignoraría.
+- **Lo que pasaría hoy con su fixture, medido leyendo el runner:** si el caso trae aserciones que no
+  implementamos, `assertEveryExpectKeyIsImplemented` falla a gritos —que es lo correcto y es por lo
+  que ese guard existe—. Pero un caso **sin objeto `expect`** vuelve temprano y pasa sin comprobar
+  nada, con su cuerpo proyectado como si fuera una respuesta. O sea: su fixture debe traer
+  aserciones, y aun así hace falta enseñarle la dirección al runner antes de que signifique algo.
+- **Criterio de entrada:** que SYN/AXO publiquen el caso y el campo con el que se declara la
+  dirección; el formato es suyo, no nuestro.
+- **Coste:** S. Un campo `direction` con default `response`, y para `request` construir el cuerpo
+  que nuestro camino enviaría y compararlo con el esperado — que es exactamente lo que
+  `dropUnsendableAssistantTurns` ya decide, así que la lógica existe.
+
+### `X-Aeon-Streamed` se pone demasiado tarde y nunca llega al cliente
+
+- **Descripción:** `openai_compatible_streaming.go` fija `X-Aeon-Streamed: false` **después** del
+  bucle de streaming, cuando `result` ya está disponible. Pero en ese punto ya se escribió al menos
+  un chunk, y el propio fichero explica la regla unas líneas más arriba: las cabeceras «must be set
+  BEFORE the first chunk, since that is when WriteHeader happens and headers stop being writable».
+  En Go, un `Header().Set` posterior a `WriteHeader` se ignora en silencio. Así que en el **único**
+  caso para el que la cabecera existe —un proveedor sin streaming servido como un solo chunk— un
+  chunk ya se escribió y la cabecera no llega. Un caller que, según el comentario, «can tell from the
+  header rather than having to infer it from chunk sizes», hoy no puede.
+- **Encontrado** mirando dónde poner el contador de `VRT-SYN-004` en esta misma superficie, que
+  tiene el mismo problema estructural: ninguno de los dos valores se conoce antes de que
+  `DecideStream` devuelva, y para entonces es tarde.
+- **El arreglo es el mismo para los dos** y por eso van juntos: hace falta que el gateway comunique
+  «qué candidato y en qué modo» antes del primer chunk —un callback antes de arrancar, o aplicar la
+  regla en la puerta y dejar al gateway solo de respaldo— en vez de devolverlo al final.
+- **Criterio de entrada:** que alguien dependa de distinguir streaming real de un chunk único sin
+  mirar trazas. Hoy el span lo lleva, así que el dato no está perdido, solo no está donde el
+  comentario promete.
+- **Coste:** S para la cabecera sola si se acepta calcular el modo antes de llamar al proveedor; M
+  si se hace el callback genérico que sirva también para el contador de `VRT-SYN-004`.
+
 ### La ventana de caída de la bitácora, que resultó más pequeña de lo que esta entrada decía
 
 - **Corrección de esta entrada.** Decía que si el proceso muere entre ejecutar y registrar, «un tool

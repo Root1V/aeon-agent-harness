@@ -108,6 +108,19 @@ func (h *OpenAICompatibleHandlers) streamChatCompletions(
 	if result != nil && !result.Streamed {
 		w.Header().Set("X-Aeon-Streamed", "false")
 	}
+	// VRT-SYN-004 IS NOT REPORTED ON THIS SURFACE, and the reason is structural rather than an
+	// omission to tidy up later. The count is only known once DecideStream returns, and by then the
+	// first chunk has been written and headers have stopped being writable — the same constraint
+	// this file states above for the governance headers, which are set BEFORE the stream for exactly
+	// that reason. An SSE event is not an option either: these frames are OpenAI-shaped and a client
+	// parsing them must not meet an Aeon-shaped one. So a caller on this door learns it from the
+	// span attribute `aeon.model.unsendable_turns_dropped`, and the other two doors carry it in
+	// their bodies.
+	//
+	// X-Aeon-Streamed above has this same defect and it predates this change: it is set after the
+	// stream, so in the one case it exists for — a provider with no streaming, delivered as one
+	// chunk — a chunk has already been written and the header never reaches the client. Recorded in
+	// backlog.md rather than fixed here, because the fix is the same restructuring for both.
 
 	h.recordStreamedCost(r, result, streamedUsage, streamedModel, runID, agentRef)
 

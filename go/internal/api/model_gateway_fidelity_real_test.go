@@ -439,3 +439,79 @@ func firstMessage(t *testing.T, body map[string]any) map[string]any {
 	}
 	return message
 }
+
+// TestReasoningOnlyAssistantTurnDoesNotBreakTheRun is VRT-SYN-004's acceptance test, against the
+// real prometheus deployment.
+//
+// Veritium found it against a deployment and Synaptum traced it to both sides: a reasoning model
+// answers with reasoning and nothing else, the caller keeps that turn in its history, and the next
+// turn's request carries an assistant message with no `content` and no `tool_calls`. Measured here
+// on 2026-10-10 before the fix: `400 Assistant message must contain either 'content' or
+// 'tool_calls'!`, surfaced by the gateway as "all candidates failed" — unactionable, and the run is
+// lost. It is intermittent, and likelier the longer the run.
+//
+// AGAINST REAL INFERENCE AND NOT A DOUBLE, for the same reason as the fidelity test above: a double
+// asserts the body we meant to send. The whole question here is which bodies the platform accepts,
+// and every branch of unsendable.go's rule is a measurement of that. The unit test in
+// internal/modelgateway pins the boundary in CI; this one is why the boundary is where it is.
+func TestReasoningOnlyAssistantTurnDoesNotBreakTheRun(t *testing.T) {
+	srv := newRealPrometheusGatewayServer(t)
+	model := realPrometheusModel()
+
+	ask := func(t *testing.T, messages []any) (int, map[string]any) {
+		t.Helper()
+		return postDecide(t, srv, decideRequest{
+			Candidates:      []decideCandidate{{Provider: prometheusinference.Name, Model: model, Priority: 0}},
+			RenderedContext: map[string]any{"messages": messages, "max_tokens": 64, "model": model},
+		})
+	}
+
+	t.Run("a history holding a reasoning-only assistant turn is answered, not refused", func(t *testing.T) {
+		status, body := ask(t, []any{
+			map[string]any{"role": "user", "content": "Di 'hola' y nada mas."},
+			map[string]any{"role": "assistant", "reasoning_content": "El usuario pide un saludo breve."},
+			map[string]any{"role": "user", "content": "Ahora di 'adios'."},
+		})
+		if status != http.StatusOK {
+			t.Fatalf("status = %d, body = %v — this is the 400 VRT-SYN-004 reported, reaching us as a dead run", status, body)
+		}
+		// REPORTED, not silently repaired. The call succeeding is half the requirement; the other
+		// half is that the caller can tell its request was narrowed, because a gateway that quietly
+		// drops messages is what VRT-AEON-003 was raised about.
+		if got := body["unsendable_turns_dropped"]; got != float64(1) {
+			t.Errorf("unsendable_turns_dropped = %v (%T), want 1: the drop must be reported in the body", got, got)
+		}
+	})
+
+	t.Run("an ordinary history is untouched and reports nothing", func(t *testing.T) {
+		status, body := ask(t, []any{
+			map[string]any{"role": "user", "content": "Di 'hola' y nada mas."},
+			map[string]any{"role": "assistant", "content": "hola"},
+			map[string]any{"role": "user", "content": "Ahora di 'adios'."},
+		})
+		if status != http.StatusOK {
+			t.Fatalf("status = %d, body = %v", status, body)
+		}
+		// ABSENT and not 0: absence is what tells a caller its request went out as it built it.
+		if _, present := body["unsendable_turns_dropped"]; present {
+			t.Errorf("unsendable_turns_dropped is present on an untouched request: %v", body["unsendable_turns_dropped"])
+		}
+	})
+
+	// THE BOUNDARY, against the real platform: an explicit empty string is sendable and must survive.
+	// Collapsing it with nil would turn a working request into a dropped turn, and the only way to
+	// know which is which is to ask the platform.
+	t.Run("an assistant turn whose content is an explicit empty string is kept", func(t *testing.T) {
+		status, body := ask(t, []any{
+			map[string]any{"role": "user", "content": "Di 'hola' y nada mas."},
+			map[string]any{"role": "assistant", "content": ""},
+			map[string]any{"role": "user", "content": "Ahora di 'adios'."},
+		})
+		if status != http.StatusOK {
+			t.Fatalf("status = %d, body = %v", status, body)
+		}
+		if _, present := body["unsendable_turns_dropped"]; present {
+			t.Errorf("a turn with content \"\" was dropped: %v", body["unsendable_turns_dropped"])
+		}
+	})
+}

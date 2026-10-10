@@ -193,7 +193,7 @@ test-vrt-aeon-003: ## Run VRT-AEON-003's adapter-fidelity acceptance tests (real
 	set -a && . ./.env && set +a && cd go && \
 		AEON_TEST_PG_DSN="postgres://aeon:aeon@127.0.0.1:$${AEON_POSTGRES_PORT:-5442}/aeon?sslmode=disable" \
 		go test ./internal/api/ -count=1 -v \
-			-run 'TestAdapterFidelityAgainstRealPrometheus|TestIdempotencyHeaderIsNotBilledTwiceThroughTheOpenAISurface'
+			-run 'TestAdapterFidelityAgainstRealPrometheus|TestIdempotencyHeaderIsNotBilledTwiceThroughTheOpenAISurface|TestReasoningOnlyAssistantTurnDoesNotBreakTheRun'
 
 test-first-use-case: ## Check the on-ramp in docs/your-first-use-case.md still works
 	# A document is the artefact most likely to assert something the code no longer does — this repo's

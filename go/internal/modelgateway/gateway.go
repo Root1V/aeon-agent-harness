@@ -72,6 +72,11 @@ type DecisionResult struct {
 	Model        string
 	Output       map[string]any
 	Attempts     []AttemptRecord
+	// UnsendableTurnsDropped counts assistant turns this gateway removed from the request because
+	// nothing on the chat wire could carry them (VRT-SYN-004 — see unsendable.go). Reported rather
+	// than silent: dropping a message narrows the request the caller built, and a gateway that
+	// narrows requests without saying so is the defect VRT-AEON-003 was raised about.
+	UnsendableTurnsDropped int
 }
 
 // QualityGate is MDL-002's quality-aware routing hook: given a candidate about to be tried,
@@ -137,12 +142,15 @@ func (g *Gateway) Decide(
 			input[k] = v
 		}
 		input["model"] = c.Model
+		// VRT-SYN-004, and before the span opens so the attribute below describes what was sent.
+		unsendable := dropUnsendableAssistantTurns(input)
 
 		spanCtx, span := tracer.Start(ctx, "chat", trace.WithAttributes(
 			attribute.String("gen_ai.operation.name", "chat"),
 			providerNameAttr(c.Provider),
 			attribute.String("gen_ai.request.model", c.Model),
 		))
+		recordUnsendableDropped(span, unsendable)
 		output, err := provider.Decide(spanCtx, input)
 		if err != nil {
 			span.RecordError(err)
@@ -177,7 +185,13 @@ func (g *Gateway) Decide(
 		span.End()
 
 		attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model})
-		return &DecisionResult{ProviderUsed: c.Provider, Model: c.Model, Output: output, Attempts: attempts}, nil
+		// NOT written into `output`: that map is the provider's normalized response — what the model
+		// said — and a gateway-level fact about what WE changed does not belong inside it. It travels
+		// on the result, and each surface puts it where its own response reports gateway facts.
+		return &DecisionResult{
+			ProviderUsed: c.Provider, Model: c.Model, Output: output, Attempts: attempts,
+			UnsendableTurnsDropped: unsendable,
+		}, nil
 	}
 
 	return nil, fmt.Errorf("%w: %+v", ErrAllCandidatesFailed, attempts)
@@ -350,5 +364,15 @@ func recordUsage(span trace.Span, input, output *int) {
 	}
 	if output != nil {
 		span.SetAttributes(attribute.Int("gen_ai.usage.output_tokens", *output))
+	}
+}
+
+// recordUnsendableDropped puts VRT-SYN-004's count on the span, and ONLY when it happened: an
+// attribute set to 0 on every call makes "we altered your request" indistinguishable from "we did
+// not" for anyone querying traces, which is the same absent-not-zero rule OBS-013 applied to the
+// usage counters.
+func recordUnsendableDropped(span trace.Span, dropped int) {
+	if dropped > 0 {
+		span.SetAttributes(attribute.Int("aeon.model.unsendable_turns_dropped", dropped))
 	}
 }

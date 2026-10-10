@@ -138,6 +138,11 @@ func (h *ModelGatewayHandlers) decide(w http.ResponseWriter, r *http.Request) {
 		"output":        result.Output,
 		"attempts":      result.Attempts,
 	}
+	// VRT-SYN-004: beside the other gateway facts rather than inside `output`, and ABSENT when
+	// nothing was dropped — absence is what tells a caller its request went out as it built it.
+	if result.UnsendableTurnsDropped > 0 {
+		response["unsendable_turns_dropped"] = result.UnsendableTurnsDropped
+	}
 	h.recordCost(r, result, body.RunID, body.AgentManifestRef, response)
 	writeJSON(w, http.StatusOK, response)
 }
