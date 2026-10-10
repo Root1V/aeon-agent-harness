@@ -1036,7 +1036,13 @@ fichero mal nombrado. Sin `down`, a propósito.
   dos, un `tools/call` permitido por Cedar llega al servidor de prueba y uno denegado **nunca**
   llega — la mitad negativa exige que el servidor de prueba registre las llamadas recibidas, no
   que la nuestra devuelva un error.
-- **Las cuatro decisiones, que son el coste real (el transporte no lo es):**
+
+  **Y una tercera mitad, que es la decisión 5 y no una nota al pie:** tras aprobar los dos tools, el
+  servidor de prueba cambia el `input_schema` de uno; en el siguiente refresco `aeon-toolgw` deja de
+  servir ESE tool y sigue sirviendo el otro. No se puede cerrar esta feature sin esto: federar sin
+  fijar la huella del descriptor aprobado es servir cambios que nadie revisó, y es la única de las
+  cinco decisiones que no se puede añadir después sin haber estado expuesto en el intervalo.
+- **Las cinco decisiones, que son el coste real (el transporte no lo es):**
   1. **Clasificación.** `ListTools` no trae `side_effect`/`risk`, y el registry exige
      `idempotency_key_fields` a todo lo que no sea `READ_ONLY` (ADR-0001). Un tool descubierto no
      puede autoclasificarse: si la fuente declara todo `READ_ONLY`, esa regla queda sorteada. El
@@ -1066,7 +1072,7 @@ fichero mal nombrado. Sin `down`, a propósito.
   `tool_descriptor.schema.json` declara `mcp_origin: {server, spec_version}` desde F0; cero
   productores y cero consumidores en `go/` y `python/`. Le falta la URL/credencial de la fuente y
   el intervalo de refresco, porque describe el *origen de un tool*, no una *fuente registrada*.
-- **Coste:** M. El transporte es S (el adaptador existe y está probado contra un servidor MCP
+- **Coste:** M, y la decisión 5 es parte de ese M y no un extra. El transporte es S (el adaptador existe y está probado contra un servidor MCP
   real; `Execute(tenant, name, args)` ya tiene la firma que hace falta; OAuth2 *client
   credentials* es el patrón que ya corremos contra Prometheus). Lo que cuesta son las cuatro
   decisiones de arriba, y son decisiones, no código.
