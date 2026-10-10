@@ -974,22 +974,52 @@ fichero mal nombrado. Sin `down`, a propósito.
 - **Criterio de entrada:** un caller real no confiable de estas rutas.
 - **Coste:** S.
 
-### Conectar el MCP Adapter cliente (`TOOL-002`) al Tool Gateway real
+### Fuente de tools MCP federada (`TOOL-002` cliente → Tool Gateway real)
 
 - **Descripción:** `go/internal/mcp/adapter.go` (cliente — Aeon consumiendo servidores MCP
   externos) es real y probado, pero ningún `ToolDescriptor` lo invoca todavía — el Tool Gateway
   (`go/internal/toolexec`) no tiene un backend "mcp" que abra una `Session` y llame
   `ListTools`/`CallTool` contra un servidor de terceros. Un tool servido por un servidor MCP
-  externo no puede registrarse ni ejecutarse en Aeon todavía. Nótese que esto es distinto de
-  `INT-003` (ya `DONE`), que resolvió el sentido contrario — Aeon como *servidor* MCP exponiendo su
-  propio catálogo — no este.
+  externo no puede ejecutarse en Aeon todavía. Nótese que esto es distinto de `INT-003` (ya
+  `DONE`), que resolvió el sentido contrario — Aeon como *servidor* MCP exponiendo su propio
+  catálogo — no este.
+- **Lo que hace hoy una fila con `mcp_origin` (medido, VRT-AEON-006):** se anuncia en `tools/list`
+  y Cedar la permite; muere en el dispatch, que es un mapa en proceso (`e.fns[toolName]`), con
+  `IsError=true` y el texto `toolexec: unknown tool "weather.forecast"`. Es decir: **falla
+  pareciendo que funciona** — un error de nivel tool, no de protocolo, así que un agente ve «el
+  tool falló», no «ese tool no existe aquí». Registrar la fila parece haber surtido efecto.
 - **Fase objetivo:** cuando exista un caso de uso real que necesite un tool respaldado por un
-  servidor MCP externo concreto (LangGraph/CrewAI/Claude Code ya expone algunos vía MCP).
-- **Criterio de entrada:** decidir cómo se declara un tool respaldado por MCP en
-  `tool_descriptor.schema.json` (`mcp_origin: {server, spec_version}` ya existe en el schema desde
-  F0, pendiente de usarse) y cómo se asigna `side_effect`/`risk` a algo que Aeon no implementó — un
-  tool descubierto vía `ListTools` no trae esa clasificación consigo.
-- **Coste:** M.
+  servidor MCP externo concreto. Veritium (VRT-53/VRT-55) es el primero que lo pide.
+- **Criterio de aceptación** (adoptado de VRT-AEON-006, verificable sin Veritium): un servidor MCP
+  de prueba con dos tools; Aeon lo registra como fuente, `tools/list` de `aeon-toolgw` muestra las
+  dos, un `tools/call` permitido por Cedar llega al servidor de prueba y uno denegado **nunca**
+  llega — la mitad negativa exige que el servidor de prueba registre las llamadas recibidas, no
+  que la nuestra devuelva un error.
+- **Las cuatro decisiones, que son el coste real (el transporte no lo es):**
+  1. **Clasificación.** `ListTools` no trae `side_effect`/`risk`, y el registry exige
+     `idempotency_key_fields` a todo lo que no sea `READ_ONLY` (ADR-0001). Un tool descubierto no
+     puede autoclasificarse: si la fuente declara todo `READ_ONLY`, esa regla queda sorteada. El
+     `_meta` de la fuente sirve como *entrada* a una clasificación aprobada por un operador, no
+     como la clasificación.
+  2. **`_meta` se descarta hoy.** El `Tool` del SDK lleva `Meta` (`_meta`), y nuestro
+     `DiscoveredTool` es `{Name, Description, InputSchema}`: lo tira. Es el sitio exacto donde
+     aterrizarían los metadatos de la fuente, y es un campo.
+  3. **Namespace.** El catálogo se indexa por `rec.Name` (`c.registered[rec.Name]`,
+     `server.AddTool(name)`). Dos fuentes que ofrezcan `search.web` colisionan en silencio, gana
+     la última del `Apply`. Una fuente federada necesita prefijo.
+  4. **Identidad hacia fuera.** `toolCallHandler` llama `executor.Execute("", toolName, args)` —
+     tenant de run vacío a propósito (GOV-001g). Reenviar a una fuente externa obliga a decidir
+     con qué credencial sale la llamada; la cuota por cliente de la fuente verá *un* cliente
+     (Aeon), no nuestros agentes, así que la granularidad por agente vive en nuestro lado o no
+     existe.
+- **`mcp_origin` ya está en el schema y no lo produce ni lo lee nadie.**
+  `tool_descriptor.schema.json` declara `mcp_origin: {server, spec_version}` desde F0; cero
+  productores y cero consumidores en `go/` y `python/`. Le falta la URL/credencial de la fuente y
+  el intervalo de refresco, porque describe el *origen de un tool*, no una *fuente registrada*.
+- **Coste:** M. El transporte es S (el adaptador existe y está probado contra un servidor MCP
+  real; `Execute(tenant, name, args)` ya tiene la firma que hace falta; OAuth2 *client
+  credentials* es el patrón que ya corremos contra Prometheus). Lo que cuesta son las cuatro
+  decisiones de arriba, y son decisiones, no código.
 
 ### Catálogo MCP de salida (`INT-003`): identidad real de cliente MCP
 
