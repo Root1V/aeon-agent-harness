@@ -217,3 +217,6 @@ func anthropicUsage(parsed anthropicResponse) providers.Usage {
 	}
 	return u
 }
+
+// ServerAddress is VRT-AXO-002's `server.address` (providers.ServerAddresser).
+func (a *Adapter) ServerAddress() string { return providers.HostOf(a.baseURL()) }

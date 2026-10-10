@@ -249,3 +249,9 @@ func (a *Adapter) CachingCapability() string { return "none" }
 
 // CostModel: self-hosted inference is billed by compute (GPU-seconds), not per token.
 func (a *Adapter) CostModel() string { return "compute_based" }
+
+// ServerAddress is VRT-AXO-002's `server.address` (providers.ServerAddresser).
+//
+// This adapter is the reason the attribute matters most: every self-hosted server looks the same in
+// a trace otherwise — same provider name, same model id, different machine.
+func (a *Adapter) ServerAddress() string { return providers.HostOf(a.BaseURL) }

@@ -196,3 +196,12 @@ func (a *Adapter) CachingCapability() string { return "automatic_prefix" }
 // declared in two places and they disagreed for a day. The bundle is what pricing reads, so the
 // disagreement was invisible; MDL-009's test is what surfaced it.
 func (a *Adapter) CostModel() string { return "token_based" }
+
+// ServerAddress is VRT-AXO-002's `server.address` (providers.ServerAddresser). The platform address
+// is ONE address (see Client.GatewayURL), so there is no ambiguity about which to report.
+func (a *Adapter) ServerAddress() string {
+	if a.Client == nil {
+		return ""
+	}
+	return providers.HostOf(a.Client.GatewayURL)
+}
