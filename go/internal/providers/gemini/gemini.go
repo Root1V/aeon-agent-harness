@@ -171,3 +171,6 @@ func (a *Adapter) CachingCapability() string { return "explicit_breakpoints" }
 
 // CostModel: billed per token.
 func (a *Adapter) CostModel() string { return "token_based" }
+
+// ServerAddress is VRT-AXO-002's `server.address` (providers.ServerAddresser).
+func (a *Adapter) ServerAddress() string { return providers.HostOf(a.baseURL()) }

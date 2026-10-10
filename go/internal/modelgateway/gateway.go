@@ -150,6 +150,7 @@ func (g *Gateway) Decide(
 			providerNameAttr(c.Provider),
 			attribute.String("gen_ai.request.model", c.Model),
 		))
+		recordServerAddress(span, provider)
 		recordUnsendableDropped(span, unsendable)
 		output, err := provider.Decide(spanCtx, input)
 		if err != nil {
@@ -374,5 +375,27 @@ func recordUsage(span trace.Span, input, output *int) {
 func recordUnsendableDropped(span trace.Span, dropped int) {
 	if dropped > 0 {
 		span.SetAttributes(attribute.Int("aeon.model.unsendable_turns_dropped", dropped))
+	}
+}
+
+// recordServerAddress emits OTel's `server.address` for the endpoint this call actually went to
+// (VRT-AXO-002), when the provider can say what it is.
+//
+// WHICH HOST, because the obvious reading is the wrong one: it is the host we CALL, not the host we
+// are. A span describing "aeon called an inference endpoint" is a client span, and the server in it
+// is the provider's. For a self-hosted deployment this is the only attribute that distinguishes two
+// machines serving the same model id under the same provider name — without it, two instances are
+// one line in every panel.
+//
+// Absent when the provider does not implement providers.ServerAddresser or answers empty, and that
+// absence is informative: it says this provider has no network endpoint to name. An empty string
+// would say we looked and found nothing, which is a different claim.
+func recordServerAddress(span trace.Span, provider providers.Provider) {
+	addresser, ok := provider.(providers.ServerAddresser)
+	if !ok {
+		return
+	}
+	if host := addresser.ServerAddress(); host != "" {
+		span.SetAttributes(attribute.String("server.address", host))
 	}
 }

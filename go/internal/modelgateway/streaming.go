@@ -78,6 +78,7 @@ func (g *Gateway) DecideStream(
 			attribute.String("gen_ai.request.model", c.Model),
 			attribute.Bool("gen_ai.request.stream", true),
 		))
+		recordServerAddress(span, provider)
 
 		streamer, streamable := provider.(providers.StreamingProvider)
 		delivered := false

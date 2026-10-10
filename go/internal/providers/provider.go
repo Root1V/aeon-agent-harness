@@ -9,6 +9,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"net/url"
 )
 
 // Provider is implemented by every model adapter.
@@ -211,4 +212,52 @@ func NormalizedChatResponseWithUsage(model, content, finishReason string, u Usag
 		usage["estimated"] = *u.Estimated
 	}
 	return response
+}
+
+// ServerAddresser is implemented by a provider that reaches a network endpoint, so the gateway can
+// emit OTel's `server.address` on its spans (VRT-AXO-002).
+//
+// WHY THIS WAS MISSING UNTIL NOW, because it is worth recording rather than quietly fixing: the
+// convention agreed with Argus in VRT-AXO-002 fixes `gen_ai.provider.name`,
+// `gen_ai.operation.name`, `gen_ai.request.model`, the span name `{operation} {model}` and
+// `server.address`. We shipped the three attributes and then bundled `server.address` together with
+// the span RENAME, and gated both on Argus telling us when a rename would be safe for their
+// dashboards. That gate is real for the rename — changing a span's name breaks every query and
+// panel using it — and it never applied to this attribute, which is purely additive. Grouping them
+// is what kept an agreed attribute unbuilt while we had already written in the channel that it
+// "goes on the span".
+//
+// OPTIONAL and not part of Provider: a provider that reaches no network endpoint has no honest
+// value to give, and forcing the method would get it an empty string or an invented one. The
+// gateway emits the attribute only when the provider answers, so absent means "this provider has no
+// server address", not "we forgot".
+type ServerAddresser interface {
+	// ServerAddress returns the HOST of the endpoint this provider calls, without scheme, port,
+	// path or credentials.
+	ServerAddress() string
+}
+
+// HostOf extracts the host from a provider endpoint for `server.address`.
+//
+// THE HOST ONLY, and dropping the rest is the point rather than tidiness. A base URL may carry
+// userinfo (`https://user:pass@host/...`), and a span attribute is the last place a credential
+// should land: telemetry is copied to collectors, retained, and read by people who were never meant
+// to see it. url.Parse().Hostname() returns neither the userinfo nor the port, so the credential
+// cannot survive this function even if somebody configures one.
+//
+// The port is NOT appended: OTel keeps it in `server.port`, and inventing `host:port` under
+// `server.address` would be our own shape wearing a standard name — the exact thing VRT-AXO-002 was
+// raised to stop. `server.port` is not emitted because it was not agreed; it is one line when asked.
+func HostOf(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		// A malformed endpoint is a configuration problem that the call itself will report far more
+		// clearly than a span attribute could. Returning "" keeps the attribute absent rather than
+		// putting a half-parsed string in telemetry.
+		return ""
+	}
+	return u.Hostname()
 }

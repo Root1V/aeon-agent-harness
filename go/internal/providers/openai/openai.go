@@ -133,3 +133,6 @@ func (a *Adapter) CachingCapability() string { return "automatic_prefix" }
 
 // CostModel: billed per token, both input (prompt) and output (completion).
 func (a *Adapter) CostModel() string { return "token_based" }
+
+// ServerAddress is VRT-AXO-002's `server.address` (providers.ServerAddresser).
+func (a *Adapter) ServerAddress() string { return providers.HostOf(a.baseURL()) }
