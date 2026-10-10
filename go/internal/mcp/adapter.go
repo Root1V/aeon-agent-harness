@@ -3,8 +3,12 @@
 // JSON-RPC implementation — the same "use the real SDK" convention as go.temporal.io/sdk,
 // go.opentelemetry.io/otel and github.com/jackc/pgx elsewhere in this codebase. Aeon never speaks
 // raw MCP wire format itself; this package is a thin translation layer between the SDK's
-// Client/ClientSession and whatever inside Aeon needs to reach an external tool server (the Tool
-// Gateway, eventually — see roadmap.md/backlog.md for wiring status).
+// Client/ClientSession and whatever inside Aeon needs to reach an external tool server.
+//
+// SINCE TOOL-010 IT HAS A PRODUCTION CALLER: go/internal/toolsource federates an external MCP
+// server's approved tools into the Tool Gateway's catalogue and calls them through this client. This
+// doc used to end "the Tool Gateway, eventually", and that word was accurate for long enough that
+// VRT-AEON-006 asked whether the capability existed and the answer had to be no.
 //
 // "core stateless 2026-07-28 + legacy adapter" (roadmap.md's TOOL-002 criterion) is deliberately
 // ONE adapter, not two parallel implementations: the underlying SDK's Client.Connect already
@@ -17,6 +21,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -46,7 +51,19 @@ type Session struct {
 // legacy 2025-11-25 initialize handshake otherwise) happens inside the SDK's Client.Connect; this
 // method does not choose or force a version.
 func (a *Adapter) Connect(ctx context.Context, endpoint string) (*Session, error) {
-	transport := &sdkmcp.StreamableClientTransport{Endpoint: endpoint}
+	return a.ConnectWithClient(ctx, endpoint, nil)
+}
+
+// ConnectWithClient is Connect with the HTTP client the transport should use — which is how
+// authentication reaches an external MCP server (TOOL-010). The MCP spec puts authorization in
+// ordinary HTTP headers, so an OAuth2 client-credentials source is an http.Client whose transport
+// attaches the bearer token, and nothing about the protocol handling changes.
+//
+// A nil client means the SDK's default, which is correct for a source that needs no credential.
+// Passing one is NOT the same as passing a configured token: the client is the thing that refreshes,
+// so a long-lived session does not outlive its token.
+func (a *Adapter) ConnectWithClient(ctx context.Context, endpoint string, httpClient *http.Client) (*Session, error) {
+	transport := &sdkmcp.StreamableClientTransport{Endpoint: endpoint, HTTPClient: httpClient}
 	cs, err := a.client.Connect(ctx, transport, nil)
 	if err != nil {
 		return nil, fmt.Errorf("mcp: connect to %s: %w", endpoint, err)

@@ -161,6 +161,32 @@ type ToolLister interface {
 	List(ctx context.Context) ([]*store.ToolRecord, error)
 }
 
+// MergeListers reads several listers as one, which is how TOOL-010's federated sources reach
+// `tools/list` without this package writing to the Tool Registry: Postgres rows and federated rows
+// meet here, in the catalogue, rather than in the database.
+//
+// ANY FAILURE FAILS THE WHOLE READ, on purpose. Returning the listers that did answer would be a
+// partial catalogue, and Apply treats a tool's absence as "removed" — so one source's blip would
+// withdraw its tools from every connected client. Failing instead lets Watch's own rule apply: a
+// failed read changes nothing and the previous catalogue stands.
+func MergeListers(listers ...ToolLister) ToolLister {
+	return mergedLister(listers)
+}
+
+type mergedLister []ToolLister
+
+func (m mergedLister) List(ctx context.Context) ([]*store.ToolRecord, error) {
+	var all []*store.ToolRecord
+	for _, l := range m {
+		rows, err := l.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, rows...)
+	}
+	return all, nil
+}
+
 // Watch polls lister every interval and applies what it finds, until ctx is done.
 //
 // A POLL AND NOT A DATABASE NOTIFICATION, and the reason is worth stating: the registry is written by a
