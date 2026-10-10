@@ -239,6 +239,10 @@ lint: ## Lint proto/schemas, the shared contract schemas, the compose ports, Go 
 	# in a Go test because it is a property of the compose files, and both regressions are silent — a
 	# port on 0.0.0.0 comes up fine and is simply reachable by anyone on the network.
 	python3 scripts/compose_ports_check.py
+	# INT-014: una puerta que sabe ejecutar un tool tiene que saber registrar un rechazo. Aquí y no
+	# en un test de Go porque es una propiedad del fuente: una puerta nueva que ejecute y no registre
+	# rechazos pasaría todos los tests existentes, que son verdes para las puertas que ya existen.
+	python3 scripts/tool_audit_sites_check.py
 
 roadmap-check: ## Fail if roadmap.md references a DONE feature without a matching test name in the repo
 	python3 scripts/roadmap_check.py

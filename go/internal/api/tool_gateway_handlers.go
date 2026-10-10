@@ -282,6 +282,15 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 		}
 		span.SetAttributes(attribute.Bool("aeon.step.outcome_journalled", journal.Journalled))
 
+		// INT-014: the refusal goes in the bitácora too, and this is NOT a duplicate of the journal
+		// above. The journal is the RUN's, so journalDenial gives up when there is no run_id —
+		// "there is no journal to record this against" — and that is every caller with no Aeon run
+		// behind it. The bitácora is the tenant's and takes the row either way, which is what makes
+		// "which agent was refused which tool" answerable for callers that are not runs.
+		refusal := h.Executor.RecordRefusal(r.Context(), h.invocation(tenant, body, toolexec.DoorHTTP),
+			string(decision.Disposition), decision.PolicyID)
+		span.SetAttributes(attribute.Bool("aeon.tool.invocation_recorded", refusal.Recorded))
+
 		writeJSON(w, http.StatusForbidden, map[string]any{
 			"allowed": false,
 			"reason":  "denied by policy",
@@ -298,6 +307,7 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 			"disposition":          decision.Disposition,
 			"disposition_declared": decision.DispositionDeclared,
 			"policy_id":            decision.PolicyID,
+			"recorded":             refusal.Recorded,
 		})
 		return
 	}
@@ -392,12 +402,20 @@ func (h *ToolGatewayHandlers) executeDeduplicated(
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		// INT-014: a replay is an invocation. Nothing executed — so no duration — but the caller
+		// called and we answered, and the dedupe table cannot show this: its single row per key is
+		// untouched by a replay, so without this the bitácora undercounts exactly the retries
+		// TOOL-005 exists to absorb.
+		replay := h.Executor.RecordReplay(r.Context(),
+			h.invocation(dedupeTenant, body, toolexec.DoorHTTPDedupe), policyID)
 		span.SetStatus(codes.Ok, "deduplicated")
+		span.SetAttributes(attribute.Bool("aeon.tool.invocation_recorded", replay.Recorded))
 		writeJSON(w, http.StatusOK, map[string]any{
 			"allowed":      true,
 			"policy_id":    policyID,
 			"result":       recorded,
 			"deduplicated": true,
+			"recorded":     replay.Recorded,
 		})
 		return
 	}

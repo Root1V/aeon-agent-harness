@@ -69,6 +69,14 @@ func toolCallHandler(toolName string, eng *policy.Engine, executor ToolExecutor)
 			// to — not a protocol-level failure. Same reasoning the spec itself gives for
 			// tool-level errors: "otherwise the LLM would not be able to see that an error
 			// occurred and self-correct."
+			// INT-014: THIS DOOR RECORDED NOTHING AT ALL before now — not its executions, which
+			// INT-013 fixed, and not its refusals, which the HTTP door has journalled since
+			// INT-011. And it is the door with no run behind it, so the run journal was never an
+			// option: "qué agente puede llamar cuál" was unanswerable for exactly the callers that
+			// are not ours.
+			refusal := executor.RecordRefusal(ctx,
+				toolexec.Invocation{ToolName: toolName, Args: args, Door: toolexec.DoorMCP},
+				string(decision.Disposition), decision.PolicyID)
 			return &sdkmcp.CallToolResult{
 				IsError: true,
 				Content: []sdkmcp.Content{&sdkmcp.TextContent{
@@ -79,6 +87,7 @@ func toolCallHandler(toolName string, eng *policy.Engine, executor ToolExecutor)
 					Text: fmt.Sprintf("denied by policy (%s): %s is not permitted for external MCP callers",
 						decision.Disposition, toolName),
 				}},
+				Meta: recordingMeta(refusal),
 			}, nil
 		}
 
