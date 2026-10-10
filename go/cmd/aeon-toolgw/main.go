@@ -33,6 +33,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/secrets"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/toolexec"
+	"github.com/aeon-ai/aeon/go/internal/toolsource"
 	"github.com/aeon-ai/aeon/go/internal/tracing"
 	"github.com/aeon-ai/aeon/go/internal/websearch/searxng"
 )
@@ -302,6 +303,31 @@ func main() {
 		if !ok {
 			log.Fatalf("aeon-toolgw: the MCP catalog needs a policy bundle for tenant %q and none is loaded", deploymentTenant)
 		}
+		// TOOL-010: external MCP servers registered as sources of tools. Their approved tools become
+		// callable through the SAME executor every door uses, so Cedar is in front of a federated call
+		// with no new enforcement code, and INT-013/014 record the invocation either way.
+		var federation *toolsource.Federation
+		if bundlePath := os.Getenv("AEON_TOOL_SOURCES_PATH"); bundlePath != "" {
+			sources, err := toolsource.Load(bundlePath)
+			if err != nil {
+				// Fatal rather than degraded: a gateway that announces a federated tool it cannot
+				// serve is the "present but lying" state TOOL-007 removed, and a bundle that fails to
+				// load is a configuration error a person can fix in seconds.
+				log.Fatalf("aeon-toolgw: %v", err)
+			}
+			federation = toolsource.New(sources, executor)
+			// Discovered BEFORE the catalogue is built, so the first tools/list already carries the
+			// federated tools instead of gaining them a refresh later.
+			toolsource.LogReports(federation.Refresh(context.Background()))
+			federated, err := federation.List(context.Background())
+			if err != nil {
+				log.Fatalf("aeon-toolgw: listing federated tools: %v", err)
+			}
+			tools = append(tools, federated...)
+			log.Printf("aeon-toolgw: %d federated tool(s) from %d source(s) (%s)",
+				len(federated), len(sources.Sources), bundlePath)
+		}
+
 		mcpServer, catalog := aeonmcp.NewToolGatewayCatalog(tools, mcpEngine, executor)
 		mux.Handle("/mcp", sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return mcpServer }, &sdkmcp.StreamableHTTPOptions{Stateless: true}))
 		// The count reported is the DISTINCT TOOLS exposed, not the registry rows read. List returns every
@@ -318,7 +344,15 @@ func main() {
 		// unchanged catalogue sends no notification at all.
 		refresh := time.Duration(intFromEnv("AEON_MCP_CATALOG_REFRESH_SECONDS", 30)) * time.Second
 		if refresh > 0 {
-			go catalog.Watch(context.Background(), s.ToolRegistryFor(deploymentTenant), refresh)
+			lister := aeonmcp.ToolLister(s.ToolRegistryFor(deploymentTenant))
+			if federation != nil {
+				lister = aeonmcp.MergeListers(lister, federation)
+				// Each source polls on its own interval, which is not the catalogue's: a source may be
+				// slow or expensive to list, and the catalogue's job is to publish what was last
+				// discovered rather than to decide how often to ask.
+				federation.Watch(context.Background())
+			}
+			go catalog.Watch(context.Background(), lister, refresh)
 			log.Printf("aeon-toolgw: MCP catalog refreshing every %s (AEON_MCP_CATALOG_REFRESH_SECONDS=0 disables)", refresh)
 		} else {
 			log.Println("aeon-toolgw: MCP catalog refresh DISABLED — a tool registered after now stays invisible until restart")

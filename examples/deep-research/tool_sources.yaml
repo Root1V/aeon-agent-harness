@@ -1,0 +1,47 @@
+# TOOL-010 · Fuentes de tools MCP externas (AEON_TOOL_SOURCES_PATH).
+#
+# ESTE FICHERO SE COMITEA, y por eso las credenciales se nombran y nunca se escriben: `client_id_env`
+# y `client_secret_env` llevan el NOMBRE de una variable de entorno. El cargador se niega a aceptar
+# algo que no parezca un nombre de variable, porque la forma más probable de equivocarse en ese campo
+# es pegar el secreto.
+#
+# CADA TOOL LA APRUEBA UNA PERSONA, UNA A UNA. `tools/list` de una fuente reporta nombre, descripción
+# y schema — nunca el efecto, ni el riesgo, ni qué argumentos forman una clave de idempotencia. Una
+# fuente que se clasificara a sí misma volvería opcional la regla de ADR-0001: declararlo todo
+# READ_ONLY y deja de aplicar. Un tool que la fuente ofrece y aquí no está, no se sirve.
+#
+# EL FLUJO DEL `descriptor_sha256`, que es lo único no obvio de este fichero:
+#   1. Declara la fuente y el tool SIN el digest.
+#   2. Arranca aeon-toolgw una vez. El log imprime el digest observado y NO sirve el tool.
+#   3. Revisa ese descriptor y, si es aceptable, pega el digest aquí.
+# A partir de ahí, si la fuente cambia el descriptor —el schema, o su significado con el mismo
+# schema— ese tool deja de servirse y el log vuelve a imprimir el nuevo digest. El resto de la fuente
+# sigue sirviéndose.
+#
+# LO QUE AEON NO PUEDE HACER POR TI: un tool federado está gobernado por agente AQUÍ (Cedar, en cada
+# tools/call) y NO está aislado por tenant ALLÍ. La llamada sale con la credencial de Aeon y la fuente
+# no conoce nuestros tenants. Si un tool devuelve datos específicos de un tenant, ese aislamiento
+# tiene que existir en la fuente; aprobarlo sin eso entrega los datos de un tenant a otro por una
+# puerta que Cedar abre con gusto.
+kind: ToolSourceBundle
+sources:
+  - id: veritium
+    endpoint: https://veritium.example.test/mcp
+    # El prefijo lo fija la fuente REGISTRADA, no el servidor remoto: es lo único que impide que dos
+    # fuentes que ofrezcan `search.web` colisionen, y no se puede delegar en quien colisiona.
+    prefix: veritium.
+    refresh: 60s
+    auth:
+      token_url: https://veritium.example.test/oauth2/token
+      client_id_env: AEON_VERITIUM_MCP_CLIENT_ID
+      client_secret_env: AEON_VERITIUM_MCP_CLIENT_SECRET
+      scopes: [tools:call]
+    tools:
+      - name: extract_document
+        side_effect: READ_ONLY
+        risk: low
+        descriptor_sha256: "" # ver el flujo de arriba: arranca una vez y pega el digest del log
+      - name: validate_case
+        side_effect: READ_ONLY
+        risk: low
+        descriptor_sha256: ""
