@@ -69,13 +69,13 @@ func TestServerAddressIsOnTheSpan(t *testing.T) {
 	//    many machines serving one model id under one provider name, and without this they are one
 	//    line in every panel.
 	waitForTempoSpan(t, tempoURL,
-		fmt.Sprintf(`{ name = "chat" && span.server.address = "%s" }`, host), 30*time.Second)
+		fmt.Sprintf(`{ name = "chat %s" && span.server.address = "%s" }`, addressed, host), 30*time.Second)
 
 	// 2. NO CREDENTIAL AND NO PORT SURVIVED. Asserted against Tempo and not only against HostOf,
 	//    because what matters is what left the process, not what a helper returned.
 	if n, err := tempoSearchCount(t, tempoURL, fmt.Sprintf(
-		`{ name = "chat" && span.gen_ai.request.model = "%s" && span.server.address = "%s" }`,
-		addressed, host+":9000")); err != nil || n != 0 {
+		`{ name = "chat %s" && span.gen_ai.request.model = "%s" && span.server.address = "%s" }`,
+		addressed, addressed, host+":9000")); err != nil || n != 0 {
 		t.Fatalf("a span carries host:port under server.address (matched=%d err=%v) — the port belongs "+
 			"to server.port, and host:port under this name is our own shape wearing a standard one", n, err)
 	}
@@ -83,9 +83,9 @@ func TestServerAddressIsOnTheSpan(t *testing.T) {
 	// 3. CONTROL: the silent span has to BE there, or the absence below proves only that nothing
 	//    arrived.
 	waitForTempoSpan(t, tempoURL,
-		fmt.Sprintf(`{ name = "chat" && span.gen_ai.request.model = "%s" }`, silent), 30*time.Second)
+		fmt.Sprintf(`{ name = "chat %s" && span.gen_ai.request.model = "%s" }`, silent, silent), 30*time.Second)
 	if n, err := tempoSearchCount(t, tempoURL, fmt.Sprintf(
-		`{ name = "chat" && span.gen_ai.request.model = "%s" && span.server.address != nil }`, silent)); err != nil || n != 0 {
+		`{ name = "chat %s" && span.gen_ai.request.model = "%s" && span.server.address != nil }`, silent, silent)); err != nil || n != 0 {
 		t.Fatalf("a provider with no endpoint reports a server.address (matched=%d err=%v) — an empty or "+
 			"invented host says we looked and found nothing, which is a different claim from having none", n, err)
 	}

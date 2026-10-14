@@ -99,9 +99,9 @@ func TestADivergentResponseModelIsFindable(t *testing.T) {
 	// 1. Both halves of the pair are on the span, and they are DIFFERENT values. One query per
 	//    attribute: if the span carried only the request model, the second would never match.
 	waitForTempoSpan(t, tempoURL,
-		fmt.Sprintf(`{ name = "chat" && span.gen_ai.request.model = "%s" }`, requested), 30*time.Second)
+		fmt.Sprintf(`{ name = "chat %s" && span.gen_ai.request.model = "%s" }`, requested, requested), 30*time.Second)
 	waitForTempoSpan(t, tempoURL,
-		fmt.Sprintf(`{ name = "chat" && span.gen_ai.response.model = "%s" }`, served), 30*time.Second)
+		fmt.Sprintf(`{ name = "chat %s" && span.gen_ai.response.model = "%s" }`, requested, served), 30*time.Second)
 
 	// EVERY QUERY IN THIS TEST IS SCOPED TO A UNIQUE MARKER, and that is not style — it is the only
 	// thing that makes a green run mean anything here. Tempo keeps what previous runs sent it, so an
@@ -115,11 +115,22 @@ func TestADivergentResponseModelIsFindable(t *testing.T) {
 	// CONTROL: the silent span has to BE there, or the zeros below prove nothing about the absent
 	// state — they would prove the span never arrived.
 	waitForTempoSpan(t, tempoURL,
-		fmt.Sprintf(`{ name = "chat" && span.gen_ai.request.model = "%s" }`, silent), 30*time.Second)
+		fmt.Sprintf(`{ name = "chat %s" && span.gen_ai.request.model = "%s" }`, silent, silent), 30*time.Second)
 	if n, err := tempoSearchCount(t, tempoURL, fmt.Sprintf(
-		`{ name = "chat" && span.gen_ai.request.model = "%s" && span.gen_ai.response.model != nil }`, silent)); err != nil || n != 0 {
+		`{ name = "chat %s" && span.gen_ai.request.model = "%s" && span.gen_ai.response.model != nil }`, silent, silent)); err != nil || n != 0 {
 		t.Fatalf("the silent span reports a response.model (matched=%d err=%v) — the ABSENT state is "+
 			"not preserved, and defaulting it to the requested model would manufacture agreement", n, err)
+	}
+
+	// OBS-015's NEGATIVE CONTROL, which the backlog entry for the rename asked for by name: with the
+	// old name the new query does not match, and the old name is gone. Asserted on OUR marker rather
+	// than globally, because Tempo still holds spans named `chat` from runs before this cut — an
+	// unscoped `{ name = "chat" }` would match those and fail forever, which is the stale-trace trap
+	// this file already paid for once.
+	if n, err := tempoSearchCount(t, tempoURL, fmt.Sprintf(
+		`{ name = "chat" && span.gen_ai.request.model = "%s" }`, requested)); err != nil || n != 0 {
+		t.Fatalf("a span of this run is still named `chat` without its model (matched=%d err=%v) — the cut "+
+			"to `{operation} {model}` is simultaneous for whoever queries, so the two names must not coexist", n, err)
 	}
 
 	// THE ONE QUERY A CONSUMER ACTUALLY HAS, asserted rather than logged. No prior knowledge of
@@ -130,7 +141,7 @@ func TestADivergentResponseModelIsFindable(t *testing.T) {
 	// is why the flag is gone: it was redundant AND a non-standard attribute for Argus's semconv
 	// suite to reject.
 	divergent := fmt.Sprintf(
-		`{ name = "chat" && span.gen_ai.request.model = "%s" && span.gen_ai.request.model != span.gen_ai.response.model }`, requested)
+		`{ name = "chat %s" && span.gen_ai.request.model = "%s" && span.gen_ai.request.model != span.gen_ai.response.model }`, requested, requested)
 	n, err := tempoSearchCount(t, tempoURL, divergent)
 	if err != nil {
 		t.Fatalf("Tempo refused the two-attribute comparison (%v). If TraceQL ever stops supporting it, "+
@@ -143,7 +154,7 @@ func TestADivergentResponseModelIsFindable(t *testing.T) {
 	// AND THE ABSENT CASE IS NOT A FALSE POSITIVE under that same query, which is what makes it
 	// usable: a provider that reports no model would otherwise show up as a divergence every time.
 	absentQuery := fmt.Sprintf(
-		`{ name = "chat" && span.gen_ai.request.model = "%s" && span.gen_ai.request.model != span.gen_ai.response.model }`, silent)
+		`{ name = "chat %s" && span.gen_ai.request.model = "%s" && span.gen_ai.request.model != span.gen_ai.response.model }`, silent, silent)
 	if n, err := tempoSearchCount(t, tempoURL, absentQuery); err != nil || n != 0 {
 		t.Errorf("the divergence query matches a span with NO response model (matched=%d err=%v) — then "+
 			"every provider that reports none reads as a discrepancy", n, err)
@@ -153,14 +164,14 @@ func TestADivergentResponseModelIsFindable(t *testing.T) {
 	// is what catches input and output being swapped — a pair of equal counts, or a check for
 	// "> 0", would pass through that.
 	waitForTempoSpan(t, tempoURL, fmt.Sprintf(
-		`{ name = "chat" && span.gen_ai.request.model = "%s" && span.gen_ai.usage.input_tokens = %d && span.gen_ai.usage.output_tokens = %d }`,
-		requested, promptTokens, outputTokens), 30*time.Second)
+		`{ name = "chat %s" && span.gen_ai.request.model = "%s" && span.gen_ai.usage.input_tokens = %d && span.gen_ai.usage.output_tokens = %d }`,
+		requested, requested, promptTokens, outputTokens), 30*time.Second)
 
 	// ABSENT AND NOT ZERO when the provider reported nothing. A trace is where somebody asks what a
 	// call cost, so a fabricated 0 reads as a measured zero and sums into a total that looks exact —
 	// MDL-014's rule, on the surface that publishes it.
 	for _, attr := range []string{"gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens"} {
-		q := fmt.Sprintf(`{ name = "chat" && span.gen_ai.request.model = "%s" && span.%s != nil }`, silent, attr)
+		q := fmt.Sprintf(`{ name = "chat %s" && span.gen_ai.request.model = "%s" && span.%s != nil }`, silent, silent, attr)
 		if n, err := tempoSearchCount(t, tempoURL, q); err != nil || n != 0 {
 			t.Errorf("the span of a provider that reported no usage carries %s (matched=%d err=%v)", attr, n, err)
 		}
@@ -171,12 +182,17 @@ func TestADivergentResponseModelIsFindable(t *testing.T) {
 	// to stop emitting gen_ai.system: "un emisor que mandara los dos pasaría cualquier test que solo
 	// comprobara el nuevo". These spans had been emitting it the whole time.
 	if n, err := tempoSearchCount(t, tempoURL, fmt.Sprintf(
-		`{ name = "chat" && span.gen_ai.request.model = "%s" && span.gen_ai.system != nil }`, requested)); err != nil || n != 0 {
+		// THE NAME HAD TO BE UPDATED HERE OR THIS ASSERTION WOULD PASS FOR THE WRONG REASON. It
+		// expects zero matches, and after OBS-015 renamed the span no span is called `chat` at all —
+		// so the old query would have returned zero because nothing matched the NAME, saying nothing
+		// about the deprecated attribute it is here to watch. A zero-expecting query has to be
+		// anchored on something that definitely exists.
+		`{ name = "chat %s" && span.gen_ai.request.model = "%s" && span.gen_ai.system != nil }`, requested, requested)); err != nil || n != 0 {
 		t.Errorf("the span still carries the deprecated gen_ai.system (matched=%d err=%v)", n, err)
 	}
 	waitForTempoSpan(t, tempoURL, fmt.Sprintf(
-		`{ name = "chat" && span.gen_ai.request.model = "%s" && span.gen_ai.provider.name = "renaming" }`,
-		requested), 30*time.Second)
+		`{ name = "chat %s" && span.gen_ai.request.model = "%s" && span.gen_ai.provider.name = "renaming" }`,
+		requested, requested), 30*time.Second)
 }
 
 // tempoSearchCount runs one TraceQL query and reports how many traces matched, or the error Tempo
