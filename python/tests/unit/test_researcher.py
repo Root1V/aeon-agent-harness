@@ -164,3 +164,95 @@ async def test_researcher_recall_observation_uses_the_configured_recall_callable
 
     assert seen_recall_ids == ["obs-123"]
     assert result.finished_reason == "finish"
+
+
+def _decision_response_with_reasoning(decision: dict, reasoning: str) -> dict:
+    """A reasoning model's answer: the decision in `content` AND its analysis channel alongside."""
+    return {
+        "model": "test-model",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": json.dumps(decision),
+                    "reasoning_content": reasoning,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+
+async def test_the_models_reasoning_survives_into_the_next_turn():
+    """PRM-VRT-003: the harness must return a reasoning model's own analysis channel to it.
+
+    THE INSTRUMENT THAT DID NOT EXIST IS THE POINT. Prometheus found their gateway deleting
+    `reasoning_content` from every message of every client, and Synaptum found the same on their
+    side with the loss written down as deliberate. In all three places the field arrived, was
+    stored, and never went back — and nothing failed, because a model that loses its analysis
+    channel answers worse rather than erroring. Every test here asserted what the loop DID with a
+    decision; none asserted what it sent BACK.
+
+    Upstream measured the cost: llama.cpp#27720, closed as not fixable in the parser, 7 failed turns
+    of 120 with the reasoning withheld versus 0 of 120 returning it, and the maintainer's note that
+    omitting it on assistant messages carrying tool calls "produces erratic behaviour".
+    """
+    sent: list[list[dict]] = []
+
+    async def decide(payload: dict) -> dict:
+        sent.append([dict(m) for m in payload["messages"]])
+        if len(sent) == 1:
+            return _decision_response_with_reasoning(
+                {"action": "CALL_TOOL", "tool_name": "search.web", "args": {"query": "q"}},
+                reasoning="I should search before answering.",
+            )
+        return _decision_response_with_reasoning(
+            {"action": "FINISH", "message": "done"}, reasoning="I have enough now."
+        )
+
+    async def execute_tool(name: str, args: dict) -> dict:
+        return {"ok": True}
+
+    result = await Researcher(_subtask("s1", "topic"), "test-model").research(decide, execute_tool)
+    assert result.finished_reason == "finish"
+    assert len(sent) == 2, "the loop did not take a second turn, so this measures nothing"
+
+    second_turn = sent[1]
+    assistant_turns = [m for m in second_turn if m.get("role") == "assistant"]
+    assert assistant_turns, "no assistant turn was replayed at all"
+
+    # The assertion is on what went BACK ON THE WIRE, not on what the loop stored.
+    assert assistant_turns[0].get("reasoning_content") == "I should search before answering.", (
+        "the assistant turn was replayed without its reasoning_content: the model is asked to "
+        "continue from its own turn with its analysis channel removed"
+    )
+    # And `content` is still there: the reasoning is carried ALONGSIDE the answer, never instead of
+    # it. A turn that only reasons has no valid wire form at all (measured against the real platform
+    # in MDL-022: reasoning alone comes back 400).
+    assert assistant_turns[0].get("content"), "the decision itself was lost while adding the reasoning"
+
+
+async def test_a_turn_with_no_reasoning_gains_no_empty_field():
+    """Absent and empty are different claims. A model that reported no reasoning must not get a
+    `reasoning_content: ""` invented for it — the same absent-not-zero rule OBS-013 applied to the
+    usage counters, and the reason the key is omitted rather than defaulted."""
+    sent: list[list[dict]] = []
+
+    async def decide(payload: dict) -> dict:
+        sent.append([dict(m) for m in payload["messages"]])
+        if len(sent) == 1:
+            return _decision_response({"action": "EMIT_MESSAGE", "message": "thinking out loud"})
+        return _decision_response({"action": "FINISH", "message": "done"})
+
+    async def execute_tool(name: str, args: dict) -> dict:
+        return {}
+
+    await Researcher(_subtask("s1", "topic"), "test-model").research(decide, execute_tool)
+    assert len(sent) == 2
+    for message in sent[1]:
+        if message.get("role") == "assistant":
+            assert "reasoning_content" not in message, (
+                f"an empty reasoning_content was invented for a model that reported none: {message}"
+            )

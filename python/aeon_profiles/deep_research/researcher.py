@@ -123,7 +123,7 @@ class Researcher:
     async def research(
         self, decide: DecideFn, execute_tool: ExecuteToolFn, recall: RecallFn | None = None
     ) -> ResearchResult:
-        messages: list[dict[str, str]] = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": build_researcher_instructions(self.subtask, self.allowed_tools)},
             {"role": "user", "content": self.subtask.description},
         ]
@@ -140,7 +140,7 @@ class Researcher:
             raw_output = await decide({"model": self.model, "messages": messages, "max_tokens": MAX_TOKENS_PER_DECISION})
             model_calls += 1
             decision = parse_decision(raw_output)
-            messages.append({"role": "assistant", "content": raw_output["choices"][0]["message"]["content"]})
+            messages.append(_assistant_turn(raw_output["choices"][0]["message"]))
 
             if decision.action == "FINISH":
                 return ResearchResult(
@@ -187,6 +187,44 @@ class Researcher:
                 continue
 
             raise ResearcherError(f"subtask {self.subtask.id!r}: unhandled decision action {decision.action!r}")
+
+
+def _assistant_turn(message: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild the assistant's turn for the history, KEEPING its reasoning channel (PRM-VRT-003).
+
+    This loop used to append `{"role": "assistant", "content": ...}` and nothing else, so a
+    reasoning model was asked to continue from its own turn with its analysis removed. The field
+    arrived, was never stored, and nothing failed — which is why no test caught it for this long.
+
+    MEASURED UPSTREAM, not assumed: llama.cpp#27720 is closed as not fixable in the parser, and the
+    thread reports 7 failed turns of 120 with the reasoning withheld against 0 of 120 returning it,
+    with the maintainer noting that omitting it on assistant messages carrying tool calls "produces
+    erratic behaviour". Prometheus then found their own gateway deleting the field from every
+    message of every client (PRM-VRT-003) and Synaptum found the same in their serializer, with the
+    loss written down as deliberate.
+
+    WHAT THIS LOOP IS AND IS NOT EXPOSED TO. The noisy symptom upstream — HTTP 500 from
+    `peg-native` — needs native tool calls and Harmony. This Researcher uses a TEXT protocol: the
+    model answers with a JSON decision in `content` and tool results come back as `user` turns, so
+    there is no `tool_calls` on the wire here. What we were exposed to is the quiet half Prometheus
+    describes: not an error, just worse answers, which is harder to notice and worse to diagnose.
+    So this is a fix made on upstream's evidence, and it is not a claim that any failure rate of
+    ours will drop.
+
+    THE KEY IS OMITTED WHEN THERE IS NO REASONING, never set to "". Absent means the model reported
+    none; an empty string would claim it reported nothing while having a channel. Same
+    absent-is-not-zero rule as the usage counters in OBS-013.
+
+    AND THE REASONING NEVER REPLACES THE ANSWER. It rides alongside `content`; a turn that only
+    reasons has no valid wire form at all, measured against the real platform in MDL-022 — sending
+    one comes back 400. The Model Gateway drops such a turn before it reaches a provider, so the two
+    layers agree rather than each guessing.
+    """
+    turn: dict[str, Any] = {"role": "assistant", "content": message.get("content")}
+    reasoning = message.get("reasoning_content")
+    if reasoning:
+        turn["reasoning_content"] = reasoning
+    return turn
 
 
 async def run_researchers_in_parallel(
