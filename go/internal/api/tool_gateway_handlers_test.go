@@ -31,6 +31,16 @@ func repoPolicyBundlePath(t *testing.T) string {
 
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	return newTestServerKnowing(t)
+}
+
+// newTestServerKnowing is newTestServer plus extra tool names the executor KNOWS (it still runs the
+// same inert double). It exists because OBS-016 bounded `gen_ai.tool.name` to the catalogue: a test
+// that wants a tool name on a span now has to register it, which is the point — cardinality is
+// bounded by the CATALOGUE and not by the policy, so a registered-but-denied tool is still a
+// legitimate, bounded name.
+func newTestServerKnowing(t *testing.T, known ...string) *httptest.Server {
+	t.Helper()
 	raw, err := os.ReadFile(repoPolicyBundlePath(t))
 	if err != nil {
 		t.Fatalf("reading policy bundle: %v", err)
@@ -53,6 +63,12 @@ func newTestServer(t *testing.T) *httptest.Server {
 	executor.Register("search.web", func(_ string, args map[string]any) (map[string]any, error) {
 		return map[string]any{"status": "executed", "tool": "search.web", "args": args}, nil
 	})
+	for _, name := range known {
+		toolName := name
+		executor.Register(toolName, func(_ string, args map[string]any) (map[string]any, error) {
+			return map[string]any{"status": "executed", "tool": toolName, "args": args}, nil
+		})
+	}
 
 	mux := http.NewServeMux()
 	handlers := &ToolGatewayHandlers{Policy: policy.SingleTenantSet("default", engine), Executor: executor}

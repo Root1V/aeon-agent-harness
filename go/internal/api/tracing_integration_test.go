@@ -97,7 +97,11 @@ func TestDistributedTracingSpansReachTempo(t *testing.T) {
 
 	// "execute_tool" span, via the real Tool Gateway HTTP handler (policy-checked path). The
 	// marker tool name matches no permit and is denied — the span is emitted either way.
-	toolSrv := newTestServer(t)
+	// REGISTERED, so the marker is a catalogue name and not one invented on the wire. OBS-016 stopped
+	// setting `gen_ai.tool.name` for a tool the gateway does not know, and this test used to rely on
+	// exactly that — its comment below still records that the call is DENIED, which remains true and
+	// is the half worth keeping: the span is emitted either way.
+	toolSrv := newTestServerKnowing(t, marker)
 	postExecute(t, toolSrv, "deep-research-general@0.1.0", marker)
 
 	// "invoke_agent" span, via the real Run Controller HTTP handler and a real Temporal server.
@@ -112,6 +116,12 @@ func TestDistributedTracingSpansReachTempo(t *testing.T) {
 	// keeping both is the point — the name is derived from the attribute, so a test that checked only
 	// the name would still pass if `gen_ai.request.model` were dropped.
 	waitForTempoSpan(t, tempoURL, fmt.Sprintf(`{ name = "chat %s" && span.gen_ai.request.model = "%s" }`, marker, marker), 30*time.Second)
-	waitForTempoSpan(t, tempoURL, fmt.Sprintf(`{ name = "execute_tool" && span.gen_ai.tool.name = "%s" }`, marker), 30*time.Second)
+	// OBS-016: `execute_tool {tool}`, and the name exists only for a tool the catalogue has — which is
+	// why the server above now registers the marker. The first rewrite of this assertion tried to
+	// anchor the tool span to this run's chat span with `&&` ("same trace") and FAILED, measured: this
+	// test drives three surfaces independently and does NOT propagate between them, so its three
+	// spans are three traces. That one trace holds all three is the PYTHON test's claim
+	// (test_end_to_end_tracing.py), not this one's.
+	waitForTempoSpan(t, tempoURL, fmt.Sprintf(`{ name = "execute_tool %s" && span.gen_ai.tool.name = "%s" }`, marker, marker), 30*time.Second)
 	waitForTempoSpan(t, tempoURL, fmt.Sprintf(`{ name = "invoke_agent" && span.gen_ai.agent.name = "%s" }`, marker), 30*time.Second)
 }

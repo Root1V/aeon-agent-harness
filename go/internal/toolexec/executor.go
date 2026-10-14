@@ -170,6 +170,20 @@ func NewExecutor() *Executor {
 	return e
 }
 
+// Knows reports whether this executor can run a tool by that name.
+//
+// IT EXISTS FOR TELEMETRY, NOT FOR AUTHORIZATION, and the distinction matters: nothing about a call
+// is permitted or refused on the strength of this answer — Cedar does that, strictly before Execute.
+// What it bounds is CARDINALITY. `gen_ai.tool.name` used to be set from the request body, so any
+// caller could invent a value, and Argus measured what that costs on their side: `spanmetrics` emits
+// `span_name` as a label unconditionally, and they have had three incidents this week from ids
+// reaching a grouping key. Asking the catalogue first is what makes the attribute — and the span
+// name derived from it — a closed set (ARG-AEON-002).
+func (e *Executor) Knows(toolName string) bool {
+	_, ok := e.fns[toolName]
+	return ok
+}
+
 // Register adds or replaces a tool's execution function.
 func (e *Executor) Register(toolName string, fn ExecuteFunc) {
 	e.fns[toolName] = fn

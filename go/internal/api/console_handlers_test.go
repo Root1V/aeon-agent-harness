@@ -60,8 +60,15 @@ func TestAgentConsoleShowsARunEndToEnd(t *testing.T) {
 	if !strings.Contains(page, "SUCCEEDED") {
 		t.Errorf("expected the page to show the real terminal status SUCCEEDED, got:\n%s", page)
 	}
-	if !strings.Contains(page, "invoke_agent") {
-		t.Errorf("expected the page to show the real trace's root span name (invoke_agent), got:\n%s", page)
+	// THE ROOT CHANGED ON PURPOSE (OBS-017). Until a server span accounted for the hop, the root of a
+	// run's trace was `invoke_agent` — the GenAI span — because nothing described "aeon received a
+	// request". Argus asked for that span precisely so a waterfall would stop showing subtrees with
+	// no parent, and the consequence here is that the console's root column now names the HTTP entry
+	// point. That is the honest root, and this assertion follows the behaviour rather than pinning
+	// the shape that was missing a span.
+	if !strings.Contains(page, "POST /runs") {
+		t.Errorf("expected the page to show the real trace's root span name (POST /runs, the server span "+
+			"added in OBS-017), got:\n%s", page)
 	}
 	if strings.Contains(page, "no traces found") {
 		t.Errorf("expected real trace rows, not the empty-state message, got:\n%s", page)
