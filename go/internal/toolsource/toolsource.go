@@ -169,7 +169,7 @@ func (b *Bundle) Validate() error {
 			return err
 		}
 		if s.Auth != nil {
-			if err := validateAuth(s.ID, s.Auth); err != nil {
+			if err := validateAuth(s.ID, s.Auth, s.AllowPlainHTTP); err != nil {
 				return err
 			}
 		}
@@ -255,12 +255,21 @@ func isLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func validateAuth(id string, a *Auth) error {
+func validateAuth(id string, a *Auth, allowPlainHTTP bool) error {
 	if a.TokenURL == "" || a.ClientIDEnv == "" || a.ClientSecretEnv == "" {
 		return fmt.Errorf("source %q: auth needs token_url, client_id_env and client_secret_env", id)
 	}
-	if u, err := url.Parse(a.TokenURL); err != nil || u.Scheme != "https" && !(u.Scheme == "http" && isLoopback(u.Hostname())) {
-		return fmt.Errorf("source %q: auth.token_url %q must be https (or loopback http)", id, a.TokenURL)
+	// THE SAME EXCEPTION REACHES THE TOKEN URL, and leaving it out was an incomplete fix rather than
+	// a cautious one. Veritium's case is a source on the host with aeon-toolgw in Docker: the
+	// endpoint AND the token endpoint are both `host.docker.internal`, so waiving the rule for only
+	// one of them left them needing the socat bridge anyway — the thing the exception existed to
+	// retire. An exception that does not remove the workaround is not an exception.
+	//
+	// It is the more dangerous half and the warning says so: the client SECRET is what crosses a
+	// plaintext token endpoint, where the tool endpoint only carries a bearer token derived from it.
+	// Both are serious; one of them is the credential itself.
+	if err := validateEndpoint(id, a.TokenURL, allowPlainHTTP); err != nil {
+		return fmt.Errorf("source %q: auth.token_url: %w", id, err)
 	}
 	// A VALUE HERE IS A MISTAKE WORTH REFUSING, not a convenience to tolerate: these fields hold the
 	// NAME of an environment variable, and the most likely way to get that wrong is to paste the
@@ -311,6 +320,15 @@ func (b *Bundle) PlainHTTPWarnings() []string {
 		if u, err := url.Parse(s.Endpoint); err == nil && u.Scheme == "http" && !isLoopback(u.Hostname()) {
 			out = append(out, fmt.Sprintf("source %q talks PLAINTEXT HTTP to %s (allow_plain_http: true): its "+
 				"token, arguments and results cross the network in the clear", s.ID, u.Host))
+		}
+		// NAMED SEPARATELY AND WORDED HARDER. A plaintext tool endpoint leaks a derived bearer token;
+		// a plaintext TOKEN endpoint leaks the client secret the token is minted from. An operator
+		// scanning startup logs should be able to tell those two apart at a glance.
+		if s.Auth != nil {
+			if u, err := url.Parse(s.Auth.TokenURL); err == nil && u.Scheme == "http" && !isLoopback(u.Hostname()) {
+				out = append(out, fmt.Sprintf("source %q fetches its TOKEN over PLAINTEXT HTTP from %s "+
+					"(allow_plain_http: true): the CLIENT SECRET itself crosses the network in the clear", s.ID, u.Host))
+			}
 		}
 	}
 	return out

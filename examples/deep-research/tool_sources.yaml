@@ -42,10 +42,12 @@ sources:
     # fuentes que ofrezcan `search.web` colisionen, y no se puede delegar en quien colisiona.
     prefix: veritium.
     refresh: 60s
-    # allow_plain_http: true  # solo si el endpoint es http a un host NO loopback y has decidido
-    #   aceptar que el token, los argumentos y los resultados cruzan la red en claro. Se registra en
-    #   el log en cada arranque. El caso real: la fuente en el host y toolgw en Docker
-    #   (`host.docker.internal`), que Veritium resolvió antes con un puente socat.
+    # allow_plain_http: true  # solo si has decidido aceptar http en claro a un host NO loopback.
+    #   Cubre LAS DOS urls —`endpoint` y `auth.token_url`— y eso importa: por el endpoint viaja un
+    #   bearer derivado, y por el token_url viaja el CLIENT SECRET del que se acuña. Las dos se
+    #   registran en el log en cada arranque, con avisos distintos. Cubrir solo una dejaba a
+    #   Veritium necesitando su puente socat, que es lo que esta excepción venía a retirar.
+    #   El caso real: la fuente en el host y toolgw en Docker (`host.docker.internal`).
     auth:
       token_url: https://veritium.example.test/oauth2/token
       client_id_env: AEON_VERITIUM_MCP_CLIENT_ID

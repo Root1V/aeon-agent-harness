@@ -191,6 +191,83 @@ sources:
 		}
 	})
 
+	// The half that was missing from the first version of the exception, and leaving it out meant
+	// Veritium still needed their socat bridge — which is what the exception existed to retire.
+	t.Run("the exception reaches the token url, which is the half that carries the secret", func(t *testing.T) {
+		// HTTPS ENDPOINT ON PURPOSE, so the only thing that can trip the rule is the token url. With
+		// both in plaintext the endpoint fails first and this subtest would be re-measuring that.
+		body := func(allow string) string {
+			return `kind: ToolSourceBundle
+sources:
+  - id: hostside
+    endpoint: https://tools.example.test/mcp
+    prefix: hostside.
+` + allow + `    auth:
+      token_url: http://host.docker.internal:8010/auth/token
+      client_id_env: AEON_HOSTSIDE_CLIENT_ID
+      client_secret_env: AEON_HOSTSIDE_CLIENT_SECRET
+    tools: [{name: t, side_effect: READ_ONLY, risk: low, descriptor_sha256: "` + okDigest + `"}]
+`
+		}
+		path := filepath.Join(t.TempDir(), "no.yaml")
+		if err := os.WriteFile(path, []byte(body("")), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Error("a plaintext token endpoint was accepted without anybody deciding it")
+		} else if !strings.Contains(err.Error(), "auth.token_url") {
+			t.Errorf("the refusal does not say WHICH url is the problem: %v", err)
+		}
+
+		path = filepath.Join(t.TempDir(), "yes.yaml")
+		if err := os.WriteFile(path, []byte(body("    allow_plain_http: true\n")), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		b, err := Load(path)
+		if err != nil {
+			t.Fatalf("allow_plain_http did not reach the token url, so the socat bridge is still needed: %v", err)
+		}
+		warnings := b.PlainHTTPWarnings()
+		if len(warnings) != 1 {
+			t.Fatalf("warnings = %v, want exactly one, for the token url", warnings)
+		}
+		// WORDED HARDER THAN THE ENDPOINT'S. A plaintext tool endpoint leaks a derived bearer token;
+		// a plaintext token endpoint leaks the client secret it is minted from, and an operator
+		// reading startup logs has to be able to tell them apart.
+		if !strings.Contains(warnings[0], "CLIENT SECRET") {
+			t.Errorf("the warning does not name the client secret, so the worse exposure reads like the milder one: %q", warnings[0])
+		}
+	})
+
+	t.Run("both urls in plaintext are two separate exposures, named separately", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "both.yaml")
+		body := `kind: ToolSourceBundle
+sources:
+  - id: hostside
+    endpoint: http://host.docker.internal:8010/mcp
+    prefix: hostside.
+    allow_plain_http: true
+    auth:
+      token_url: http://host.docker.internal:8010/auth/token
+      client_id_env: AEON_HOSTSIDE_CLIENT_ID
+      client_secret_env: AEON_HOSTSIDE_CLIENT_SECRET
+    tools: [{name: t, side_effect: READ_ONLY, risk: low, descriptor_sha256: "` + okDigest + `"}]
+`
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		b, err := Load(path)
+		if err != nil {
+			t.Fatalf("the real shape of Veritium's case was refused: %v", err)
+		}
+		// This is the configuration that retires their forwarder, so it has to load AND say both
+		// things out loud.
+		if got := len(b.PlainHTTPWarnings()); got != 2 {
+			t.Fatalf("warnings = %d (%v), want 2: the tool endpoint and the token endpoint are different exposures",
+				got, b.PlainHTTPWarnings())
+		}
+	})
+
 	t.Run("loopback plaintext is allowed, because that is where every test of this runs", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "sources.yaml")
 		body := `kind: ToolSourceBundle
