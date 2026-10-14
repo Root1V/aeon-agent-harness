@@ -7,24 +7,28 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/toolexec"
 )
 
-// McpClientPrincipalType is the Cedar entity type every external MCP caller is authorized as
-// (INT-003) — see McpClientPrincipalID for why this isn't per-client.
+// McpClientPrincipalType is the Cedar entity type an external MCP caller is authorized as. The
+// principal ID is the AUTHENTICATED CALLER'S ID since INT-003c — see toolCallHandler.
+//
+// IT USED TO BE ONE SHARED ID, `external-mcp-client`, with a comment arguing that MCP's `clientInfo`
+// is self-reported ("not verified by the protocol... SHOULD NOT [be relied on] for security
+// decisions") and so could not be a principal. That part was and remains correct; the conclusion
+// drawn from it — that we therefore had no usable identity — was not. We never needed `clientInfo`:
+// `/mcp` is mounted behind the same caller authentication as every other route, so the bearer token
+// already identifies the caller exactly as it does on `/execute`.
+//
+// A POLICY THAT NAMED THE OLD ID STOPS MATCHING, which is the one migration cost and is stated here
+// because it is the sort of thing that is discovered instead of read: a permit written as
+// `principal == McpClient::"external-mcp-client"` now matches nothing. One left unconstrained on the
+// principal keeps working. The denial message names the principal that was judged so an operator
+// reads which permit is missing rather than guessing.
 const McpClientPrincipalType = "McpClient"
-
-// McpClientPrincipalID is the single, shared Cedar principal every call arriving through the MCP
-// server is authorized as. Per the 2026-07-28 spec itself, `clientInfo` (an MCP client's
-// self-reported name) is "not verified by the protocol... SHOULD NOT [be relied on] for security
-// decisions" — so it cannot be used as a Cedar principal id without inventing a trust boundary
-// that doesn't exist. Until real MCP client authentication exists (SEC-002's Secret Broker), every
-// external MCP caller shares this one identity, and a policy bundle can grant it only what any
-// anonymous external caller should be allowed to reach — never more than an operator explicitly
-// permits for this exact principal.
-const McpClientPrincipalID = "external-mcp-client"
 
 // NewToolGatewayServer builds a real MCP server (INT-003 — Modo C from the spec) exposing tools as
 // real MCP Tool entries, from Aeon's own governed Tool Registry (TOOL-001). Every tools/call is
@@ -32,8 +36,8 @@ const McpClientPrincipalID = "external-mcp-client"
 // policy-then-execute ordering ToolGatewayHandlers.execute already enforces for native calls (see
 // go/internal/api/tool_gateway_handlers.go); this is a second front door onto the same gate, never
 // a bypass of it.
-func NewToolGatewayServer(tools []*store.ToolRecord, eng *policy.Engine, executor ToolExecutor) *sdkmcp.Server {
-	server, _ := NewToolGatewayCatalog(tools, eng, executor)
+func NewToolGatewayServer(tools []*store.ToolRecord, policies *policy.Set, executor ToolExecutor) *sdkmcp.Server {
+	server, _ := NewToolGatewayCatalog(tools, policies, executor)
 	return server
 }
 
@@ -43,9 +47,9 @@ func NewToolGatewayServer(tools []*store.ToolRecord, eng *policy.Engine, executo
 // startup loop. That separate loop is what had the version bug: it called AddTool once per registry row,
 // and since List returns every version newest-first, each tool ended up registered with its OLDEST
 // schema. One code path means a refresh cannot disagree with a cold start about what the catalogue is.
-func NewToolGatewayCatalog(tools []*store.ToolRecord, eng *policy.Engine, executor ToolExecutor) (*sdkmcp.Server, *Catalog) {
+func NewToolGatewayCatalog(tools []*store.ToolRecord, policies *policy.Set, executor ToolExecutor) (*sdkmcp.Server, *Catalog) {
 	server := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "aeon-toolgw", Version: "0.1.0"}, nil)
-	catalog := NewCatalog(server, eng, executor)
+	catalog := NewCatalog(server, policies, executor)
 	catalog.Apply(tools)
 	return server, catalog
 }
@@ -54,7 +58,7 @@ func NewToolGatewayCatalog(tools []*store.ToolRecord, eng *policy.Engine, execut
 // *toolexec.Executor, so the live catalogue can share exactly this handler instead of a near-copy. A
 // second handler for the MCP path would be a second place the policy-then-execute ordering has to be kept
 // right, which is the one thing INT-003 must not duplicate.
-func toolCallHandler(toolName string, eng *policy.Engine, executor ToolExecutor) sdkmcp.ToolHandler {
+func toolCallHandler(toolName string, policies *policy.Set, executor ToolExecutor) sdkmcp.ToolHandler {
 	return func(ctx context.Context, req *sdkmcp.CallToolRequest) (*sdkmcp.CallToolResult, error) {
 		var args map[string]any
 		if len(req.Params.Arguments) > 0 {
@@ -63,7 +67,42 @@ func toolCallHandler(toolName string, eng *policy.Engine, executor ToolExecutor)
 			}
 		}
 
-		decision := eng.IsAllowedForPrincipal(McpClientPrincipalType, McpClientPrincipalID, toolName)
+		// THE REAL CALLER, NOT ONE SHARED PRINCIPAL (INT-003c).
+		//
+		// `/mcp` sits behind auth.Require like every other route but the probes, so a request that
+		// reaches here is ALREADY authenticated against the caller bundle — and measured: the Caller
+		// survives into the context the SDK hands this handler. The identity was there all along and
+		// this handler threw it away, which is why Veritium found that a per-agent permit does not
+		// apply through `/mcp` and had to add a second, blanket one.
+		//
+		// WHAT THE OLD COMMENT GOT RIGHT AND WHAT IT GOT WRONG. Right: MCP's `clientInfo` is
+		// self-reported, the spec says not to rely on it for security, and using it as a principal
+		// would invent a trust boundary. Wrong: the conclusion that we therefore had no identity. We
+		// are not trusting `clientInfo` here — we are using the bearer token the caller presented,
+		// which is the same identity `/execute` has always used. The backlog entry's own entry
+		// criterion said this needed SPIFFE first; workload identity is a different and stronger
+		// thing, and it was never what stood between us and dropping the shared principal.
+		caller, authenticated := auth.CallerFrom(ctx)
+		if !authenticated {
+			// Unreachable behind auth.Require, and refused rather than defaulted anyway: an absent
+			// identity must never become a permissive one. If this ever fires, the mount moved.
+			return refusal(fmt.Sprintf("no authenticated caller on an %s call: this server must be mounted behind "+
+				"caller authentication", toolName), toolexec.Outcome{}), nil
+		}
+
+		// THE CALLER'S OWN TENANT BUNDLE, and resolving it here is not optional once the principal is
+		// real. The catalogue used to hold ONE engine, the deployment tenant's, which was coherent
+		// while every caller was one principal. With real callers that would authorize a caller of
+		// tenant B against tenant A's policies — so the engine comes from the caller's tenant, and a
+		// tenant with no bundle is DENIED rather than falling back to somebody else's permits
+		// (VRT-AEON-005 T-5).
+		eng, hasBundle := policies.EngineFor(caller.Tenant)
+		if !hasBundle {
+			return refusal(fmt.Sprintf("no policy bundle is loaded for tenant %q, so %s cannot be authorized",
+				caller.Tenant, toolName), toolexec.Outcome{}), nil
+		}
+
+		decision := eng.IsAllowedForPrincipal(McpClientPrincipalType, caller.ID, toolName)
 		if !decision.Allowed {
 			// A policy denial is a real, informative outcome for the caller to see and adjust
 			// to — not a protocol-level failure. Same reasoning the spec itself gives for
@@ -75,7 +114,7 @@ func toolCallHandler(toolName string, eng *policy.Engine, executor ToolExecutor)
 			// option: "qué agente puede llamar cuál" was unanswerable for exactly the callers that
 			// are not ours.
 			refusal := executor.RecordRefusal(ctx,
-				toolexec.Invocation{ToolName: toolName, Args: args, Door: toolexec.DoorMCP},
+				toolexec.Invocation{Tenant: caller.Tenant, ToolName: toolName, Args: args, Door: toolexec.DoorMCP},
 				string(decision.Disposition), decision.PolicyID)
 			return &sdkmcp.CallToolResult{
 				IsError: true,
@@ -84,23 +123,31 @@ func toolCallHandler(toolName string, eng *policy.Engine, executor ToolExecutor)
 					// has: the protocol carries a boolean IsError and nowhere to put "refused, but a person
 					// could still approve this". A caller that can only read prose should still be able to
 					// tell "try something else" from "stop".
-					Text: fmt.Sprintf("denied by policy (%s): %s is not permitted for external MCP callers",
-						decision.Disposition, toolName),
+					// THE PRINCIPAL IS NAMED. With one shared principal there was nothing to say; now a
+					// refusal is actionable — an operator reads which Cedar principal was judged and
+					// knows exactly which permit is missing.
+					Text: fmt.Sprintf("denied by policy (%s): %s is not permitted for %s::%q",
+						decision.Disposition, toolName, McpClientPrincipalType, caller.ID),
 				}},
 				Meta: recordingMeta(refusal),
 			}, nil
 		}
 
-		// INT-003's external MCP callers share one Cedar principal and are not a run, so there is no
-		// run tenant to pass. The empty string is deliberate and the tenant-scoped tools refuse it
-		// rather than fall back to a deployment-wide store — an external caller reading artifacts
-		// somebody's run produced is exactly what GOV-001g closed.
-		// Door, and no run attribution: an external MCP caller is not a run (see above), so RunID and
+		// THE CALLER'S TENANT, which this door could not supply before INT-003c and so passed the empty
+		// string — deliberately, because a tenant-scoped tool refusing is better than one falling back
+		// to a deployment-wide store (GOV-001g). That reasoning stands; what changed is that there is
+		// now a real tenant to pass, from the authenticated token rather than from the wire. So a
+		// tenant-scoped tool reached through `/mcp` now works, scoped to the caller's own tenant,
+		// instead of always refusing.
+		//
+		// Door, and no run attribution: an external MCP caller is not a run, so RunID and
 		// StepID stay empty and the bitácora records that honestly instead of inventing one. Before
 		// INT-013 this door recorded NOTHING — not the execution, and not even the denial above, which
 		// the HTTP door has journalled since INT-011. Which entrance you used decided whether your call
 		// existed in the record.
-		out, err := executor.Execute(ctx, toolexec.Invocation{ToolName: toolName, Args: args, Door: toolexec.DoorMCP})
+		out, err := executor.Execute(ctx, toolexec.Invocation{
+			Tenant: caller.Tenant, ToolName: toolName, Args: args, Door: toolexec.DoorMCP,
+		})
 		if err != nil {
 			return &sdkmcp.CallToolResult{
 				IsError: true,
@@ -181,4 +228,16 @@ func contentBlocksFrom(content []any) ([]sdkmcp.Content, error) {
 		return nil, fmt.Errorf("decoding content: %w", err)
 	}
 	return decoded.Content, nil
+}
+
+// refusal is a tool-level refusal: the call reached us, we would not run it, and the caller can read
+// why. A protocol-level error would say instead that the call itself failed, which the spec is
+// explicit about keeping apart — "otherwise the LLM would not be able to see that an error occurred
+// and self-correct".
+func refusal(text string, out toolexec.Outcome) *sdkmcp.CallToolResult {
+	return &sdkmcp.CallToolResult{
+		IsError: true,
+		Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: text}},
+		Meta:    recordingMeta(out),
+	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/toolexec"
@@ -28,9 +29,14 @@ func toolGatewayTestDSN(t *testing.T) string {
 	return dsn
 }
 
+// THE PRINCIPAL IS THE AUTHENTICATED CALLER since INT-003c, and this bundle naming the old shared
+// `external-mcp-client` is the migration cost in miniature: it matched nothing, so search.web below
+// would have been denied and this test's "allowed" assertion would have failed. It skipped without
+// Postgres, which is why the change did not surface it immediately — worth recording, because the
+// same edit is what any operator with a permit naming the old id has to make.
 const testPolicyBundle = `
 permit(
-  principal == McpClient::"external-mcp-client",
+  principal == McpClient::"` + testMcpCaller + `",
   action,
   resource
 ) when {
@@ -123,9 +129,12 @@ func newRealToolGatewayServer(t *testing.T) *httptest.Server {
 		return map[string]any{"status": "executed", "tool": "search.web", "args": args}, nil
 	})
 
-	mcpServer := NewToolGatewayServer(tools, eng, executor)
+	mcpServer := NewToolGatewayServer(tools, policy.SingleTenantSet(testTenant, eng), executor)
 	handler := sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return mcpServer }, &sdkmcp.StreamableHTTPOptions{Stateless: true})
-	srv := httptest.NewServer(handler)
+	// BEHIND CALLER AUTHENTICATION, as every route of every binary is. Since INT-003c the tool
+	// handler authorizes the AUTHENTICATED caller instead of one shared principal, so a test that
+	// mounted this bare would be exercising a path no deployment runs — and would get refused.
+	srv := httptest.NewServer(requireTestCaller(t)(handler))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -138,7 +147,7 @@ func TestToolGatewayServerEndToEndWithRealAdapter(t *testing.T) {
 	srv := newRealToolGatewayServer(t)
 	ctx := context.Background()
 
-	session, err := NewAdapter().Connect(ctx, srv.URL)
+	session, err := NewAdapter().ConnectWithClient(ctx, srv.URL, mcpTestClient())
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -190,4 +199,39 @@ func TestToolGatewayServerEndToEndWithRealAdapter(t *testing.T) {
 	if !strings.Contains(deniedOutcome.Text, "denied by policy") {
 		t.Errorf("shell.exec denial text = %q, want it to explain the policy denial", deniedOutcome.Text)
 	}
+}
+
+// The identity the tests in this package present. One caller, one tenant: this package is about the
+// MCP surface, and multi-tenant policy resolution is asserted where it belongs (the api package's
+// own tests).
+const (
+	testTenant    = "default"
+	testMcpCaller = "mcp-test-caller"
+	testMcpToken  = "mcp-test-token-not-a-secret"
+)
+
+// requireTestCaller wraps a handler in the real caller-authentication middleware with one caller.
+func requireTestCaller(t *testing.T) func(http.Handler) http.Handler {
+	t.Helper()
+	a, err := auth.Load(auth.CallerBundleDoc{Kind: "CallerBundle", Callers: []auth.Caller{{
+		ID: testMcpCaller, Kind: auth.KindService, Tenant: testTenant, TokenSHA256: auth.HashToken(testMcpToken),
+	}}})
+	if err != nil {
+		t.Fatalf("auth.Load: %v", err)
+	}
+	return auth.Require(a)
+}
+
+// mcpTestClient is an http.Client that presents the test caller's token, which is what an external
+// MCP client does in production.
+func mcpTestClient() *http.Client {
+	return &http.Client{Transport: bearerRoundTripper{token: testMcpToken}}
+}
+
+type bearerRoundTripper struct{ token string }
+
+func (b bearerRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+b.token)
+	return http.DefaultTransport.RoundTrip(r)
 }

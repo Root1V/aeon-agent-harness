@@ -296,12 +296,15 @@ func main() {
 		if err != nil {
 			log.Fatalf("aeon-toolgw: listing the Tool Registry for the MCP server: %v", err)
 		}
-		// The MCP catalog is built once at startup, like the tool executor, so it serves the
-		// DEPLOYMENT's tenant. A gateway serving several tenants needs this per-request too —
-		// said here rather than discovered, same as the other startup-built surfaces above.
-		mcpEngine, ok := policies.EngineFor(deploymentTenant)
-		if !ok {
-			log.Fatalf("aeon-toolgw: the MCP catalog needs a policy bundle for tenant %q and none is loaded", deploymentTenant)
+		// THE WHOLE SET, NOT ONE ENGINE (INT-003c). This used to resolve the DEPLOYMENT tenant's
+		// engine once at startup, with a note saying a multi-tenant gateway would need it per
+		// request. That is now what happens: `/mcp` authenticates its caller like every other route,
+		// so the handler resolves the engine from the CALLER's tenant and denies a tenant with no
+		// bundle — rather than judging every caller against one tenant's policies.
+		if _, ok := policies.EngineFor(deploymentTenant); !ok {
+			// Still fatal for the deployment tenant: a gateway whose own tenant has no bundle is
+			// misconfigured, and finding out on the first call is worse than not starting.
+			log.Fatalf("aeon-toolgw: no policy bundle is loaded for the deployment tenant %q", deploymentTenant)
 		}
 		// TOOL-010: external MCP servers registered as sources of tools. Their approved tools become
 		// callable through the SAME executor every door uses, so Cedar is in front of a federated call
@@ -335,7 +338,7 @@ func main() {
 				len(federated), len(sources.Sources), bundlePath)
 		}
 
-		mcpServer, catalog := aeonmcp.NewToolGatewayCatalog(tools, mcpEngine, executor)
+		mcpServer, catalog := aeonmcp.NewToolGatewayCatalog(tools, policies, executor)
 		mux.Handle("/mcp", sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server { return mcpServer }, &sdkmcp.StreamableHTTPOptions{Stateless: true}))
 		// The count reported is the DISTINCT TOOLS exposed, not the registry rows read. List returns every
 		// version of every tool, so the old message said "213 tool(s)" for a catalogue of a handful — a

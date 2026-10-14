@@ -1054,20 +1054,20 @@ fichero mal nombrado. Sin `down`, a propósito.
   criterio de aceptación es verificable sin Veritium y un servidor de prueba no necesita token. La
   primera conexión a una fuente real es lo que la ejercita.
 
-### Catálogo MCP de salida (`INT-003`): identidad real de cliente MCP
+### ~~Catálogo MCP de salida (`INT-003`): identidad real de cliente MCP~~ — HECHA (`INT-003c`)
 
-> **El refresco en vivo se PROMOVIÓ como `INT-003b` el 2026-09-29** y queda cerrado. Al implementarlo
-> apareció lo que esta entrada no podía anticipar: el catálogo no solo era estático, **exponía la versión
-> MÁS ANTIGUA** de cada tool, porque `List` devuelve todas las versiones y el bucle de arranque dejaba que
-> la última iterada ganara. Refrescar sin arreglarlo habría refrescado a la versión equivocada.
->
-> **Lo que sigue aquí es la otra mitad:** todo llamador MCP externo se autoriza como un único principal
-> Cedar compartido (`McpClient::"external-mcp-client"`), porque el `clientInfo` que un cliente MCP declara
-> no lo verifica el protocolo y usarlo como principal sería inventar una frontera de confianza que no
-> existe. Necesita identidad de carga de trabajo real (SPIFFE/SVID) — ver su entrada en este fichero.
->
-> - **Criterio de entrada:** que exista un mecanismo real de identidad de workload.
-> - **Coste:** M.
+- **Cerrada el 2026-10-14.** Y su criterio de entrada estaba **obsoleto**: decía «que exista un
+  mecanismo real de identidad de workload (SPIFFE/SVID)». Eso es identidad de *workload* —qué
+  proceso— y nunca fue lo que faltaba. `/mcp` se monta detrás de `auth.Require` como toda ruta menos
+  las sondas, así que la identidad de *caller* existía desde `SEC-005` y este handler la tiraba.
+  Medido antes de escribir: el `Caller` autenticado sobrevive hasta el contexto que el SDK le pasa al
+  handler del tool.
+- **Lo que la entrada acertaba y lo que no.** Acertaba en que el `clientInfo` de MCP es
+  autodeclarado y no puede ser un principal. Lo que no se seguía de ahí es que no tuviéramos
+  identidad: no usamos `clientInfo`, usamos el token que el llamador presenta, el mismo que
+  `/execute` ha usado siempre.
+- **SPIFFE sigue siendo deseable y es otra entrada** (identidad de workload en este mismo fichero):
+  ataría la identidad al proceso en vez de a un secreto compartido. No bloqueaba esto.
 
 ### Catálogo MCP de salida (contexto original, para la trazabilidad)
 
