@@ -80,6 +80,11 @@ def _spans_of(trace: dict) -> list[tuple[str, str, str]]:
     return out
 
 
+# The Go tool-gateway span's name. `shell.exec` is what this test calls, and OBS-016 made the span
+# `execute_tool {tool}` for any tool the catalogue has — including one that policy then denies.
+EXECUTE_TOOL_SPAN = "execute_tool shell.exec"
+
+
 def test_run_produces_one_trace_across_both_languages():
     _require_stack()
     from aeon_observability import current_traceparent, flush, init_tracing, run_span
@@ -140,12 +145,17 @@ def test_run_produces_one_trace_across_both_languages():
         f"the Go span is not in the SAME trace as the Python one — this is the exact failure the feature "
         f"fixes, and it looks like success to any test that queries the two spans separately: {spans}"
     )
-    assert "invoke_agent" in names and "execute_tool" in names, f"spans = {spans}"
+    # `execute_tool {tool}` since OBS-016, not `execute_tool` alone — the span NAME convention the
+    # ecosystem agreed in VRT-AXO-002 and Argus cleared in ARG-AEON-002 after measuring that no rule
+    # of theirs filters on it. The exact name is asserted rather than a prefix: this call is DENIED by
+    # policy (403 above) and the name is still there, because cardinality is bounded by the CATALOGUE
+    # and `shell.exec` is in it — a tool the gateway does not know gets no name and no attribute.
+    assert "invoke_agent" in names and EXECUTE_TOOL_SPAN in names, f"spans = {spans}"
 
     # PARENTAGE, asserted separately from co-location. Two spans can share a trace id and still both be
     # roots, which reads as one trace in a list and as two disconnected stories in a waterfall.
     parents = {n: p for _, n, p in spans}
-    assert parents.get("execute_tool"), (
+    assert parents.get(EXECUTE_TOOL_SPAN), (
         "the Go execute_tool span has no parent — it shares the trace id but is a second root, so the "
         "waterfall still shows two disconnected stories"
     )

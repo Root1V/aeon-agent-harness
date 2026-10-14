@@ -21,7 +21,8 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
 
-// toolGatewayTracer emits OBS-001's "execute_tool" spans (OTel GenAI semantic conventions) around
+// toolGatewayTracer emits OBS-001's execute_tool spans, named `execute_tool {tool}` per VRT-AXO-002
+// and OBS-016 when the tool is in the catalogue (OTel GenAI semantic conventions), around
 // the policy-checked execution path. A no-op until some binary calls tracing.Init
 // (go/internal/tracing) — safe regardless of whether tracing is wired up.
 var toolGatewayTracer = otel.Tracer("aeon-toolgw")
@@ -204,9 +205,29 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 
 	ctx, span := toolGatewayTracer.Start(r.Context(), "execute_tool", trace.WithAttributes(
 		attribute.String("gen_ai.operation.name", "execute_tool"),
-		attribute.String("gen_ai.tool.name", body.ToolName),
 	))
 	defer span.End()
+	// `gen_ai.tool.name` AND THE SPAN NAME ONLY FOR A TOOL THE CATALOGUE HAS (OBS-016).
+	//
+	// This used to set the attribute from `body.ToolName` — straight off the wire, on a span created
+	// before the policy check and before anything resolved the name — and the Tool Registry requires
+	// only that a name be non-empty. Measured against real Tempo before this changed: a request
+	// naming `read_case_<id>` put that value in the store as `gen_ai.tool.name`. Every distinct value
+	// a caller invents is a metric series on Argus's side, and the `{operation} {tool}` span name
+	// below would have made it a span name too.
+	//
+	// Argus asked for closed cardinality as the CONDITION on that rename (ARG-AEON-002), having had
+	// three incidents this week from ids reaching a grouping key — including an alert signature that
+	// sent 335 notifications for one error. Their sentence is the rule: what groups cannot contain
+	// what distinguishes.
+	//
+	// A DENIED call to a KNOWN tool keeps both: the value is in the catalogue, so it is bounded, and
+	// Argus's rules read the attribute. An unknown name keeps neither and the span stays
+	// `execute_tool`, which is honest — nothing was executed and nothing in the catalogue was named.
+	if h.Executor != nil && h.Executor.Knows(body.ToolName) {
+		span.SetAttributes(attribute.String("gen_ai.tool.name", body.ToolName))
+		span.SetName("execute_tool " + body.ToolName)
+	}
 
 	// SEC-005: the caller may only present an agent its own entry lists.
 	//

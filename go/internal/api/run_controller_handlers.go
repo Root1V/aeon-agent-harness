@@ -126,6 +126,31 @@ func checkNotQuarantined(ctx context.Context, registry *store.AgentRegistry, age
 }
 
 func (h *RunControllerHandlers) start(w http.ResponseWriter, r *http.Request) {
+	// A SERVER SPAN FOR THE HOP ITSELF (OBS-017, asked for in ARG-AEON-001).
+	//
+	// Argus brought a trace with 217 spans where three veritium-worker activities pointed at a parent
+	// that does not exist in their store, and measured zero aeon spans in it — not a sampling
+	// artifact, the trace was kept whole. The context crossing us was already right (the trace_id
+	// survives the hop, which is why the chain holds at all); what was missing is any span of OURS
+	// accounting for the hop, so a waterfall showed three subtrees floating and nobody could answer
+	// whether a slow case waited in the queue or waited on us accepting it.
+	//
+	// FIRST THING IN THE HANDLER, before the body is even decoded: a malformed request is still a
+	// request that arrived, and a server span whose existence depends on the payload parsing cannot
+	// account for the time of the ones that do not.
+	//
+	// KIND SERVER, AND THAT IS THE POINT rather than a detail. Every span this codebase emitted was
+	// Internal by default — including invoke_agent below — so there was no span describing "aeon
+	// received a request" anywhere, in any surface. The GenAI span stays a CHILD of this one: it
+	// describes the agent invocation, not the HTTP hop.
+	//
+	// `{method} {route}` per HTTP semconv, with NOTHING ELSE on it. Argus asked for exactly that —
+	// "ni atributos nuestros, ni semántica de Veritium" — and a server span that grows attributes is
+	// how a hop span turns into a second place to maintain conventions.
+	ctx, serverSpan := runControllerTracer.Start(r.Context(), "POST /runs", trace.WithSpanKind(trace.SpanKindServer))
+	defer serverSpan.End()
+	r = r.WithContext(ctx)
+
 	var body startRunRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, err)
