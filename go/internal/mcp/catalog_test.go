@@ -104,7 +104,7 @@ func TestMcpCatalogExposesTheNewestVersionOfEachTool(t *testing.T) {
 				rows[0], rows[1] = rows[1], rows[0]
 			}
 			t.Run(name, func(t *testing.T) {
-				server, _ := NewToolGatewayCatalog(rows, permitEverything(t), fakeExecutor{})
+				server, _ := NewToolGatewayCatalog(rows, policy.SingleTenantSet(testTenant, permitEverything(t)), fakeExecutor{})
 				listed := listedTools(t, server)
 				if len(listed) != 1 {
 					t.Fatalf("listed %d tools, want 1 — two versions of one tool are one tool: %v", len(listed), listed)
@@ -141,7 +141,7 @@ func TestMcpCatalogRefreshesLive(t *testing.T) {
 	now := time.Now()
 	server, catalog := NewToolGatewayCatalog(
 		[]*store.ToolRecord{toolRecord("search.web", "1.0.0", "v1", now)},
-		permitEverything(t), fakeExecutor{},
+		policy.SingleTenantSet(testTenant, permitEverything(t)), fakeExecutor{},
 	)
 
 	if listed := listedTools(t, server); len(listed) != 1 || listed["search.web"] != "v1" {
@@ -238,7 +238,7 @@ func (f *failingLister) List(context.Context) ([]*store.ToolRecord, error) {
 func TestAFailedRefreshKeepsThePreviousCatalog(t *testing.T) {
 	now := time.Now()
 	initial := []*store.ToolRecord{toolRecord("search.web", "1.0.0", "v1", now)}
-	server, catalog := NewToolGatewayCatalog(initial, permitEverything(t), fakeExecutor{})
+	server, catalog := NewToolGatewayCatalog(initial, policy.SingleTenantSet(testTenant, permitEverything(t)), fakeExecutor{})
 
 	lister := &failingLister{tools: []*store.ToolRecord{
 		toolRecord("search.web", "1.0.0", "v1", now),
@@ -278,7 +278,7 @@ func TestAFailedRefreshKeepsThePreviousCatalog(t *testing.T) {
 
 // TestWatchWithZeroIntervalDoesNothing: a disabled refresh must return, not spin.
 func TestWatchWithZeroIntervalDoesNothing(t *testing.T) {
-	_, catalog := NewToolGatewayCatalog(nil, permitEverything(t), fakeExecutor{})
+	_, catalog := NewToolGatewayCatalog(nil, policy.SingleTenantSet(testTenant, permitEverything(t)), fakeExecutor{})
 	lister := &failingLister{}
 	done := make(chan struct{})
 	go func() {

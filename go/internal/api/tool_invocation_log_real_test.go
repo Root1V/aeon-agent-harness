@@ -120,18 +120,9 @@ func TestEveryDoorRecordsTheInvocation(t *testing.T) {
 			ToolID: toolName + ".1.0.0", Version: "1.0.0", Name: toolName,
 			Descriptor: map[string]any{"description": "probe", "input_schema": map[string]any{"type": "object"}},
 		}
-		mcpServer, _ := aeonmcp.NewToolGatewayCatalog([]*store.ToolRecord{row}, engine, executor)
+		mcpServer, _ := aeonmcp.NewToolGatewayCatalog([]*store.ToolRecord{row}, policy.SingleTenantSet(tenant, engine), executor)
 
-		clientTransport, serverTransport := sdkmcp.NewInMemoryTransports()
-		if _, err := mcpServer.Connect(ctx, serverTransport, nil); err != nil {
-			t.Fatalf("mcp server connect: %v", err)
-		}
-		cs, err := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "int-013-test", Version: "0"}, nil).
-			Connect(ctx, clientTransport, nil)
-		if err != nil {
-			t.Fatalf("mcp client connect: %v", err)
-		}
-		defer cs.Close()
+		cs := connectMcpAuthed(t, mcpServer, "int-013-test")
 
 		before := countForTool(t, ctx, log, toolName, toolexec.DoorMCP)
 		res, err := cs.CallTool(ctx, &sdkmcp.CallToolParams{Name: toolName, Arguments: map[string]any{"value": "c"}})
@@ -240,17 +231,8 @@ func TestEveryDoorRecordsTheInvocation(t *testing.T) {
 			ToolID: toolName + ".1.0.0", Version: "1.0.0", Name: toolName,
 			Descriptor: map[string]any{"description": "probe", "input_schema": map[string]any{"type": "object"}},
 		}
-		mcpServer, _ := aeonmcp.NewToolGatewayCatalog([]*store.ToolRecord{row}, denyEverythingEngine(t), executor)
-		clientTransport, serverTransport := sdkmcp.NewInMemoryTransports()
-		if _, err := mcpServer.Connect(ctx, serverTransport, nil); err != nil {
-			t.Fatalf("mcp server connect: %v", err)
-		}
-		cs, err := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "int-014-test", Version: "0"}, nil).
-			Connect(ctx, clientTransport, nil)
-		if err != nil {
-			t.Fatalf("mcp client connect: %v", err)
-		}
-		defer cs.Close()
+		mcpServer, _ := aeonmcp.NewToolGatewayCatalog([]*store.ToolRecord{row}, policy.SingleTenantSet(tenant, denyEverythingEngine(t)), executor)
+		cs := connectMcpAuthed(t, mcpServer, "int-014-test")
 
 		before := countDenials(t, ctx, log, toolName, toolexec.DoorMCP)
 		res, err := cs.CallTool(ctx, &sdkmcp.CallToolParams{Name: toolName, Arguments: map[string]any{}})
@@ -404,4 +386,39 @@ func denyEverythingEngine(t *testing.T) *policy.Engine {
 		t.Fatalf("LoadEngine: %v", err)
 	}
 	return eng
+}
+
+// connectMcpAuthed mounts Aeon's MCP surface over real HTTP behind this package's real caller
+// authentication, and connects a client that presents the credential.
+//
+// NOT AN IN-MEMORY TRANSPORT, which is what these subtests used. Since INT-003c the tool handler
+// authorizes the AUTHENTICATED caller instead of one shared principal, and an in-memory transport
+// carries no HTTP request and therefore no caller — so the handler would refuse every call, and a
+// test built that way would be exercising a path no deployment runs.
+func connectMcpAuthed(t *testing.T, server *sdkmcp.Server, clientName string) *sdkmcp.ClientSession {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", sdkmcp.NewStreamableHTTPHandler(
+		func(*http.Request) *sdkmcp.Server { return server }, &sdkmcp.StreamableHTTPOptions{Stateless: true}))
+	srv := httptest.NewServer(authWrap(t, mux, "deep-research-general@0.1.0"))
+	t.Cleanup(srv.Close)
+
+	cs, err := sdkmcp.NewClient(&sdkmcp.Implementation{Name: clientName, Version: "0"}, nil).
+		Connect(context.Background(), &sdkmcp.StreamableClientTransport{
+			Endpoint:   srv.URL + "/mcp",
+			HTTPClient: &http.Client{Transport: testCallerBearer{}},
+		}, nil)
+	if err != nil {
+		t.Fatalf("mcp client connect: %v", err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
+type testCallerBearer struct{}
+
+func (testCallerBearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+testCallerToken)
+	return http.DefaultTransport.RoundTrip(r)
 }

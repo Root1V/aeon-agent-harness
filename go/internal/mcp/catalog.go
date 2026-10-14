@@ -30,7 +30,7 @@ import (
 // worst shape of wrong: a client validating its arguments against it sends what an old version wanted.
 type Catalog struct {
 	server   *sdkmcp.Server
-	eng      *policy.Engine
+	policies *policy.Set
 	executor ToolExecutor
 
 	mu sync.Mutex
@@ -73,8 +73,8 @@ func (c CatalogChange) Empty() bool {
 }
 
 // NewCatalog builds a catalogue over an already-constructed MCP server.
-func NewCatalog(server *sdkmcp.Server, eng *policy.Engine, executor ToolExecutor) *Catalog {
-	return &Catalog{server: server, eng: eng, executor: executor, registered: map[string]string{}}
+func NewCatalog(server *sdkmcp.Server, policies *policy.Set, executor ToolExecutor) *Catalog {
+	return &Catalog{server: server, policies: policies, executor: executor, registered: map[string]string{}}
 }
 
 // CurrentVersions picks the newest record for each tool name.
@@ -134,7 +134,7 @@ func (c *Catalog) Apply(tools []*store.ToolRecord) CatalogChange {
 		description, _ := rec.Descriptor["description"].(string)
 		c.server.AddTool(
 			&sdkmcp.Tool{Name: rec.Name, Description: description, InputSchema: schema},
-			toolCallHandler(rec.Name, c.eng, c.executor),
+			toolCallHandler(rec.Name, c.policies, c.executor),
 		)
 		c.registered[rec.Name] = fp
 		if known {

@@ -12,6 +12,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/aeon-ai/aeon/go/internal/auth"
 	aeonmcp "github.com/aeon-ai/aeon/go/internal/mcp"
 	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/store"
@@ -122,7 +123,7 @@ func TestAFederatedMcpSourceIsListedGovernedAndCalled(t *testing.T) {
 	// Cedar permits ONE of the two and nothing else. Both halves of the criterion ride on this one
 	// bundle, so neither can pass by the policy being wrong in a convenient direction.
 	engine := enginePermitting(t, "veritium.extract_document")
-	mcpServer, _ := aeonmcp.NewToolGatewayCatalog(rows, engine, executor)
+	mcpServer, _ := aeonmcp.NewToolGatewayCatalog(rows, policy.SingleTenantSet(aeonTenant, engine), executor)
 	cs := connect(t, mcpServer)
 
 	t.Run("tools/list of aeon-toolgw shows both tools, namespaced by the source prefix", func(t *testing.T) {
@@ -371,19 +372,48 @@ func enginePermitting(t *testing.T, toolName string) *policy.Engine {
 	return eng
 }
 
+// The identity Aeon's own MCP surface authenticates in these tests. Since INT-003c the tool handler
+// authorizes the AUTHENTICATED caller rather than one shared principal, so these tests mount the
+// catalogue over real HTTP behind the real middleware — an in-memory transport carries no HTTP
+// request and therefore no caller, and the handler would refuse every call.
+const (
+	aeonTenant    = "default"
+	aeonCallerID  = "tool-010-test-caller"
+	aeonCallerTok = "tool-010-test-token-not-a-secret"
+)
+
 func connect(t *testing.T, server *sdkmcp.Server) *sdkmcp.ClientSession {
 	t.Helper()
-	clientTransport, serverTransport := sdkmcp.NewInMemoryTransports()
-	if _, err := server.Connect(context.Background(), serverTransport, nil); err != nil {
-		t.Fatalf("server connect: %v", err)
+	a, err := auth.Load(auth.CallerBundleDoc{Kind: "CallerBundle", Callers: []auth.Caller{{
+		ID: aeonCallerID, Kind: auth.KindService, Tenant: aeonTenant, TokenSHA256: auth.HashToken(aeonCallerTok),
+	}}})
+	if err != nil {
+		t.Fatalf("auth.Load: %v", err)
 	}
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", sdkmcp.NewStreamableHTTPHandler(
+		func(*http.Request) *sdkmcp.Server { return server }, &sdkmcp.StreamableHTTPOptions{Stateless: true}))
+	srv := httptest.NewServer(auth.Require(a)(mux))
+	t.Cleanup(srv.Close)
+
 	cs, err := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "tool-010-test", Version: "0"}, nil).
-		Connect(context.Background(), clientTransport, nil)
+		Connect(context.Background(), &sdkmcp.StreamableClientTransport{
+			Endpoint:   srv.URL + "/mcp",
+			HTTPClient: &http.Client{Transport: testBearer{token: aeonCallerTok}},
+		}, nil)
 	if err != nil {
 		t.Fatalf("client connect: %v", err)
 	}
 	t.Cleanup(func() { _ = cs.Close() })
 	return cs
+}
+
+type testBearer struct{ token string }
+
+func (b testBearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer "+b.token)
+	return http.DefaultTransport.RoundTrip(r)
 }
 
 var _ = store.ToolRecord{}
