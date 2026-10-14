@@ -65,6 +65,16 @@ type SourceReport struct {
 	// Drifted names each approved tool whose live descriptor no longer matches the pinned digest,
 	// with what was observed, so a review can end in a paste rather than in a guess.
 	Drifted map[string]string
+	// Pending names each tool DECLARED with an empty descriptor_sha256 — a person has not reviewed
+	// it yet — with the digest observed now. It is kept apart from Drifted because the actions
+	// differ: a pending tool needs a first review, a drifted one needs a re-review of something
+	// that changed. Both are unserved; conflating them is how an operator approves a change
+	// thinking they are approving a new tool.
+	//
+	// THIS STATE EXISTS BECAUSE THE DOCUMENTED FLOW DID NOT WORK. Veritium followed our example,
+	// left the digest empty, and the gateway refused to start — so the log that was supposed to
+	// print the digest never ran.
+	Pending map[string]string
 	// Missing are approved tools the source no longer offers at all.
 	Missing []string
 	Err     error
@@ -80,7 +90,7 @@ func (f *Federation) Refresh(ctx context.Context) []SourceReport {
 }
 
 func (f *Federation) refreshSource(ctx context.Context, s *Source) SourceReport {
-	report := SourceReport{SourceID: s.ID, Drifted: map[string]string{}}
+	report := SourceReport{SourceID: s.ID, Drifted: map[string]string{}, Pending: map[string]string{}}
 
 	session, err := f.session(ctx, s)
 	if err != nil {
@@ -108,6 +118,10 @@ func (f *Federation) refreshSource(ctx context.Context, s *Source) SourceReport 
 		digest, err := DescriptorFingerprint(d.Name, d.Description, d.InputSchema)
 		if err != nil {
 			report.Drifted[d.Name] = fmt.Sprintf("descriptor could not be canonicalized: %v", err)
+			continue
+		}
+		if !approval.Approved() {
+			report.Pending[d.Name] = digest
 			continue
 		}
 		if digest != approval.DescriptorSHA256 {
@@ -194,11 +208,13 @@ func (f *Federation) registerExecutor(s *Source, sourceToolName, qualified strin
 			// INT-013 records it as outcome=error with this text.
 			return nil, fmt.Errorf("toolsource: %s/%s reported an error: %s", endpointID, sourceToolName, outcome.Text)
 		}
-		return map[string]any{
-			"source": endpointID,
-			"tool":   sourceToolName,
-			"text":   outcome.Text,
-		}, nil
+		// FORWARDED, NOT RE-WRAPPED (TOOL-010b). This used to return
+		// `{"source","tool","text"}`, and the MCP door then JSON-encoded that map into a single text
+		// block — so a client decoded twice and the structured shape the upstream tool declared was
+		// gone. Veritium measured exactly that against their own server. An agent calling a
+		// federated tool now sees what it would see calling the source directly; which source
+		// answered is already in the tool's qualified name.
+		return toolexec.ForwardedResult(outcome.Content, outcome.StructuredContent), nil
 	})
 }
 
@@ -255,6 +271,10 @@ func logReport(r SourceReport) {
 	if len(r.NotApproved) > 0 {
 		log.Printf("aeon-toolgw: tool source %q offers %d tool(s) nobody approved, not served: %v",
 			r.SourceID, len(r.NotApproved), r.NotApproved)
+	}
+	for name, observed := range r.Pending {
+		log.Printf("aeon-toolgw: tool source %q tool %q NOT SERVED: declared but not approved yet. Review its "+
+			"descriptor and, if it is acceptable, set descriptor_sha256: %s", r.SourceID, name, observed)
 	}
 	for name, observed := range r.Drifted {
 		log.Printf("aeon-toolgw: tool source %q tool %q NOT SERVED: its descriptor changed since it was "+

@@ -91,16 +91,16 @@ sources:
 		want: "side_effect and risk are required",
 		why:  "tools/list reports neither, and guessing turns a tool with effects into a read",
 	}, {
-		name: "an approval with no pinned descriptor",
+		name: "a pin that is not a digest at all",
 		yaml: `kind: ToolSourceBundle
 sources:
   - id: one
     endpoint: https://tools.example.test/mcp
     prefix: one.
-    tools: [{name: t, side_effect: READ_ONLY, risk: low}]
+    tools: [{name: t, side_effect: READ_ONLY, risk: low, descriptor_sha256: "probably-fine"}]
 `,
-		want: "descriptor_sha256 must be",
-		why:  "a pin that defaults to whatever arrives is not a pin, and this is the half that cannot be added later",
+		want: "not a 64-character hex",
+		why:  "a pin that is not a digest can never match, so it would silently mean 'never serve this'",
 	}, {
 		name: "a source that approves nothing",
 		yaml: `kind: ToolSourceBundle
@@ -129,6 +129,67 @@ sources:
 			}
 		})
 	}
+
+	// AN EMPTY PIN IS ACCEPTED, and this used to be refused. Veritium followed our documented flow —
+	// declare the tool, start once, read the digest from the log — and the gateway exited inside
+	// Load, before connecting, so the log never ran. The tool is still not served; the only thing
+	// that changed is that an operator can now reach the digest.
+	t.Run("an empty pin loads, because that is how an operator reaches the digest", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "sources.yaml")
+		body := `kind: ToolSourceBundle
+sources:
+  - id: one
+    endpoint: https://tools.example.test/mcp
+    prefix: one.
+    tools: [{name: t, side_effect: READ_ONLY, risk: low}]
+`
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		b, err := Load(path)
+		if err != nil {
+			t.Fatalf("an unapproved tool made the whole bundle unloadable: %v", err)
+		}
+		if b.Sources[0].Tools[0].Approved() {
+			t.Error("a tool with no digest reports itself approved")
+		}
+	})
+
+	t.Run("plaintext to a non-loopback host needs an explicit, logged decision", func(t *testing.T) {
+		body := func(allow string) string {
+			return `kind: ToolSourceBundle
+sources:
+  - id: hostside
+    endpoint: http://host.docker.internal:8010/mcp
+    prefix: hostside.
+` + allow + `    tools: [{name: t, side_effect: READ_ONLY, risk: low, descriptor_sha256: "` + okDigest + `"}]
+`
+		}
+		path := filepath.Join(t.TempDir(), "no.yaml")
+		if err := os.WriteFile(path, []byte(body("")), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Error("plaintext to a non-loopback host was accepted without anybody deciding it")
+		} else if !strings.Contains(err.Error(), "allow_plain_http") {
+			t.Errorf("the refusal does not name the way out: %v", err)
+		}
+
+		path = filepath.Join(t.TempDir(), "yes.yaml")
+		if err := os.WriteFile(path, []byte(body("    allow_plain_http: true\n")), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		b, err := Load(path)
+		if err != nil {
+			t.Fatalf("an explicit allow_plain_http was still refused: %v", err)
+		}
+		// AND IT IS LOUD. A waived security rule that nobody sees again is a rule that was removed,
+		// so the bundle reports it for the binary to log on every start.
+		warnings := b.PlainHTTPWarnings()
+		if len(warnings) != 1 || !strings.Contains(warnings[0], "host.docker.internal:8010") {
+			t.Errorf("warnings = %v, want one naming the source and host", warnings)
+		}
+	})
 
 	t.Run("loopback plaintext is allowed, because that is where every test of this runs", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "sources.yaml")
@@ -187,26 +248,30 @@ func TestTheFingerprintIsStableAcrossKeyOrder(t *testing.T) {
 	}
 }
 
-// TestTheShippedExampleIsInItsDocumentedBootstrapState keeps examples/deep-research/tool_sources.yaml
-// from rotting into a file that asserts something the loader no longer does.
+// TestTheShippedExampleIsInItsDocumentedBootstrapState keeps
+// examples/deep-research/tool_sources.yaml from rotting into a file that asserts something the
+// loader no longer does.
 //
-// IT IS EXPECTED TO BE REFUSED, and that is the point rather than a quirk: the example deliberately
-// shows step 1 of the pinning flow — a source declared with no `descriptor_sha256` — because that is
-// the state an operator starts in and the only way to learn the digest is to be refused and read the
-// log. So the assertion is not "the example loads" but "the example parses, reaches validation, and
-// is refused by the one rule it is demonstrating". A test that only checked it loads would force the
-// example to carry invented digests, which is a worse document.
+// IT MUST LOAD, AND ITS TOOLS MUST BE UNAPPROVED. The example shows step 1 of the pinning flow — a
+// source declared with no digest — and the whole point of TOOL-010b is that this state now STARTS
+// the gateway instead of refusing to. The earlier version of this test asserted the opposite and
+// was right at the time; it is flipped here deliberately rather than deleted, because the behaviour
+// it pinned is exactly what Veritium reported as broken.
 func TestTheShippedExampleIsInItsDocumentedBootstrapState(t *testing.T) {
 	const path = "../../../examples/deep-research/tool_sources.yaml"
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("the shipped example is gone: %v", err)
+	b, err := Load(path)
+	if err != nil {
+		t.Fatalf("the shipped example does not load, so it teaches a flow that does not work: %v", err)
 	}
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("the example now loads: either its digests were filled in (then this test should assert " +
-			"a successful load) or the pin stopped being required (then the example is teaching the wrong flow)")
+	if len(b.Sources) == 0 {
+		t.Fatal("the example declares no sources")
 	}
-	if !strings.Contains(err.Error(), "descriptor_sha256 must be") {
-		t.Errorf("the example is refused for a reason other than the missing pin it demonstrates: %v", err)
+	for _, src := range b.Sources {
+		for _, tool := range src.Tools {
+			if tool.Approved() {
+				t.Errorf("example tool %q carries a digest: the example is meant to show the state BEFORE a "+
+					"person has reviewed the descriptor", tool.Name)
+			}
+		}
 	}
 }

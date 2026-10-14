@@ -274,3 +274,37 @@ func (e *Executor) record(ctx context.Context, rec InvocationRecord) Outcome {
 	}
 	return Outcome{Recorded: true}
 }
+
+// Reserved result keys for a tool whose answer is ALREADY in MCP's shape (TOOL-010b).
+//
+// WHY A NAMED CONVENTION AND NOT DETECTION. A federated tool forwards someone else's result, and
+// the MCP door otherwise JSON-encodes whatever map a tool returns into one text block — so a result
+// that was already content blocks plus structured output came out double-encoded, which is what
+// Veritium measured. The door needs to know "this is a forwarded protocol result, pass it through".
+// Sniffing for a `content` key would make any tool that happens to return one behave differently by
+// accident; these keys are declared, and ForwardedResult is the only thing that writes them.
+const (
+	ForwardedContentKey    = "aeon.mcp.content"
+	ForwardedStructuredKey = "aeon.mcp.structured_content"
+)
+
+// ForwardedResult wraps an upstream MCP result so the MCP door can pass it through unchanged.
+// structured may be nil, which means the upstream tool sent none.
+func ForwardedResult(content []any, structured any) map[string]any {
+	out := map[string]any{ForwardedContentKey: content}
+	if structured != nil {
+		out[ForwardedStructuredKey] = structured
+	}
+	return out
+}
+
+// ForwardedFrom reads back what ForwardedResult wrote. ok is false for an ordinary tool result,
+// which the caller must then handle its own way.
+func ForwardedFrom(result map[string]any) (content []any, structured any, ok bool) {
+	raw, present := result[ForwardedContentKey]
+	if !present {
+		return nil, nil, false
+	}
+	content, _ = raw.([]any)
+	return content, result[ForwardedStructuredKey], true
+}

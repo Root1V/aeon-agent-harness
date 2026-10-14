@@ -11,15 +11,26 @@
 # READ_ONLY y deja de aplicar. Un tool que la fuente ofrece y aquí no está, no se sirve.
 #
 # EL FLUJO DEL `descriptor_sha256`, que es lo único no obvio de este fichero:
-#   1. Declara la fuente y el tool SIN el digest.
+#   1. Declara la fuente y el tool SIN el digest (déjalo vacío o fuera).
 #   2. Arranca aeon-toolgw una vez. El log imprime el digest observado y NO sirve el tool.
 #   3. Revisa ese descriptor y, si es aceptable, pega el digest aquí.
+# (Este flujo NO funcionaba hasta `TOOL-010b`: el cargador rechazaba el digest vacío y el gateway
+#  salía antes de conectarse, así que el log del paso 2 nunca se escribía. Lo encontró Veritium
+#  siguiendo estas mismas instrucciones.)
 # A partir de ahí, si la fuente cambia el descriptor —el schema, o su significado con el mismo
 # schema— ese tool deja de servirse y el log vuelve a imprimir el nuevo digest. El resto de la fuente
 # sigue sirviéndose.
 #
-# LO QUE AEON NO PUEDE HACER POR TI: un tool federado está gobernado por agente AQUÍ (Cedar, en cada
-# tools/call) y NO está aislado por tenant ALLÍ. La llamada sale con la credencial de Aeon y la fuente
+# POR QUÉ PUERTA SE GOBIERNA POR AGENTE, Y POR CUÁL NO. Esto hay que leerlo antes de escribir
+# permisos, y lo corrige Veritium sobre lo que habíamos dicho de más:
+#   · `POST /execute` → Cedar ve el AGENTE (`agent_manifest_ref`), así que un permiso por agente se
+#     aplica como esperas.
+#   · `/mcp` → Cedar ve SIEMPRE `McpClient::"external-mcp-client"`, llame quien llame. Es la
+#     limitación de `INT-003` (el `clientInfo` de MCP no está verificado por el protocolo y no se
+#     puede usar para seguridad), y significa que un permiso por agente NO se aplica por `/mcp`.
+#     Hacen falta dos permisos: uno por agente para `/execute` y uno para todo cliente MCP.
+#
+# LO QUE AEON NO PUEDE HACER POR TI: un tool federado NO está aislado por tenant ALLÍ. La llamada sale con la credencial de Aeon y la fuente
 # no conoce nuestros tenants. Si un tool devuelve datos específicos de un tenant, ese aislamiento
 # tiene que existir en la fuente; aprobarlo sin eso entrega los datos de un tenant a otro por una
 # puerta que Cedar abre con gusto.
@@ -31,6 +42,10 @@ sources:
     # fuentes que ofrezcan `search.web` colisionen, y no se puede delegar en quien colisiona.
     prefix: veritium.
     refresh: 60s
+    # allow_plain_http: true  # solo si el endpoint es http a un host NO loopback y has decidido
+    #   aceptar que el token, los argumentos y los resultados cruzan la red en claro. Se registra en
+    #   el log en cada arranque. El caso real: la fuente en el host y toolgw en Docker
+    #   (`host.docker.internal`), que Veritium resolvió antes con un puente socat.
     auth:
       token_url: https://veritium.example.test/oauth2/token
       client_id_env: AEON_VERITIUM_MCP_CLIENT_ID

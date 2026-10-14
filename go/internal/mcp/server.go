@@ -109,6 +109,23 @@ func toolCallHandler(toolName string, eng *policy.Engine, executor ToolExecutor)
 			}, nil
 		}
 
+		// A FORWARDED RESULT IS PASSED THROUGH, NOT RE-WRAPPED (TOOL-010b). A federated tool
+		// (TOOL-010) hands back someone else's protocol result; encoding that into one text block
+		// made a client decode twice and threw away the structured shape the upstream tool declared
+		// — measured by Veritium against their own server. An ordinary tool's map still gets the
+		// encoding below, because that is the only shape it has.
+		if content, structured, forwarded := toolexec.ForwardedFrom(out.Result); forwarded {
+			blocks, err := contentBlocksFrom(content)
+			if err != nil {
+				return nil, fmt.Errorf("mcp: forwarding the result of %s: %w", toolName, err)
+			}
+			return &sdkmcp.CallToolResult{
+				Content:           blocks,
+				StructuredContent: structured,
+				Meta:              recordingMeta(out),
+			}, nil
+		}
+
 		raw, err := json.Marshal(out.Result)
 		if err != nil {
 			return nil, fmt.Errorf("mcp: marshal result for %s: %w", toolName, err)
@@ -140,4 +157,28 @@ func recordingMeta(out toolexec.Outcome) map[string]any {
 		}
 	}
 	return nil
+}
+
+// contentBlocksFrom turns forwarded content blocks back into the SDK's types by re-encoding them
+// and letting the SDK decode them, which keeps this translation honest about kinds it does not
+// know: a block type the spec grows is carried by the SDK's own unmarshalling rather than by a
+// switch here that would silently drop it.
+func contentBlocksFrom(content []any) ([]sdkmcp.Content, error) {
+	if len(content) == 0 {
+		return nil, nil
+	}
+	raw, err := json.Marshal(map[string]any{"content": content})
+	if err != nil {
+		return nil, fmt.Errorf("re-encoding content: %w", err)
+	}
+	// DECODED THROUGH CallToolResult AND NOT INTO []Content DIRECTLY: Content is a slice of an
+	// INTERFACE, so encoding/json cannot construct its elements on its own — it fails with "cannot
+	// unmarshal object into .0 of type mcp.Content". The SDK's own result type knows how to pick the
+	// concrete block for each kind, which is also what keeps this forwarding correct for a content
+	// kind the spec grows later: the SDK learns it, this function does not have to.
+	var decoded sdkmcp.CallToolResult
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, fmt.Errorf("decoding content: %w", err)
+	}
+	return decoded.Content, nil
 }
