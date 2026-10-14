@@ -53,7 +53,10 @@ func (ts *testSource) start(t *testing.T) *httptest.Server {
 		InputSchema: map[string]any{"type": "object", "properties": map[string]any{"doc_id": map[string]any{"type": "string"}}},
 	}, func(_ context.Context, _ *sdkmcp.CallToolRequest, args map[string]any) (*sdkmcp.CallToolResult, any, error) {
 		ts.record("extract_document")
-		return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "extracted"}}}, nil, nil
+		// STRUCTURED OUTPUT, on purpose: a tool that declares a shape is the case TOOL-010b fixes.
+		// Flattening it to text and re-encoding our own wrapper is what Veritium measured.
+		return &sdkmcp.CallToolResult{Content: []sdkmcp.Content{&sdkmcp.TextContent{Text: "extracted"}}},
+			map[string]any{"doc_id": "d-1", "fields": []any{"name", "date"}}, nil
 	})
 	sdkmcp.AddTool(server, &sdkmcp.Tool{
 		Name: "validate_case", Description: "Validates a case and returns a verdict",
@@ -153,6 +156,28 @@ func TestAFederatedMcpSourceIsListedGovernedAndCalled(t *testing.T) {
 		if len(calls) != before+1 || calls[len(calls)-1] != "extract_document" {
 			t.Fatalf("the source received %v, want one more extract_document", calls)
 		}
+
+		// TOOL-010b: THE RESULT ARRIVES AS THE SOURCE SENT IT. Before this, the federated executor
+		// returned `{"source","tool","text"}` and the MCP door JSON-encoded that map into one text
+		// block, so a client decoded twice and the declared structure was gone — measured by
+		// Veritium against their own server.
+		structured, ok := res.StructuredContent.(map[string]any)
+		if !ok {
+			t.Fatalf("structuredContent is %T (%v), want the source's own object", res.StructuredContent, res.StructuredContent)
+		}
+		if structured["doc_id"] != "d-1" {
+			t.Errorf("structuredContent = %v, want the source's object with doc_id d-1", structured)
+		}
+		if _, wrapped := structured["source"]; wrapped {
+			t.Errorf("structuredContent still carries our wrapper keys: %v", structured)
+		}
+		if len(res.Content) != 1 {
+			t.Fatalf("content blocks = %d, want the source's single block", len(res.Content))
+		}
+		text, isText := res.Content[0].(*sdkmcp.TextContent)
+		if !isText || text.Text != "extracted" {
+			t.Errorf("content block = %#v, want the source's text \"extracted\" rather than a JSON blob of our map", res.Content[0])
+		}
 		// THE UNPREFIXED NAME reached the source. The prefix is Aeon's namespace, not part of the
 		// tool's identity there, and forwarding the qualified name would make every federated call
 		// fail as an unknown tool.
@@ -174,6 +199,41 @@ func TestAFederatedMcpSourceIsListedGovernedAndCalled(t *testing.T) {
 		if after := source.calls(); len(after) != len(before) {
 			t.Fatalf("the source received %v after a DENIED call (was %v) — the call was forwarded and "+
 				"the refusal happened somewhere that does not stop it", after, before)
+		}
+	})
+
+	// The state Veritium could not reach by following our own documentation: declared with an empty
+	// digest. Load used to refuse it and the gateway exited BEFORE connecting, so the log that was
+	// supposed to print the digest never ran.
+	t.Run("a tool declared with no digest is not served, and its digest is reported", func(t *testing.T) {
+		path := writeBundleAt(t, srv.URL, "", validateDigest)
+		bundle, err := Load(path)
+		if err != nil {
+			t.Fatalf("a bundle with an empty digest must LOAD — that is how an operator reaches the digest: %v", err)
+		}
+		fed := New(bundle, toolexec.NewExecutor())
+		reports := fed.Refresh(ctx)
+		if len(reports) != 1 || reports[0].Err != nil {
+			t.Fatalf("refresh: %+v", reports)
+		}
+		observed, pending := reports[0].Pending["extract_document"]
+		if !pending {
+			t.Fatal("an unapproved tool was not reported as pending")
+		}
+		if observed != extractDigest {
+			t.Errorf("reported digest = %q, want the observed %q — this is the value an operator pastes", observed, extractDigest)
+		}
+		// PENDING IS NOT DRIFT. The actions differ: a pending tool needs a first review, a drifted
+		// one a re-review of something that changed.
+		if _, drifted := reports[0].Drifted["extract_document"]; drifted {
+			t.Error("an unapproved tool was reported as drift, which would have an operator approve a change thinking it is a new tool")
+		}
+		rows, err := fed.List(ctx)
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		if len(rows) != 1 || rows[0].Name != "veritium.validate_case" {
+			t.Fatalf("rows = %+v, want only the approved one", rows)
 		}
 	})
 

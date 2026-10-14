@@ -315,6 +315,13 @@ func main() {
 				// load is a configuration error a person can fix in seconds.
 				log.Fatalf("aeon-toolgw: %v", err)
 			}
+			// A WAIVED SECURITY RULE IS LOGGED ON EVERY START, not once at review time. allow_plain_http
+			// lets a source talk plaintext to a non-loopback host, which an operator may legitimately
+			// decide for a development source — and whoever inherits that bundle later did not decide
+			// it and needs to see it.
+			for _, warning := range sources.PlainHTTPWarnings() {
+				log.Printf("aeon-toolgw: WARNING: %s", warning)
+			}
 			federation = toolsource.New(sources, executor)
 			// Discovered BEFORE the catalogue is built, so the first tools/list already carries the
 			// federated tools instead of gaining them a refresh later.

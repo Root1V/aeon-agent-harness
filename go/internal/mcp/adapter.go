@@ -20,6 +20,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -116,6 +117,17 @@ func (s *Session) ListTools(ctx context.Context) ([]DiscoveredTool, error) {
 type ToolCallOutcome struct {
 	IsError bool
 	Text    string // concatenated text content, if any
+	// Content and StructuredContent are the result AS THE PROTOCOL CARRIES IT, and they exist
+	// because flattening to Text lost something real. Veritium measured it against TOOL-010: their
+	// tool declared structured output, this adapter kept only the concatenated text, the federated
+	// executor wrapped that in a map and the MCP door JSON-encoded the map — so a client had to
+	// decode twice and the structured shape the tool declared was gone. Forwarding these two makes
+	// a federated tool answer the way the source answered.
+	//
+	// Both are decoded from the protocol's JSON rather than exposing the SDK's types, so a caller
+	// of this package does not take a dependency on the SDK to read a result.
+	Content           []any
+	StructuredContent any
 }
 
 // CallTool invokes name on the connected server with args. Per the spec, a tool-level failure
@@ -135,7 +147,31 @@ func (s *Session) CallTool(ctx context.Context, name string, args map[string]any
 			text.WriteString(tc.Text)
 		}
 	}
-	return &ToolCallOutcome{IsError: result.IsError, Text: text.String()}, nil
+	outcome := &ToolCallOutcome{IsError: result.IsError, Text: text.String()}
+	// Round-tripped through JSON because Content is a slice of interfaces whose concrete types are
+	// the SDK's: re-encoding is what turns them into the plain shapes the protocol defines, without
+	// this package having to know every content kind the spec may grow.
+	if len(result.Content) > 0 {
+		raw, err := json.Marshal(result.Content)
+		if err != nil {
+			return nil, fmt.Errorf("mcp: re-encoding the content of %s: %w", name, err)
+		}
+		if err := json.Unmarshal(raw, &outcome.Content); err != nil {
+			return nil, fmt.Errorf("mcp: decoding the content of %s: %w", name, err)
+		}
+	}
+	// Left nil when the tool sent none: absent and null are different answers, and a tool with no
+	// output schema legitimately sends nothing here.
+	if result.StructuredContent != nil {
+		raw, err := json.Marshal(result.StructuredContent)
+		if err != nil {
+			return nil, fmt.Errorf("mcp: re-encoding the structured content of %s: %w", name, err)
+		}
+		if err := json.Unmarshal(raw, &outcome.StructuredContent); err != nil {
+			return nil, fmt.Errorf("mcp: decoding the structured content of %s: %w", name, err)
+		}
+	}
+	return outcome, nil
 }
 
 // Close ends the session.

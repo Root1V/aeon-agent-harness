@@ -47,9 +47,21 @@ type Source struct {
 	// source fix it rather than the source itself, which is also the only way it can be trusted.
 	Prefix string `yaml:"prefix"`
 	// Refresh is how often the source is re-listed. Zero means DefaultRefresh.
-	Refresh time.Duration  `yaml:"refresh"`
-	Auth    *Auth          `yaml:"auth"`
-	Tools   []ApprovedTool `yaml:"tools"`
+	Refresh time.Duration `yaml:"refresh"`
+	Auth    *Auth         `yaml:"auth"`
+	// AllowPlainHTTP accepts a plaintext endpoint to a NON-loopback host, which is otherwise
+	// refused. It exists because Veritium hit a real case with no safe answer: the source runs on
+	// the host and aeon-toolgw runs in Docker, so the endpoint is `host.docker.internal` — not
+	// loopback, and not something a certificate exists for. They bridged it with a socat container
+	// and asked for an explicit exception instead.
+	//
+	// IT IS EXPLICIT, PER SOURCE, AND LOUD. The rule it waives is not decoration — a bearer token
+	// and every argument and result cross the network readable by anyone on the path — so it is not
+	// a global flag, the validator names it only once you hit the rule, and a source that uses it
+	// logs a warning naming the source and host on every start. Whoever sets it has decided;
+	// whoever inherits a bundle with it set will see it.
+	AllowPlainHTTP bool           `yaml:"allow_plain_http"`
+	Tools          []ApprovedTool `yaml:"tools"`
 }
 
 // Auth is OAuth2 client-credentials against the source's own token endpoint.
@@ -97,6 +109,7 @@ const DefaultRefresh = 60 * time.Second
 var (
 	sourceIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 	prefixPattern   = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}\.$`)
+	sha256Hex       = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 // Load reads and validates a bundle from path.
@@ -152,7 +165,7 @@ func (b *Bundle) Validate() error {
 		}
 		seenPrefix[s.Prefix] = s.ID
 
-		if err := validateEndpoint(s.ID, s.Endpoint); err != nil {
+		if err := validateEndpoint(s.ID, s.Endpoint, s.AllowPlainHTTP); err != nil {
 			return err
 		}
 		if s.Auth != nil {
@@ -183,10 +196,21 @@ func (b *Bundle) Validate() error {
 					"checked here so a misconfiguration fails at startup rather than at the first call",
 					s.ID, t.Name, t.SideEffect)
 			}
-			if len(t.DescriptorSHA256) != 64 {
-				return fmt.Errorf("source %q tool %q: descriptor_sha256 must be the 64-character hex digest of the "+
-					"descriptor this approval was given for. Start the gateway once without it and the log prints "+
-					"the digest it observed, review that descriptor, then paste it here", s.ID, t.Name)
+			// THE EMPTY STRING IS "NOT APPROVED YET", NOT AN ERROR, and this is a defect Veritium
+			// found by following our own instructions. The documented flow was: declare the tool
+			// without a digest, start once, read the observed digest from the log, review, paste. It
+			// did not work — Load refused the empty string and the gateway exited BEFORE connecting,
+			// so the log it told you to read was never written. Their workaround was 64 zeroes as a
+			// placeholder, which loads and is then reported as drift. That is the right behaviour,
+			// and the empty string should simply do it.
+			//
+			// An unapproved tool is never served either way; the only question was whether the
+			// operator could reach the digest, and refusing to start made the answer no.
+			if t.DescriptorSHA256 != "" && !sha256Hex.MatchString(t.DescriptorSHA256) {
+				return fmt.Errorf("source %q tool %q: descriptor_sha256 is %q, which is not a 64-character hex "+
+					"digest. Leave it EMPTY to mean \"not approved yet\": the gateway starts, does not serve the "+
+					"tool, and logs the digest it observed so you can review that descriptor and paste it",
+					s.ID, t.Name, t.DescriptorSHA256)
 			}
 		}
 	}
@@ -199,7 +223,7 @@ func (b *Bundle) Validate() error {
 // of this feature runs; everything else carries a bearer token over the wire, and the same rule the
 // compose port check enforces applies here for the same reason — a plaintext endpoint works fine
 // and is simply readable by anyone on the path.
-func validateEndpoint(id, endpoint string) error {
+func validateEndpoint(id, endpoint string, allowPlainHTTP bool) error {
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Host == "" {
 		return fmt.Errorf("source %q: endpoint %q is not a URL", id, endpoint)
@@ -211,8 +235,13 @@ func validateEndpoint(id, endpoint string) error {
 		if isLoopback(u.Hostname()) {
 			return nil
 		}
-		return fmt.Errorf("source %q: endpoint %q is plaintext http to a non-loopback host — a bearer token "+
-			"would go over the wire in the clear", id, endpoint)
+		if allowPlainHTTP {
+			return nil
+		}
+		return fmt.Errorf("source %q: endpoint %q is plaintext http to a non-loopback host — a bearer token, "+
+			"every argument and every result would cross the network readable by anyone on the path. Set "+
+			"allow_plain_http: true on this source if you have decided to accept that; it is logged on every "+
+			"start", id, endpoint)
 	default:
 		return fmt.Errorf("source %q: endpoint scheme %q is not http(s)", id, u.Scheme)
 	}
@@ -268,3 +297,26 @@ func (s *Source) Approval(sourceToolName string) (*ApprovedTool, bool) {
 
 // QualifiedName is the name Aeon serves this tool under.
 func (s *Source) QualifiedName(sourceToolName string) string { return s.Prefix + sourceToolName }
+
+// PlainHTTPWarnings names every source that waived the TLS rule, for the binary to log on start.
+// Returned rather than logged here so this package makes no logging decisions, and so a test can
+// assert the warning exists instead of scraping output.
+func (b *Bundle) PlainHTTPWarnings() []string {
+	var out []string
+	for i := range b.Sources {
+		s := &b.Sources[i]
+		if !s.AllowPlainHTTP {
+			continue
+		}
+		if u, err := url.Parse(s.Endpoint); err == nil && u.Scheme == "http" && !isLoopback(u.Hostname()) {
+			out = append(out, fmt.Sprintf("source %q talks PLAINTEXT HTTP to %s (allow_plain_http: true): its "+
+				"token, arguments and results cross the network in the clear", s.ID, u.Host))
+		}
+	}
+	return out
+}
+
+// Approved reports whether a person has reviewed this tool's descriptor yet. Three states and not
+// two: declared-and-approved, declared-and-not-yet-approved (an empty digest), and absent from the
+// bundle entirely. Only the first is served, and the middle one is how an operator learns the digest.
+func (t *ApprovedTool) Approved() bool { return t.DescriptorSHA256 != "" }
