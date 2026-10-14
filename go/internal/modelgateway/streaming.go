@@ -72,7 +72,22 @@ func (g *Gateway) DecideStream(
 		// VRT-SYN-004, and before the span opens so the attribute below describes what was sent.
 		unsendable := dropUnsendableAssistantTurns(input)
 
-		spanCtx, span := tracer.Start(ctx, "chat", trace.WithAttributes(
+		// `{operation} {model}` — the span NAME the ecosystem agreed in VRT-AXO-002 (OBS-015), not
+		// `chat` alone. Argus asked for the standard name explicitly when Prometheus offered to step
+		// away from it over cardinality ("seguid el estándar, la cardinalidad es nuestro problema"),
+		// and they cleared the cut in ARG-AXO-001 by measuring zero panels or rules filtering on the
+		// old name.
+		//
+		// THE REQUEST MODEL AND NOT THE SERVED ONE, so the name matches `gen_ai.request.model` beside
+		// it. The served model may differ — that is what OBS-012's pair exists to make findable — and
+		// naming the span after it would make a span's identity depend on the answer, so two calls
+		// asking the same thing would land under different names.
+		//
+		// OUR PYTHON HALF ALREADY DID THIS: argus's own `genai()` builds
+		// `f"{operation} {request_model}"`, so until this change one trace carried an activity span
+		// named `chat qwen3-0.6b` and a gateway span named `chat`. The inconsistency was inside a
+		// single trace of ours, not just against the convention.
+		spanCtx, span := tracer.Start(ctx, "chat "+c.Model, trace.WithAttributes(
 			attribute.String("gen_ai.operation.name", "chat"),
 			providerNameAttr(c.Provider),
 			attribute.String("gen_ai.request.model", c.Model),

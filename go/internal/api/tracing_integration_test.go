@@ -108,7 +108,10 @@ func TestDistributedTracingSpansReachTempo(t *testing.T) {
 		t.Fatalf("flushing spans: %v", err)
 	}
 
-	waitForTempoSpan(t, tempoURL, fmt.Sprintf(`{ name = "chat" && span.gen_ai.request.model = "%s" }`, marker), 30*time.Second)
+	// OBS-015: the span is named `chat {model}`. The NAME and the ATTRIBUTE are both asserted, and
+	// keeping both is the point — the name is derived from the attribute, so a test that checked only
+	// the name would still pass if `gen_ai.request.model` were dropped.
+	waitForTempoSpan(t, tempoURL, fmt.Sprintf(`{ name = "chat %s" && span.gen_ai.request.model = "%s" }`, marker, marker), 30*time.Second)
 	waitForTempoSpan(t, tempoURL, fmt.Sprintf(`{ name = "execute_tool" && span.gen_ai.tool.name = "%s" }`, marker), 30*time.Second)
 	waitForTempoSpan(t, tempoURL, fmt.Sprintf(`{ name = "invoke_agent" && span.gen_ai.agent.name = "%s" }`, marker), 30*time.Second)
 }
