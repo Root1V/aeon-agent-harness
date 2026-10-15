@@ -30,7 +30,11 @@
           "estimated": false
         },
         "usage_relations": [
-          ["input", ">=", "cache_read"]
+          [
+            "input",
+            ">=",
+            "cache_read"
+          ]
         ]
       }
     },
@@ -65,7 +69,11 @@
           "cache_read": "measured"
         },
         "usage_relations": [
-          ["input", ">=", "cache_read"]
+          [
+            "input",
+            ">=",
+            "cache_read"
+          ]
         ]
       }
     },
@@ -146,7 +154,11 @@
           "cache_write": "unmeasured"
         },
         "usage_relations": [
-          ["input", ">=", "cache_read"]
+          [
+            "input",
+            ">=",
+            "cache_read"
+          ]
         ]
       }
     },
@@ -257,6 +269,28 @@
       "expect_error": true,
       "expect": {
         "partial_text": "Hello, wor"
+      }
+    },
+    {
+      "name": "request: el razonamiento vuelve, y un turno que solo razona no viaja",
+      "why": "Las dos direcciones no son independientes: la response PRODUCE la parte que la request no sabe mandar, y por eso el corpus no podia ver el defecto en ninguno de los dos lenguajes. Este caso fija las dos mitades a la vez: el razonamiento que acompana a un content SI viaja (sin eso, un modelo de razonamiento continua desde su propio turno sin su canal de analisis), y un turno que SOLO razona NO viaja (medido contra la plataforma real: llega 400). ESCRITO POR AEON a la espera del caso publicado por SYN: su declaracion del campo llego por el canal porque nosotros vendorizamos el spec y su edicion de la copia compartida es invisible desde aqui. Cuando publiquen el suyo, este se reemplaza.",
+      "direction": "request",
+      "authored": true,
+      "body_file": "request_turno_que_solo_razona.json",
+      "expect": {
+        "wire_roles": [
+          "user",
+          "assistant",
+          "user",
+          "user"
+        ],
+        "wire_assistant_contents": [
+          "hola"
+        ],
+        "wire_assistant_reasoning": [
+          "El usuario pide un saludo breve."
+        ],
+        "assistant_messages_sendable": true
       }
     }
   ]

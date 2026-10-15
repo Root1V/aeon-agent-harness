@@ -986,40 +986,42 @@ fichero mal nombrado. Sin `down`, a propósito.
   lo que permitió hacerlo sin volver a pedirle a ARG permiso por volumen — son eventos raros, uno
   por tope y uno por decisión humana, no tráfico.
 
-### Dirección *request* en el corpus de normalización (propuesta de SYN en `VRT-SYN-004`)
+### ~~Dirección *request* en el corpus de normalización~~ — HECHA (`INT-012b`)
 
-- **Descripción:** Synaptum propone añadir a `normalizacion/fixtures` un caso de dirección
-  **request**, porque `VRT-SYN-004` demostró que las dos direcciones no son independientes: la
-  dirección *response* **produce** la parte (`Thinking`) que la *request* no sabe mandar, y por eso
-  el corpus dorado que ejecutan los dos lados no podía ver el defecto en ninguno de los dos
-  lenguajes. Aceptamos la propuesta. Lo que hace falta de nuestro lado:
-  `TestNormalizationCorpusAgainstThisAdapter` **solo conoce la dirección response**: lee el
-  `body_file` de cada caso y lo proyecta con `projectNonStreaming`/`projectStreaming`. No hay campo
-  `direction` y un caso que lo traiga lo ignoraría.
-- **Lo que pasaría hoy con su fixture, medido leyendo el runner:** si el caso trae aserciones que no
-  implementamos, `assertEveryExpectKeyIsImplemented` falla a gritos —que es lo correcto y es por lo
-  que ese guard existe—. Pero un caso **sin objeto `expect`** vuelve temprano y pasa sin comprobar
-  nada, con su cuerpo proyectado como si fuera una respuesta. O sea: su fixture debe traer
-  aserciones, y aun así hace falta enseñarle la dirección al runner antes de que signifique algo.
-- **Criterio de entrada:** que SYN/AXO publiquen el caso y el campo con el que se declara la
-  dirección; el formato es suyo, no nuestro.
-- **Coste:** S. Un campo `direction` con default `response`, y para `request` construir el cuerpo
-  que nuestro camino enviaría y compararlo con el esperado — que es exactamente lo que
-  `dropUnsendableAssistantTurns` ya decide, así que la lógica existe.
+- **Cerrada el 2026-10-14.** SYN publicó la declaración entera **en el canal** y no en el spec, por un
+  motivo que es un hallazgo sobre nuestro montaje: **vendorizamos el spec dentro de este
+  repositorio**, así que su edición de la copia compartida es invisible desde aquí. Su frase es la que
+  hay que conservar: *«una declaración que el otro no puede ver no está declarada»* — y los dos
+  equipos habíamos escrito ese aviso dos veces sin actuar sobre él.
 
-### ~~`X-Aeon-Streamed` se pone demasiado tarde y nunca llega al cliente~~ — HECHA (`OBS-018`)
+### Nuestro spec vendorizado contradice nuestro propio corpus
 
-- **Cerrada el 2026-10-14**, y con la otra mitad que esta entrada decía que iba junta: el contador de
-  `VRT-SYN-004` tampoco se podía reportar en la superficie de streaming, por el mismo motivo
-  estructural. Los dos salen ahora de un hook `StreamStart` que el gateway llama **antes** de invocar
-  a cada candidato, que es el último momento en que una cabecera puede enviarse.
-- **Por candidato y no por llamada**, que fue lo no obvio: un candidato puede fallar antes de emitir
-  un chunk, el gateway cae al siguiente, y el llamador tiene que poder corregir lo que habría
-  mandado. Poner una cabecera es gratis hasta la primera escritura, así que gana el último
-  `StreamStart` antes de ella. Un candidato que falla DESPUÉS de emitir chunks no se puede corregir,
-  y eso es inherente al streaming.
-- **Nadie lo comprobaba**, que es por lo que nadie lo notó: medido, ningún test del repo afirmaba esa
-  cabecera antes de `OBS-018`.
+- **Medido el 2026-10-14:** `evals/contracts/normalizacion/spec.md` dice `Versión: 0.1` y que *«la
+  dirección request no se normaliza [...] este documento trata la dirección response»*, mientras
+  nuestras fixtures van por `0.2-draft` y **ya tienen un caso de dirección request**. La copia
+  contradice al corpus que acompaña.
+- **No se añadió un guard que finja detectar sus ediciones**, porque no puede: la copia compartida no
+  es alcanzable desde esta máquina (comprobado). Un guard sobre nuestra propia copia solo repetiría
+  lo que ya sabemos.
+- **Lo que sí lo haría detectable, y se pidió en el canal:** que SYN publique la **versión** del spec
+  en el canal cada vez que lo cambien. Un número que los dos vemos es suficiente para comparar.
+- **La alternativa real es dejar de vendorizar** y leer la carpeta compartida, que es lo que hace el
+  otro lado. Eso es una decisión de infraestructura, no una línea de código.
+- **Coste:** S la comparación de versión si la publican; M dejar de vendorizar.
+
+### `TestA2ATaskLifecycle` falla en el target completo y pasa aislado
+
+- **Medido el 2026-10-14:** falla a los ~15 s en `make test-go-integration` (la tarea A2A se queda en
+  `working` esperando a que su run real termine) y pasa **3 de 3** aislada en el mismo contenedor y
+  con la misma infraestructura, en 0,2–0,4 s. **Reproducido también en `main`**, así que no lo trae
+  ninguna rama en curso — comprobado a propósito antes de culpar a un cambio.
+- **La forma del fallo importa:** es un timeout bajo contención, no un fallo de lógica. El target
+  corre los paquetes en paralelo contra UN worker y UN Temporal, y este test espera a que un run real
+  complete. Un rojo así no enseña nada sobre el código y enseña algo sobre el instrumento.
+- **Criterio de entrada:** ninguno; es nuestro y es un rojo real en `main`.
+- **Coste:** S si basta con que el test espere más o con serializar ese paquete; M si hace falta
+  entender por qué el worker no desagua bajo carga, que es la pregunta interesante y la que de verdad
+  importaría en producción.
 
 ### La ventana de caída de la bitácora, que resultó más pequeña de lo que esta entrada decía
 
