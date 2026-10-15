@@ -242,12 +242,22 @@ func TestAnotherTenantsMemoryIsIndistinguishableFromOneThatDoesNotExist(t *testi
 		defer resp.Body.Close()
 		assertLooksMissing(t, resp.StatusCode)
 	})
-	for _, route := range []string{"/revoke", "/quarantine", "/validate", "/promote", "/reject", "/repair"} {
-		t.Run(route, func(t *testing.T) {
-			status, body := doJSON(t, http.MethodPost, srv.URL+"/memory/"+foreign.MemoryID+route, map[string]any{"allowed": true})
+	// FROM THE HANDLER'S OWN LIST, not from a slice typed here. This used to name the six routes by
+	// hand, so a seventh action mounted tomorrow would be unprotected AND uncovered — the same
+	// forgettable shape that left five of these without a tenant check in the first place. Now
+	// mounting an action is what enrols it in this test.
+	actions := (&MemoryHandlers{}).MemoryRecordActions()
+	if len(actions) < 6 {
+		t.Fatalf("MemoryRecordActions returned %d routes: if the surface shrank, say so deliberately; "+
+			"this test is only as wide as that list", len(actions))
+	}
+	for action := range actions {
+		t.Run(action, func(t *testing.T) {
+			route := "/memory/" + foreign.MemoryID + "/" + action
+			status, body := doJSON(t, http.MethodPost, srv.URL+route, map[string]any{"allowed": true})
 			assertLooksMissing(t, status)
 			if _, leaked := body["content"]; leaked {
-				t.Errorf("%s returned the record's content: %v", route, body)
+				t.Errorf("%s returned the record's content: %v", action, body)
 			}
 		})
 	}

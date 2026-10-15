@@ -947,19 +947,22 @@ fichero mal nombrado. Sin `down`, a propósito.
   hacen falta.
 - **Coste:** M.
 
-### Aislamiento por tenant en el lado de escritura del pipeline (`SEC-004`)
+### ~~Aislamiento por tenant en el lado de escritura del pipeline (`SEC-004`)~~ — YA ESTABA HECHA
 
-- **Descripción:** `SEC-004` cerró el aislamiento cruzado de tenant en lectura (`GET
-  /memory/{id}`) y en `revoke`, pero `quarantine`/`validate`/`promote`/`reject` (MEM-002) siguen
-  sin ninguna comprobación de `tenant_id` — hoy son operaciones de operador/pipeline, no
-  expuestas a llamadas de un tenant concreto, pero si `aeon_worker` empieza a invocarlas
-  directamente (ver la entrada de arriba sobre `Prune`) haría falta la misma comprobación que ya
-  tienen `GET`/`revoke`.
-- **Fase objetivo:** junto con el primer consumidor real del pipeline vía HTTP (mismo criterio de
-  entrada que la entrada de `Prune` de arriba), o F4 si para entonces ya existe un modelo de
-  identidad/autorización más general (Secret Broker, SPIFFE) que lo cubra de forma unificada.
-- **Criterio de entrada:** un caller real no confiable de estas rutas.
-- **Coste:** S.
+- **Cerrada el 2026-10-14, y la entrada llevaba una semana obsoleta.** Decía que
+  `quarantine`/`validate`/`promote`/`reject` seguían sin comprobación de `tenant_id`. **Ya la
+  tienen**, las cuatro, desde el 2026-10-07 — se arreglaron en `VRT-AEON-005` T-1 (`GOV-001`) y
+  nadie cerró esta entrada. Y está medido, no solo leído:
+  `TestAnotherTenantsMemoryIsIndistinguishableFromOneThatDoesNotExist` cubre las seis rutas con
+  404-y-no-403 (T-7) y con control negativo sobre el registro propio del llamador.
+- **Es la forma que ARG nombró esta semana** —*el trabajo se hizo y el sitio donde el otro equipo lo
+  lee no se actualizó*— y esta vez era nuestra, en nuestro propio backlog.
+- **Lo que sí quedaba, y se hizo (`SEC-004b`):** la lista de rutas del test estaba **escrita a
+  mano**, seis nombres en un slice. Una acción nueva mañana quedaría sin proteger **y** sin cubrir,
+  que es la misma forma olvidadiza que dejó cinco rutas sin comprobación en su día. Ahora el test
+  itera `MemoryHandlers.MemoryRecordActions()`, la misma lista con la que se montan, así que montar
+  una acción es lo que la inscribe en el test. Verificado añadiendo una acción sin comprobación: el
+  test la caza sola.
 
 ### Dirección *request* en el corpus de normalización (propuesta de SYN en `VRT-SYN-004`)
 
