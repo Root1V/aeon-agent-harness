@@ -125,18 +125,29 @@ definitivamente, se borra con una nota en el mensaje de commit — no se acumula
   probarlo primero ahí, no en este Mac.
 - **Coste:** L.
 
-### `aeon-toolgw` monta el socket de Docker del host (`TOOL-003`)
+### El socket de Docker, para un despliegue que SÍ habilite el sandbox (`TOOL-003`)
 
-- **Descripción:** `deploy/compose/docker-compose.yml` monta `/var/run/docker.sock` dentro de
-  `toolgw` para que `go/internal/sandbox` pueda lanzar contenedores hermanos reales — esto le da a
-  `toolgw` acceso equivalente a root sobre el host Docker. `SEC-002` (Secret Broker) ya existe, pero
-  no cubre este socket — no hay ningún lease/credencial de por medio para acceder a él, es acceso
-  directo de proceso. Real, no un descuido: es el tradeoff exacto de "contenedores Docker como motor
-  de sandbox" (ver la nota de diseño de `TOOL-003` en `roadmap.md`).
-- **Fase objetivo:** antes de exponer `aeon-toolgw` fuera de un entorno de confianza single-tenant.
-- **Criterio de entrada:** se adopta un runtime rootless/daemonless (ej. Podman sin socket
-  compartido) para el sandbox, o el propio socket se pone detrás de algún control de acceso real.
-- **Coste:** M.
+> **La mitad grande se cerró el 2026-10-14 como `TOOL-011`:** el compose de referencia **ya no monta**
+> `/var/run/docker.sock`. La entrada decía que el montaje era «el tradeoff exacto de contenedores
+> Docker como motor de sandbox», y lo es — pero estaba montado **por defecto, en todos los
+> despliegues, para un tool que los DOS bundles de política prohíben**. O sea: la mayor exposición
+> que teníamos, concedida a cambio de nada. Y había un comentario al lado explicándola correctamente
+> desde `TOOL-003`, que no la quitó; ahora hay un guard en `make lint`.
+>
+> Lo que se separó y es la idea reutilizable: **registro y privilegio son cosas distintas**.
+> `AEON_SANDBOX_ENABLED` pone `shell.exec` en el catálogo; el **socket** es lo que lo hace ejecutable
+> y lo que concede root. El de referencia registra y no monta, así que una regresión de política se
+> sigue cazando con un rechazo real de un tool real —el único motivo por el que estaba registrado— y
+> la exposición del host desaparece.
+
+- **Lo que queda, y es lo que esta entrada pedía originalmente:** para un despliegue que de verdad
+  necesite `shell.exec`, el socket sigue siendo acceso directo equivalente a root. Las dos vías que
+  la entrada nombraba siguen abiertas: un runtime rootless/daemonless (Podman sin socket
+  compartido), o el socket detrás de un proxy con allowlist de endpoints de la API de Docker
+  (`/containers/create`, `/start`, `/wait`, `/logs`, `/delete` y nada más).
+- **Criterio de entrada:** que exista un despliegue que habilite el sandbox y no sea de confianza
+  single-tenant. Hoy no existe ninguno: el de referencia no lo ejecuta.
+- **Coste:** M el proxy con allowlist, L el runtime rootless.
 
 ### A2A Gateway completo (más allá del Agent Card mínimo)
 
