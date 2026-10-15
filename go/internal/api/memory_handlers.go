@@ -20,17 +20,34 @@ type MemoryHandlers struct {
 	MemoryStore *store.MemoryStore
 }
 
+// MemoryRecordActions are the POST routes that act on ONE memory record by id.
+//
+// THE LIST IS DECLARED ONCE AND THE TEST ITERATES IT, which is the point rather than tidiness.
+// VRT-AEON-005 T-1 found that FIVE of these had no tenant check at all, so any authenticated caller
+// could quarantine, promote or repair another tenant's memory knowing only its id — and an id is a
+// uuid, which is not a secret. The fix was per route, and the test that proved it listed the routes
+// BY HAND: six names typed into a slice. That leaves the next route added here uncovered unless
+// somebody remembers to type a seventh, which is the same forgettable shape that produced the
+// original hole. Reading the list from here means a new action is covered the moment it is mounted.
+func (h *MemoryHandlers) MemoryRecordActions() map[string]http.HandlerFunc {
+	return map[string]http.HandlerFunc{
+		"quarantine": h.quarantine,
+		"validate":   h.validate,
+		"promote":    h.promote,
+		"reject":     h.reject,
+		"revoke":     h.revoke,
+		"repair":     h.repair,
+	}
+}
+
 // Register mounts every memory route on mux.
 func (h *MemoryHandlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /memory/candidates", h.writeCandidate)
 	mux.HandleFunc("GET /memory/active", h.listActive)
 	mux.HandleFunc("GET /memory/{memory_id}", h.getMemory)
-	mux.HandleFunc("POST /memory/{memory_id}/quarantine", h.quarantine)
-	mux.HandleFunc("POST /memory/{memory_id}/validate", h.validate)
-	mux.HandleFunc("POST /memory/{memory_id}/promote", h.promote)
-	mux.HandleFunc("POST /memory/{memory_id}/reject", h.reject)
-	mux.HandleFunc("POST /memory/{memory_id}/revoke", h.revoke)
-	mux.HandleFunc("POST /memory/{memory_id}/repair", h.repair)
+	for action, handler := range h.MemoryRecordActions() {
+		mux.HandleFunc("POST /memory/{memory_id}/"+action, handler)
+	}
 }
 
 // callerTenant resolves the isolation boundary for this request from the CREDENTIAL (VRT-AEON-005
