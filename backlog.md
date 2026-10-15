@@ -1009,19 +1009,22 @@ fichero mal nombrado. Sin `down`, a propósito.
   otro lado. Eso es una decisión de infraestructura, no una línea de código.
 - **Coste:** S la comparación de versión si la publican; M dejar de vendorizar.
 
-### `TestA2ATaskLifecycle` falla en el target completo y pasa aislado
+### ~~`TestA2ATaskLifecycle` falla en el target completo y pasa aislado~~ — ERA UN DEFECTO DEL WORKER (`RUN-007`)
 
-- **Medido el 2026-10-14:** falla a los ~15 s en `make test-go-integration` (la tarea A2A se queda en
-  `working` esperando a que su run real termine) y pasa **3 de 3** aislada en el mismo contenedor y
-  con la misma infraestructura, en 0,2–0,4 s. **Reproducido también en `main`**, así que no lo trae
-  ninguna rama en curso — comprobado a propósito antes de culpar a un cambio.
-- **La forma del fallo importa:** es un timeout bajo contención, no un fallo de lógica. El target
-  corre los paquetes en paralelo contra UN worker y UN Temporal, y este test espera a que un run real
-  complete. Un rojo así no enseña nada sobre el código y enseña algo sobre el instrumento.
-- **Criterio de entrada:** ninguno; es nuestro y es un rojo real en `main`.
-- **Coste:** S si basta con que el test espere más o con serializar ese paquete; M si hace falta
-  entender por qué el worker no desagua bajo carga, que es la pregunta interesante y la que de verdad
-  importaría en producción.
+- **Cerrada el 2026-10-15, y no era un test frágil.** Esta entrada lo describía como «un timeout bajo
+  contención» y como «un rojo que no enseña nada sobre el código». **Las dos cosas estaban mal.** El
+  test esperaba 15 s a que un run real completara, y el run no completaba porque **el worker tenía el
+  event loop bloqueado**: las cuatro llamadas a gateway vivían dentro de activities `async def` y
+  usaban `urllib.request.urlopen(...)`, una llamada **síncrona**, con timeouts de hasta 60 s. Un
+  worker de Temporal en Python es un proceso con un loop, así que cada una paraba *todo* — los demás
+  runs y el propio sondeo de workflow tasks.
+- **Medido, antes y después:** fallaba a los 15,3 s y pasa en **0,14 s**. Dos veces seguidas el target
+  completo en verde. Eso no es un timeout que se subió: es la causa.
+- **La lección es sobre cómo leí el rojo.** Un timeout sin aserción detrás parece un test malo, y lo
+  archivé como tal con una medición que lo respaldaba (pasa 3/3 aislado) — correcta y conducente a la
+  conclusión opuesta. El test estaba reportando una propiedad real del worker bajo carga concurrente,
+  que es exactamente la propiedad que tiene un despliegue de producción. **Un instrumento que molesta
+  no es un instrumento roto.**
 
 ### La ventana de caída de la bitácora, que resultó más pequeña de lo que esta entrada decía
 

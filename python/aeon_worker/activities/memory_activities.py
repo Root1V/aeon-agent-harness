@@ -19,6 +19,8 @@ import json
 import os
 import urllib.error
 import urllib.request
+
+from aeon_worker import http_call
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -208,8 +210,8 @@ async def write_memory_candidates_activity(inp: WriteCandidatesInput) -> WriteCa
             headers=service_headers(run_tenant=inp.tenant),
         )
         try:
-            with urllib.request.urlopen(request, timeout=30):
-                written += 1
+            await http_call.read(request, timeout=30)
+            written += 1
         except urllib.error.HTTPError as exc:
             if exc.code == 409:
                 # Already recorded by an earlier attempt of this activity. Counted separately rather
