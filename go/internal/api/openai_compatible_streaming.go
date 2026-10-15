@@ -89,7 +89,28 @@ func (h *OpenAICompatibleHandlers) streamChatCompletions(
 		return nil
 	}
 
-	result, err := h.Gateway.DecideStream(ctx, candidates, body, dataSensitivity, yield)
+	// OBS-018: the headers that describe the stream are set from THIS hook, which the gateway calls
+	// before each candidate is invoked — the last moment a header can still be sent. They used to be
+	// set after the loop, from `result`, which is after the first chunk has triggered WriteHeader; Go
+	// drops a later Header().Set in silence, so `X-Aeon-Streamed: false` never reached a client in the
+	// one case it exists for. Nothing tested it, which is why nothing noticed.
+	result, err := h.Gateway.DecideStream(ctx, candidates, body, dataSensitivity, yield, func(start modelgateway.StreamStart) {
+		if headersSent {
+			// A candidate that failed AFTER emitting chunks cannot correct what is already on the
+			// wire. Inherent to streaming, and stated rather than silently overwritten.
+			return
+		}
+		if !start.Streamed {
+			// Set only when false: a header saying "true" on every stream is noise, and its absence
+			// already means the ordinary case.
+			w.Header().Set("X-Aeon-Streamed", "false")
+		}
+		if start.UnsendableTurnsDropped > 0 {
+			// VRT-SYN-004's count, which this surface could not report until there was a hook that
+			// ran before the first chunk. The other two doors carry it in their bodies.
+			w.Header().Set("X-Aeon-Unsendable-Turns-Dropped", strconv.Itoa(start.UnsendableTurnsDropped))
+		}
+	})
 	if err != nil {
 		if !headersSent {
 			writeOpenAIError(w, http.StatusBadGateway, "aeon_routing_error", err.Error())
@@ -103,24 +124,13 @@ func (h *OpenAICompatibleHandlers) streamChatCompletions(
 		return
 	}
 
-	// A provider without streaming support was served as one chunk; the caller can tell from the
-	// header rather than having to infer it from chunk sizes.
-	if result != nil && !result.Streamed {
-		w.Header().Set("X-Aeon-Streamed", "false")
-	}
-	// VRT-SYN-004 IS NOT REPORTED ON THIS SURFACE, and the reason is structural rather than an
-	// omission to tidy up later. The count is only known once DecideStream returns, and by then the
-	// first chunk has been written and headers have stopped being writable — the same constraint
-	// this file states above for the governance headers, which are set BEFORE the stream for exactly
-	// that reason. An SSE event is not an option either: these frames are OpenAI-shaped and a client
-	// parsing them must not meet an Aeon-shaped one. So a caller on this door learns it from the
-	// span attribute `aeon.model.unsendable_turns_dropped`, and the other two doors carry it in
-	// their bodies.
-	//
-	// X-Aeon-Streamed above has this same defect and it predates this change: it is set after the
-	// stream, so in the one case it exists for — a provider with no streaming, delivered as one
-	// chunk — a chunk has already been written and the header never reaches the client. Recorded in
-	// backlog.md rather than fixed here, because the fix is the same restructuring for both.
+	// The headers were set from the onStart hook above, before the first chunk. They used to be set
+	// here, which looked right and reached no client.
+	// VRT-SYN-004's counter and X-Aeon-Streamed are BOTH set from the onStart hook now (OBS-018).
+	// This comment used to explain why neither could be reported here — the count was only known once
+	// DecideStream returned, and by then headers had stopped being writable. That was true of the
+	// shape, not of the problem: the gateway knows both before it calls the provider, it just had no
+	// way to say so.
 
 	h.recordStreamedCost(r, result, streamedUsage, streamedModel, runID, agentRef)
 

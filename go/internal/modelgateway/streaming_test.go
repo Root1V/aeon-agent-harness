@@ -43,7 +43,7 @@ func TestGatewayDecideStream(t *testing.T) {
 		var got []string
 		result, err := gw.DecideStream(context.Background(), []Candidate{
 			{Provider: "streamer", Model: "m1", Priority: 0},
-		}, map[string]any{}, "", collect(&got))
+		}, map[string]any{}, "", collect(&got), nil)
 
 		if err != nil {
 			t.Fatalf("DecideStream: %v", err)
@@ -63,7 +63,7 @@ func TestGatewayDecideStream(t *testing.T) {
 		var got []string
 		result, err := gw.DecideStream(context.Background(), []Candidate{
 			{Provider: "plain", Model: "m1", Priority: 0},
-		}, map[string]any{}, "", collect(&got))
+		}, map[string]any{}, "", collect(&got), nil)
 
 		if err != nil {
 			t.Fatalf("DecideStream: %v", err)
@@ -85,7 +85,7 @@ func TestGatewayDecideStream(t *testing.T) {
 		result, err := gw.DecideStream(context.Background(), []Candidate{
 			{Provider: "broken", Model: "m1", Priority: 0},
 			{Provider: "healthy", Model: "m2", Priority: 1},
-		}, map[string]any{}, "", collect(&got))
+		}, map[string]any{}, "", collect(&got), nil)
 
 		if err != nil {
 			t.Fatalf("DecideStream: %v", err)
@@ -107,7 +107,7 @@ func TestGatewayDecideStream(t *testing.T) {
 		result, err := gw.DecideStream(context.Background(), []Candidate{
 			{Provider: "half-broken", Model: "m1", Priority: 0},
 			{Provider: "healthy", Model: "m2", Priority: 1},
-		}, map[string]any{}, "", collect(&got))
+		}, map[string]any{}, "", collect(&got), nil)
 
 		if err == nil {
 			t.Fatal("expected the mid-stream failure to surface, not be papered over by a fallback")
@@ -132,7 +132,7 @@ func TestGatewayDecideStream(t *testing.T) {
 		}, map[string]any{}, "", func(providers.Chunk) error {
 			delivered++
 			return stop
-		})
+		}, nil)
 
 		if !errors.Is(err, stop) {
 			t.Fatalf("err = %v, want the caller's own stop error", err)
@@ -149,7 +149,7 @@ func TestGatewayDecideStream(t *testing.T) {
 		var got []string
 		_, err := gw.DecideStream(context.Background(), []Candidate{
 			{Provider: "anthropic", Model: "m1", Priority: 0},
-		}, map[string]any{}, "restricted", collect(&got))
+		}, map[string]any{}, "restricted", collect(&got), nil)
 
 		if !errors.Is(err, ErrNoRestrictedCandidate) {
 			t.Fatalf("err = %v, want ErrNoRestrictedCandidate", err)
@@ -169,7 +169,7 @@ func TestGatewayDecideStream(t *testing.T) {
 		result, err := gw.DecideStream(context.Background(), []Candidate{
 			{Provider: "degraded", Model: "m1", Priority: 0},
 			{Provider: "healthy", Model: "m2", Priority: 1},
-		}, map[string]any{}, "", collect(&got))
+		}, map[string]any{}, "", collect(&got), nil)
 
 		if err != nil {
 			t.Fatalf("DecideStream: %v", err)

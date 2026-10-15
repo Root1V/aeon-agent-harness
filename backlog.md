@@ -982,27 +982,19 @@ fichero mal nombrado. Sin `down`, a propósito.
   que nuestro camino enviaría y compararlo con el esperado — que es exactamente lo que
   `dropUnsendableAssistantTurns` ya decide, así que la lógica existe.
 
-### `X-Aeon-Streamed` se pone demasiado tarde y nunca llega al cliente
+### ~~`X-Aeon-Streamed` se pone demasiado tarde y nunca llega al cliente~~ — HECHA (`OBS-018`)
 
-- **Descripción:** `openai_compatible_streaming.go` fija `X-Aeon-Streamed: false` **después** del
-  bucle de streaming, cuando `result` ya está disponible. Pero en ese punto ya se escribió al menos
-  un chunk, y el propio fichero explica la regla unas líneas más arriba: las cabeceras «must be set
-  BEFORE the first chunk, since that is when WriteHeader happens and headers stop being writable».
-  En Go, un `Header().Set` posterior a `WriteHeader` se ignora en silencio. Así que en el **único**
-  caso para el que la cabecera existe —un proveedor sin streaming servido como un solo chunk— un
-  chunk ya se escribió y la cabecera no llega. Un caller que, según el comentario, «can tell from the
-  header rather than having to infer it from chunk sizes», hoy no puede.
-- **Encontrado** mirando dónde poner el contador de `VRT-SYN-004` en esta misma superficie, que
-  tiene el mismo problema estructural: ninguno de los dos valores se conoce antes de que
-  `DecideStream` devuelva, y para entonces es tarde.
-- **El arreglo es el mismo para los dos** y por eso van juntos: hace falta que el gateway comunique
-  «qué candidato y en qué modo» antes del primer chunk —un callback antes de arrancar, o aplicar la
-  regla en la puerta y dejar al gateway solo de respaldo— en vez de devolverlo al final.
-- **Criterio de entrada:** que alguien dependa de distinguir streaming real de un chunk único sin
-  mirar trazas. Hoy el span lo lleva, así que el dato no está perdido, solo no está donde el
-  comentario promete.
-- **Coste:** S para la cabecera sola si se acepta calcular el modo antes de llamar al proveedor; M
-  si se hace el callback genérico que sirva también para el contador de `VRT-SYN-004`.
+- **Cerrada el 2026-10-14**, y con la otra mitad que esta entrada decía que iba junta: el contador de
+  `VRT-SYN-004` tampoco se podía reportar en la superficie de streaming, por el mismo motivo
+  estructural. Los dos salen ahora de un hook `StreamStart` que el gateway llama **antes** de invocar
+  a cada candidato, que es el último momento en que una cabecera puede enviarse.
+- **Por candidato y no por llamada**, que fue lo no obvio: un candidato puede fallar antes de emitir
+  un chunk, el gateway cae al siguiente, y el llamador tiene que poder corregir lo que habría
+  mandado. Poner una cabecera es gratis hasta la primera escritura, así que gana el último
+  `StreamStart` antes de ella. Un candidato que falla DESPUÉS de emitir chunks no se puede corregir,
+  y eso es inherente al streaming.
+- **Nadie lo comprobaba**, que es por lo que nadie lo notó: medido, ningún test del repo afirmaba esa
+  cabecera antes de `OBS-018`.
 
 ### La ventana de caída de la bitácora, que resultó más pequeña de lo que esta entrada decía
 
