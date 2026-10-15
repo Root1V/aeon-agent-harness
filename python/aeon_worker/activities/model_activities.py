@@ -11,6 +11,8 @@ import json
 import os
 import urllib.error
 import urllib.request
+
+from aeon_worker import http_call
 from dataclasses import dataclass
 from typing import Any
 
@@ -112,8 +114,7 @@ async def call_model_gateway(inp: DecideInput) -> DecideOutput:
         headers = service_headers(run_tenant=inp.tenant)
         request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:  # noqa: S310 — fixed internal URL, not user input
-                parsed = json.loads(response.read())
+            parsed = json.loads(await http_call.read(request, timeout=60))
         except urllib.error.HTTPError as exc:
             detail = json.loads(exc.read()).get("error", exc.reason)
             # Their error() carries the retryability, which is the part a consumer acts on. A 5xx from the

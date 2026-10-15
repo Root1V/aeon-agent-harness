@@ -22,6 +22,8 @@ import json
 import os
 import urllib.error
 import urllib.request
+
+from aeon_worker import http_call
 from dataclasses import dataclass
 from typing import Any
 
@@ -96,8 +98,7 @@ async def check_activity_policy_activity(inp: ActivityPolicyInput) -> ActivityPo
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            body: dict[str, Any] = json.loads(response.read())
+        body: dict[str, Any] = json.loads(await http_call.read(request, timeout=30))
     except urllib.error.HTTPError as err:
         detail = err.read().decode(errors="replace")
         # 401/403 are not timing problems: the caller's own entry does not let it present this agent,

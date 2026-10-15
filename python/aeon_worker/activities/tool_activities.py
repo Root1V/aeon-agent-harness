@@ -8,6 +8,8 @@ import json
 import os
 import urllib.error
 import urllib.request
+
+from aeon_worker import http_call
 from dataclasses import dataclass
 from typing import Any
 
@@ -148,8 +150,7 @@ async def _execute_through_gateway(inp: ExecuteToolInput, key: str) -> ExecuteTo
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            body = json.loads(response.read())
+        body = json.loads(await http_call.read(request, timeout=60))
     except urllib.error.HTTPError as err:
         detail = err.read().decode(errors="replace")
         if err.code == 403:
