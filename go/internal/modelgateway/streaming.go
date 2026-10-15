@@ -38,9 +38,37 @@ type StreamResult struct {
 // Cancellation (INT-008, and the tripartite agreement's P5) propagates by construction: yield's
 // error stops the adapter, which closes its upstream connection, which is what makes the real model
 // stop generating. Nothing here waits for a complete response before honoring a cut.
+// StreamStart is what the gateway knows BEFORE the first chunk, for a caller that has to put it in
+// response headers (OBS-018).
+//
+// WHY A CALLBACK AND NOT THE RETURN VALUE. Everything here is also on StreamResult, which arrives
+// when the stream is over — and by then the caller has written chunks, so WriteHeader has happened
+// and headers have stopped being writable. Go ignores a later Header().Set in silence, which is
+// exactly how `X-Aeon-Streamed: false` came to be set on every single-chunk response and reach no
+// client at all.
+//
+// CALLED ONCE PER CANDIDATE ATTEMPT, not once per call, and that is deliberate: a candidate may fail
+// before producing any chunk, the gateway falls through to the next one, and the caller must be able
+// to correct what it would have sent. Setting a header is free until the first write, so the last
+// StreamStart before that write is the one the client sees. A candidate that fails AFTER emitting
+// chunks cannot be corrected — the headers are already on the wire — and that is inherent to
+// streaming rather than something this hook could fix.
+type StreamStart struct {
+	Provider string
+	Model    string
+	// Streamed is false when this candidate has no streaming support and its answer will be
+	// delivered as one chunk.
+	Streamed bool
+	// UnsendableTurnsDropped is VRT-SYN-004's count for this attempt. It shares this hook because it
+	// has the same shape of problem: known before the provider is called, needed in a header.
+	UnsendableTurnsDropped int
+}
+
+// DecideStream routes exactly like Decide and streams the chosen provider's answer through yield.
+// onStart, when non-nil, is called before each candidate is invoked — see StreamStart.
 func (g *Gateway) DecideStream(
 	ctx context.Context, candidates []Candidate, renderedContext map[string]any, dataSensitivity string,
-	yield func(providers.Chunk) error,
+	yield func(providers.Chunk) error, onStart func(StreamStart),
 ) (*StreamResult, error) {
 	pool, err := g.restrictPool(candidates, dataSensitivity)
 	if err != nil {
@@ -96,6 +124,16 @@ func (g *Gateway) DecideStream(
 		recordServerAddress(span, provider)
 
 		streamer, streamable := provider.(providers.StreamingProvider)
+		recordUnsendableDropped(span, unsendable)
+		// BEFORE the provider is invoked, because that is the last moment a caller can still set a
+		// response header: the first chunk triggers WriteHeader and anything set after it is dropped
+		// in silence (OBS-018).
+		if onStart != nil {
+			onStart(StreamStart{
+				Provider: c.Provider, Model: c.Model, Streamed: streamable,
+				UnsendableTurnsDropped: unsendable,
+			})
+		}
 		delivered := false
 		// The model a streamed response was served by arrives IN A CHUNK — StreamResult carries no
 		// output — so it is captured on the way past. The last one seen wins, which is the same rule
@@ -104,7 +142,6 @@ func (g *Gateway) DecideStream(
 		// Usage arrives in a chunk too, and usually in the LAST one — a provider reports it once the
 		// generation is done. The last non-nil wins, and nil stays nil: a stream that reported no
 		// usage must leave the attributes absent rather than claim zero (MDL-014).
-		recordUnsendableDropped(span, unsendable)
 
 		var inputTokens, outputTokens *int
 		wrapped := func(chunk providers.Chunk) error {
