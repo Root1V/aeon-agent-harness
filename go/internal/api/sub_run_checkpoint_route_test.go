@@ -59,16 +59,32 @@ func TestTheCheckpointRouteCarriesTheSubRun(t *testing.T) {
 		}
 	}
 
-	state := loadRunState(t, srv, runID)
-	if got := len(state.Records()); got != 3 {
-		t.Fatalf("the journal holds %d records over the wire, want 3", got)
-	}
-	// Read back through the SAME sub-run the writer used, which is the only reading that proves the
-	// field survived the round trip rather than being dropped by the request struct or the response.
+	// VERITIUM'S ACCEPTANCE CRITERION, VERBATIM (INT-009c): a GET with `?sub_run_id=a` returns only
+	// a's records, and a GET with no parameter returns only the root's.
+	//
+	// THIS TEST USED TO ENCODE THE DEFECT. It loaded the journal ONCE and asserted three records came
+	// back over the wire, then looked for each sub-run inside that mixture. Every assertion passed
+	// while the read ignored `sub_run_id` entirely — which is the half Veritium found, and this is
+	// the test that should have caught it. What it proved was that the WRITE kept them apart; it
+	// quietly required the READ to return every sibling.
 	for _, path := range []string{"", "child-a", "child-b/grandchild"} {
+		state := loadRunState(t, srv, runID, path)
+		if got := len(state.Records()); got != 1 {
+			t.Fatalf("GET for sub-run %q returned %d records, want exactly 1 — a sub-run that resumes on "+
+				"a sibling's steps adopts them as its own", path, got)
+		}
 		if _, ok := state.Completed(path, "s1"); !ok {
 			t.Errorf("no record for sub-run %q after a round trip through the route — the field is "+
 				"dropped on the way in or on the way out", path)
+		}
+	}
+
+	// AND THE SEQUENCE IS STILL RUN-WIDE over the wire. Filtering the records without keeping this
+	// would have each sub-run resume at 1 and write positions its siblings already hold — a worse
+	// defect than the one being fixed, and invisible to a test that only counted records.
+	for _, path := range []string{"", "child-a", "child-b/grandchild"} {
+		if got := loadRunState(t, srv, runID, path).NextSeq(); got != 3 {
+			t.Errorf("sub-run %q reports next_seq %d over the wire, want 3", path, got)
 		}
 	}
 	// And a genuine retry of one of them is still a duplicate over HTTP.

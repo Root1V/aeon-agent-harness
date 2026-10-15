@@ -66,7 +66,7 @@ func TestCheckpointerDeduplicatesByStepIdentity(t *testing.T) {
 			}
 		}
 
-		state, err := cp.Load(ctx, runID)
+		state, err := cp.Load(ctx, runID, "")
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
@@ -93,7 +93,7 @@ func TestCheckpointerDeduplicatesByStepIdentity(t *testing.T) {
 			t.Fatalf("the two phases collapsed into one entry: attempted=%+v completed=%+v", a, c)
 		}
 
-		state, err := cp.Load(ctx, runID)
+		state, err := cp.Load(ctx, runID, "")
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
@@ -122,7 +122,7 @@ func TestCheckpointerDeduplicatesByStepIdentity(t *testing.T) {
 			t.Fatalf("append with a different payload = %+v, want Duplicate and PayloadDiverged", res)
 		}
 
-		state, err := cp.Load(ctx, runID)
+		state, err := cp.Load(ctx, runID, "")
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
@@ -187,7 +187,7 @@ func TestCheckpointerDeduplicatesByStepIdentity(t *testing.T) {
 			}
 		}
 
-		state, err := cp.Load(ctx, runID)
+		state, err := cp.Load(ctx, runID, "")
 		if err != nil {
 			t.Fatalf("load: %v", err)
 		}
@@ -304,7 +304,7 @@ func testCheckpointerUnderTemporalRetry(t *testing.T, cp *Checkpointer) {
 		}
 	}
 
-	state, err := cp.Load(ctx, runID)
+	state, err := cp.Load(ctx, runID, "")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

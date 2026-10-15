@@ -50,18 +50,24 @@ func TestTwoSubRunsOfOneRunKeepTheirOwnJournals(t *testing.T) {
 		}
 	}
 
-	state, err := cp.Load(ctx, runID)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if got := len(state.Records()); got != len(paths) {
-		t.Fatalf("the run's journal holds %d records, want %d — one sub-run's entry overwrote another's",
-			got, len(paths))
-	}
-
-	// Each one reads back as ITS OWN, which is what makes the count above mean something: four rows
-	// that all carried the same payload would satisfy a count and still be the defect.
+	// READ BACK PER SUB-RUN, which is INT-009c and is a STRONGER assertion than what this test did
+	// before. It used to load the run ONCE and count four records — which proved the write keys on
+	// the sub-run, and quietly required the read to return every sibling. That is exactly the defect
+	// Veritium reported: the read ignored `sub_run_id`, so a resuming sub-run adopted its siblings'
+	// steps. The test was encoding it. Now each sub-run is loaded on its own and must see ONLY its
+	// own record, which proves the same thing about the write and the missing thing about the read.
 	for _, path := range paths {
+		state, err := cp.Load(ctx, runID, path)
+		if err != nil {
+			t.Fatalf("Load(%q): %v", path, err)
+		}
+		if got := len(state.Records()); got != 1 {
+			t.Fatalf("sub-run %q reads %d records, want exactly 1 — a journal that returns a sibling's "+
+				"steps is one a resuming sub-run would adopt as its own", path, got)
+		}
+		if state.SubRunID() != path {
+			t.Errorf("the state says it is sub-run %q, want %q", state.SubRunID(), path)
+		}
 		rec, ok := state.Completed(path, stepID)
 		if !ok {
 			t.Fatalf("no completed record for sub-run %q step %q", path, stepID)
@@ -72,6 +78,22 @@ func TestTwoSubRunsOfOneRunKeepTheirOwnJournals(t *testing.T) {
 		}
 		if payload["who"] != path {
 			t.Errorf("sub-run %q reads back the payload of %v — the journals are crossed", path, payload["who"])
+		}
+	}
+
+	// AND THE SEQUENCE STAYS RUN-WIDE, which is the trap in fixing the read. `seq` orders the journal
+	// across sub-runs (INT-009b), so if filtering also filtered the sequence, each sub-run would
+	// resume at 1 and write numbers its siblings already used — an ordering defect worse than the
+	// read defect being fixed. Four records were written, so every sub-run must agree on what comes
+	// next.
+	for _, path := range paths {
+		state, err := cp.Load(ctx, runID, path)
+		if err != nil {
+			t.Fatalf("Load(%q): %v", path, err)
+		}
+		if got := state.NextSeq(); got != int64(len(paths)) {
+			t.Errorf("sub-run %q reports next_seq %d, want %d: the sequence is run-wide and filtering it "+
+				"would hand this sub-run numbers its siblings already wrote", path, got, len(paths))
 		}
 	}
 
@@ -95,12 +117,9 @@ func TestTwoSubRunsOfOneRunKeepTheirOwnJournals(t *testing.T) {
 		t.Error("the identical retry was reported as a divergence")
 	}
 
-	// seq is RUN-WIDE: one ordering for the run and its delegations together, so NextSeq keeps
-	// meaning "where does this run's journal continue".
-	if want := int64(len(paths)); state.NextSeq() != want {
-		t.Errorf("NextSeq() = %d, want %d — seq must be numbered over the run, not per sub-run, or two "+
-			"entries share a position and the ordering stops being total", state.NextSeq(), want)
-	}
+	// The run-wide `seq` assertion that used to live here now runs for EVERY sub-run above, not just
+	// for the one state this test happened to be holding — which is what INT-009c made possible to
+	// check, since each sub-run now has a state of its own to ask.
 }
 
 // TestTheRootRunsSentinelIsNotTheClientsProblem is the second half of what Veritium asked for: the
@@ -124,7 +143,7 @@ func TestTheRootRunsSentinelIsNotTheClientsProblem(t *testing.T) {
 		t.Fatalf("Append completed with no sub-run: %v", err)
 	}
 
-	state, err := cp.Load(ctx, runID)
+	state, err := cp.Load(ctx, runID, "")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -150,7 +169,7 @@ func TestTheRootRunsSentinelIsNotTheClientsProblem(t *testing.T) {
 
 func mustLoad(t *testing.T, cp *Checkpointer, runID string) *checkpoint.RunState {
 	t.Helper()
-	state, err := cp.Load(context.Background(), runID)
+	state, err := cp.Load(context.Background(), runID, "")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}

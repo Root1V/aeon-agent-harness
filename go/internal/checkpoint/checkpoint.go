@@ -120,15 +120,21 @@ type AppendResult struct {
 // other side of it.
 type Checkpointer interface {
 	Append(ctx context.Context, entry Entry) (AppendResult, error)
-	Load(ctx context.Context, runID string) (*RunState, error)
+	// Load takes the SUB-RUN as a required argument, which is INT-009c. An implementation that
+	// ignored it returned every sub-run of the parent, and a sub-run resuming on that answer adopts
+	// its siblings' steps as its own — the defect Veritium reported. Empty means the root run.
+	Load(ctx context.Context, runID, subRunID string) (*RunState, error)
 }
 
 // RunState is the reconstructed journal of one run.
 type RunState struct {
-	runID   string
-	records []Record
-	byStep  map[stepKey]map[Phase]Record
-	nextSeq int64
+	runID string
+	// subRunID is which sub-run this state describes, empty for the root run. Set only by
+	// NewSubRunState: a state built by NewRunState spans every sub-run of the run.
+	subRunID string
+	records  []Record
+	byStep   map[stepKey]map[Phase]Record
+	nextSeq  int64
 }
 
 // stepKey is why the accessors below take TWO arguments instead of one. A step is identified by its
@@ -140,6 +146,25 @@ type stepKey struct {
 }
 
 // NewRunState builds the queryable state from a run's records, in any order.
+// NewSubRunState is NewRunState for ONE sub-run's journal, with the run-wide next sequence passed in
+// (INT-009c).
+//
+// THE SEQUENCE CANNOT BE DERIVED FROM A FILTERED SET, and that is the whole reason this constructor
+// exists rather than letting the caller filter and call NewRunState. `seq` is RUN-WIDE on purpose
+// (INT-009b): it orders a run's journal across all of its sub-runs, which is what makes a replay
+// reproducible when several sub-runs interleave. Deriving it from one sub-run's rows would hand a
+// resuming sub-run sequence numbers its siblings have already written — turning a read defect into
+// an ordering defect, which is worse than the one being fixed here.
+func NewSubRunState(runID, subRunID string, records []Record, runWideNextSeq int64) *RunState {
+	s := NewRunState(runID, records)
+	s.subRunID = subRunID
+	s.nextSeq = runWideNextSeq
+	return s
+}
+
+// SubRunID is the sub-run this state describes, empty for the root run.
+func (s *RunState) SubRunID() string { return s.subRunID }
+
 func NewRunState(runID string, records []Record) *RunState {
 	sorted := append([]Record(nil), records...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Seq < sorted[j].Seq })

@@ -120,7 +120,10 @@ func TestTheDurabilitySeamMatchesTheSharedContract(t *testing.T) {
 		}()
 		validate(t, resultSchema, "append result", result)
 
-		got := getAuthed(t, srv.URL+"/runs/"+runID+"/checkpoints")
+		// Read back UNDER THE SUB-RUN THAT WROTE IT (INT-009c). Before the read filtered, this GET
+		// carried no parameter and still returned child-a's row — the contract looked satisfied by a
+		// handler that was answering a different question.
+		got := getAuthed(t, srv.URL+"/runs/"+runID+"/checkpoints?sub_run_id=child-a")
 		var state map[string]any
 		func() {
 			defer got.Body.Close()
@@ -132,6 +135,12 @@ func TestTheDurabilitySeamMatchesTheSharedContract(t *testing.T) {
 		// And the field really is on the wire, not merely permitted by a schema that tolerates extras:
 		// run-state's records set additionalProperties: true on purpose, so validation alone would
 		// pass with sub_run_id missing entirely.
+		// The response says WHICH journal it is. A schema with additionalProperties: false at the root
+		// would reject an unknown field but never notice a declared one that is never sent.
+		if state["sub_run_id"] != "child-a" {
+			t.Errorf("the run state reports sub_run_id %v, want child-a — a filtered answer that cannot "+
+				"say what it filtered by is indistinguishable from an unfiltered one", state["sub_run_id"])
+		}
 		records, _ := state["records"].([]any)
 		if len(records) != 1 {
 			t.Fatalf("the journal returned %d records, want 1", len(records))

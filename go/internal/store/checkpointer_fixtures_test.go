@@ -98,14 +98,14 @@ func TestCheckpointerPassesSharedSeamFixtures(t *testing.T) {
 					}
 
 				case "load":
-					state, err := cp.Load(ctx, runID)
+					state, err := cp.Load(ctx, runID, "")
 					if err != nil {
 						t.Fatalf("op %d: load: %v", j, err)
 					}
 					assertLoadMatches(t, j, state, op.Expect, tc.Why)
 
 				case "query":
-					state, err := cp.Load(ctx, runID)
+					state, err := cp.Load(ctx, runID, "")
 					if err != nil {
 						t.Fatalf("op %d: load for query: %v", j, err)
 					}

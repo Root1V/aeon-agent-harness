@@ -236,7 +236,7 @@ func TestAStepOfARunIsJudgedAndBilledAgainstTheRunsTenant(t *testing.T) {
 			t.Fatalf("status = %d, want 403 for a tool neither bundle permits: %v", resp.StatusCode, body)
 		}
 
-		inB, err := s.CheckpointerFor(tenantB).Load(ctx, runID)
+		inB, err := s.CheckpointerFor(tenantB).Load(ctx, runID, "")
 		if err != nil {
 			t.Fatalf("Load from %s: %v", tenantB, err)
 		}
@@ -253,7 +253,7 @@ func TestAStepOfARunIsJudgedAndBilledAgainstTheRunsTenant(t *testing.T) {
 			t.Errorf("the recorded outcome is %q, want %q", outcome, checkpoint.OutcomeDeniedByPolicy)
 		}
 		// And nothing in the worker's tenant, which is where every one of them used to land.
-		inOps, err := s.CheckpointerFor(workerTenant).Load(ctx, runID)
+		inOps, err := s.CheckpointerFor(workerTenant).Load(ctx, runID, "")
 		if err != nil {
 			t.Fatalf("Load from %s: %v", workerTenant, err)
 		}

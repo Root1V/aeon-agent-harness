@@ -93,8 +93,16 @@ func (h *CheckpointHandlers) append(w http.ResponseWriter, r *http.Request) {
 }
 
 type runStateResponse struct {
-	RunID   string `json:"run_id"`
-	NextSeq int64  `json:"next_seq"`
+	RunID string `json:"run_id"`
+	// SubRunID says WHICH journal this is, and it is not omitempty: the root run's answer carries an
+	// explicit "" rather than nothing. A filtered response and an unfiltered one were the same shape
+	// until INT-009c, which is how an ignored scope went unnoticed through all of 0.2 — a response
+	// that cannot say what question it answered cannot be checked against the question.
+	SubRunID string `json:"sub_run_id"`
+	// NextSeq is RUN-WIDE even here, where the records are one sub-run's. It is not the length of
+	// Records and the contract says so: deriving it from the filtered set would hand a resuming
+	// sub-run sequence numbers its siblings already wrote.
+	NextSeq int64 `json:"next_seq"`
 	// Durability is OBS-004: how durably this run was journalled, derived from the records rather than
 	// declared anywhere. It is here, on the run's own state, because that is where an incident looks —
 	// the alternative was a document, and a document cannot be queried at 3am about a specific run.
@@ -111,7 +119,10 @@ func (h *CheckpointHandlers) load(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	checkpointer := h.Store.CheckpointerFor(caller.Tenant)
-	state, err := checkpointer.Load(r.Context(), r.PathValue("run_id"))
+	// INT-009c: the sub-run is read from the query, with the SAME rule as the write — omitted is the
+	// root run, and an explicit empty value is the root run too. Both land on the root by plain
+	// equality because that is what the write stores, so there is no case to get wrong.
+	state, err := checkpointer.Load(r.Context(), r.PathValue("run_id"), r.URL.Query().Get("sub_run_id"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -133,6 +144,7 @@ func (h *CheckpointHandlers) load(w http.ResponseWriter, r *http.Request) {
 	)
 
 	writeJSON(w, http.StatusOK, runStateResponse{
-		RunID: state.RunID(), NextSeq: state.NextSeq(), Durability: durability, Records: records,
+		RunID: state.RunID(), SubRunID: state.SubRunID(), NextSeq: state.NextSeq(),
+		Durability: durability, Records: records,
 	})
 }
