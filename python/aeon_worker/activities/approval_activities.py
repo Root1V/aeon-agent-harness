@@ -65,6 +65,10 @@ WAIT_EVENT = "approval.wait"
 OUTCOME_SUSPENDED = "suspended"
 OUTCOME_GRANTED = "ok"
 OUTCOME_DENIED = "denied"
+
+# `argus.denied_by`'s value for a refusal a person made. The set is closed and has three
+# (policy/human/budget); this activity can only ever be the human one, see where it is used.
+DENIED_BY_HUMAN = "human"
 OUTCOME_EXPIRED = "timeout"
 
 
@@ -105,3 +109,18 @@ async def record_approval_wait_activity(inp: ApprovalWaitInput) -> None:
         if inp.waited_ms is not None:
             step.set(**{"aeon.approval.waited_ms": inp.waited_ms})
         step.outcome(inp.outcome)
+        if inp.outcome == OUTCOME_DENIED:
+            # WHO denied it (OBS-020b). `argus.outcome=denied` on its own leaves a refusal that cannot
+            # be attributed, and the gap does not show up when you query it: a GROUP BY over an absent
+            # field returns a row, not a complaint — which is the argus a22 warning's own wording, and
+            # the reason it warns at all.
+            #
+            # `human` and not `policy`: Cedar's `require_approval` is NOT a denial, it is a suspension
+            # (that is the `suspended` outcome above, set the moment Cedar decides). What reaches this
+            # branch is a PERSON having rejected, or having decided against a different hash. The
+            # system did not refuse; somebody did.
+            #
+            # FOUND BY A WARNING WE COULD NOT SEE. OBS-020 attributed the three Go sites and this one
+            # was invisible, because the SDK that reports it is a22 and our lock had us on a12 — the
+            # same staleness that made `argus.denied_by` look unpublished.
+            step.denied(by=DENIED_BY_HUMAN)

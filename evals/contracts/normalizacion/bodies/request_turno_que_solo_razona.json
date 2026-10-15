@@ -1,0 +1,10 @@
+{
+  "model": "wire-probe",
+  "messages": [
+    {"role": "user", "content": "Di 'hola'."},
+    {"role": "assistant", "content": "hola", "reasoning_content": "El usuario pide un saludo breve."},
+    {"role": "user", "content": "Ahora di 'adios'."},
+    {"role": "assistant", "reasoning_content": "Solo razono y no digo nada."},
+    {"role": "user", "content": "Sigue."}
+  ]
+}

@@ -38,13 +38,16 @@ type normCorpus struct {
 }
 
 type normCase struct {
-	Name     string          `json:"name"`
-	Why      string          `json:"why"`
-	BodyFile string          `json:"body_file"`
-	Stream   bool            `json:"stream"`
-	Authored bool            `json:"authored"`
-	Expect   json.RawMessage `json:"expect"`
-	Error    json.RawMessage `json:"error"`
+	Name     string `json:"name"`
+	Why      string `json:"why"`
+	BodyFile string `json:"body_file"`
+	// Direction is "request" or absent, and absent means "response" — Synaptum's declaration, so the
+	// 14 cases of today are unchanged by its introduction (INT-012b).
+	Direction string          `json:"direction"`
+	Stream    bool            `json:"stream"`
+	Authored  bool            `json:"authored"`
+	Expect    json.RawMessage `json:"expect"`
+	Error     json.RawMessage `json:"error"`
 }
 
 type normExpect struct {
@@ -88,6 +91,11 @@ var implementedExpectKeys = map[string]bool{
 	"tool_calls": true, "tool_call_ids_are_nonempty": true,
 	"event_kinds": true, "event_kinds_collapsed": true,
 	"stops_at_first_sentinel": true, "partial_text": true,
+	// INT-012b, the request direction. Added at the same time as the code that reads them: a key in
+	// this map that nothing reads is worse than a key missing from it, because the guard's whole job
+	// is to refuse a case it would otherwise evaluate without asserting anything.
+	"wire_roles": true, "wire_assistant_contents": true,
+	"wire_assistant_reasoning": true, "assistant_messages_sendable": true,
 }
 
 // assertEveryExpectKeyIsImplemented fails on any key the runner would otherwise ignore.
@@ -625,6 +633,30 @@ func TestNormalizationCorpusAgainstThisAdapter(t *testing.T) {
 			body, err := os.ReadFile(filepath.Join(root, tc.BodyFile))
 			if err != nil {
 				t.Fatalf("reading body %s: %v", tc.BodyFile, err)
+			}
+
+			// INT-012b: the REQUEST direction asserts what goes OUT, so it shares nothing with the
+			// projection below except the case file. Absent `direction` means response, which is what
+			// keeps the 14 existing cases untouched.
+			if tc.Direction == "request" {
+				if !tc.Authored {
+					// Their declaration makes `authored` mandatory here, and the reason is worth
+					// keeping: this direction is not recorded from a provider, the client builds it.
+					// A case claiming otherwise would be read from the recorded-bodies root and
+					// silently find nothing to be about.
+					t.Fatalf("a request-direction case must set \"authored\": true — this direction is " +
+						"built by the client, never recorded")
+				}
+				assertWireExpectation(t, tc.Name, tc.Expect, projectRequest(t, body))
+				passed++
+				return
+			}
+			// `""` and an explicit "response" are the same thing. The declaration only says absent
+			// means response, but rejecting a case that says so out loud would be pedantry — and
+			// anything ELSE is refused rather than treated as response, because a direction this
+			// runner does not know is a case it would evaluate with the wrong projection.
+			if tc.Direction != "" && tc.Direction != "response" {
+				t.Fatalf("unknown direction %q: this runner knows \"request\" and \"response\" (absent = response)", tc.Direction)
 			}
 
 			var p projection
