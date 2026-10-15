@@ -369,6 +369,11 @@ services:
       # os.Root on top of that — two independent guarantees, because the mount protects the host and
       # os.Root protects everything outside this directory on the gateway's own filesystem.
       AEON_REPOSITORY_ROOT: /repository
+      # TOOL-011: puts shell.exec in the catalogue. It is NOT runnable here — that needs
+      # /var/run/docker.sock, which this file deliberately does not mount (see the volumes above).
+      # Registered so a policy regression is still caught by a real refusal of a real tool, which is
+      # the only reason it was ever registered; the host exposure is what was removed.
+      AEON_SANDBOX_ENABLED: "true"
       # SEC-002: comma-separated names the Secret Broker loads from AEON_SECRET_<NAME> env vars
       # (see .env.example) — optional, empty until a real tool needs a credential.
       AEON_SECRET_NAMES: "${AEON_SECRET_NAMES:-}"
@@ -407,12 +412,31 @@ services:
       # permits repository.read — that is the property to think about when changing this line.
       # `:ro` is not the tool's containment (os.Root is); it is the second, independent one.
       - ../../docs:/repository:ro
-      # TOOL-003: go/internal/sandbox spawns real, isolated containers for shell.exec via the host
-      # Docker daemon (sibling containers, not nested Docker-in-Docker) — this grants toolgw
-      # root-equivalent access to the host. Real, current tradeoff, not a mistake: SEC-002's Secret
-      # Broker doesn't cover this socket — there's no credential isolation for it yet (see
-      # backlog.md).
-      - /var/run/docker.sock:/var/run/docker.sock
+      # TOOL-003's docker socket is NOT MOUNTED HERE ANY MORE (TOOL-011), and the reason is worth
+      # reading before putting it back.
+      #
+      # go/internal/sandbox spawns real sibling containers for shell.exec through the host Docker
+      # daemon, so mounting /var/run/docker.sock grants toolgw ROOT-EQUIVALENT ACCESS TO THE HOST:
+      # anything that can reach the Docker API can start a privileged container with the host
+      # filesystem bind-mounted. That was mounted by default, for every deployment — while BOTH
+      # shipped policy bundles forbid `shell.*` for every agent. So the reference deployment carried
+      # the largest exposure it has for a tool nothing is allowed to call.
+      #
+      # TO ENABLE THE SANDBOX, deliberately: set AEON_SANDBOX_ENABLED=true and add the mount with an
+      # override file, which keeps the decision in the operator's own file rather than in ours:
+      #
+      #   # docker-compose.override.yml
+      #   services:
+      #     toolgw:
+      #       volumes:
+      #         - /var/run/docker.sock:/var/run/docker.sock
+      #
+      # REGISTRATION AND PRIVILEGE ARE SEPARATE. `AEON_SANDBOX_ENABLED` (set below) puts shell.exec in
+      # the catalogue; the SOCKET is what makes it runnable and what grants root. This deployment
+      # registers it and does not mount the socket — so a policy regression is still caught by
+      # observing a real refusal of a real tool, which is why it was registered in the first place,
+      # while the host exposure is gone. `scripts/compose_sandbox_check.py` keeps the mount from
+      # coming back by accident.
     ports:
       - "127.0.0.1:${AEON_TOOLGW_PORT:-9403}:9403"
 

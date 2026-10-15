@@ -98,6 +98,39 @@ func main() {
 
 	executor := toolexec.NewExecutor()
 
+	// TOOL-011: shell.exec exists only when an operator says so, because running it needs the host
+	// Docker socket mounted and that grants this process root-equivalent access to the host. It used
+	// to be registered unconditionally while every shipped policy bundle forbids `shell.*` — the
+	// largest exposure we have, carried by default, for a tool nobody is allowed to call.
+	//
+	// EXPLICIT AND NOT DETECTED. Probing for a reachable Docker socket and enabling the sandbox
+	// because one is there would make an unrelated mount turn the capability on, which is the "the
+	// wrong guess looks exactly like a working deployment" failure TOOL-004 wrote down about
+	// AEON_TOOL_EXECUTION_MODE.
+	if os.Getenv(toolexec.SandboxEnabledEnv) == "true" {
+		toolexec.RegisterShellExecTool(executor)
+		// REGISTRATION AND PRIVILEGE ARE DIFFERENT THINGS, and keeping them apart is the whole shape
+		// of this change. Registering shell.exec puts it in the catalogue; RUNNING it needs the host
+		// Docker socket, and that is the root-equivalent part. So the reference deployment registers
+		// it — every shipped bundle forbids `shell.*`, so a policy regression is still caught by
+		// observing a real refusal of a real tool — and does NOT mount the socket.
+		//
+		// The warning fires on the privilege, not on the registration. One that printed on every
+		// start regardless would be crying wolf, and a warning nobody believes is worse than none.
+		if _, err := os.Stat("/var/run/docker.sock"); err == nil {
+			log.Printf("aeon-toolgw: WARNING: shell.exec is registered AND /var/run/docker.sock is " +
+				"mounted, which grants this process ROOT-EQUIVALENT access to the host — anything that " +
+				"reaches the Docker API can start a privileged container with the host filesystem in it")
+		} else {
+			log.Printf("aeon-toolgw: shell.exec registered but NOT runnable: /var/run/docker.sock is not " +
+				"mounted. A permitted call would fail on the Docker connection; mount it only if you have " +
+				"decided to accept root-equivalent host access")
+		}
+	} else {
+		log.Printf("aeon-toolgw: shell.exec not registered (set %s=true and mount the docker socket)",
+			toolexec.SandboxEnabledEnv)
+	}
+
 	// TOOL-007: search.web over a real search provider. Registered only when one is configured, so a
 	// deployment without search gets "unknown tool" on the first call instead of a successful-looking
 	// answer with no results — which is what this replaced.

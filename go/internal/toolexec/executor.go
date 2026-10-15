@@ -135,12 +135,32 @@ func (e *Executor) WithRecorder(rec Recorder) *Executor {
 // Tests that need a permitted tool which executes register their own double explicitly. That keeps
 // the double visible in the test that relies on it instead of shipping it in the binary.
 func NewExecutor() *Executor {
-	e := &Executor{fns: map[string]ExecuteFunc{}}
-	// A real sandboxed shell (TOOL-003), not a fake stand-in — but this must still never run in
-	// the reference deployment: policy_bundle.yaml forbids "shell.*" for every agent. It exists so
-	// a policy regression is caught by actually observing a real (sandboxed) execution, not just
-	// by inspecting a decision object. The Docker connection is established lazily, on first call,
-	// so gateway startup never depends on Docker being reachable.
+	return &Executor{fns: map[string]ExecuteFunc{}}
+}
+
+// SandboxEnabledEnv is the variable an operator sets to register shell.exec (TOOL-011).
+const SandboxEnabledEnv = "AEON_SANDBOX_ENABLED"
+
+// RegisterShellExecTool registers TOOL-003's real sandboxed shell, and it is now the ONLY way
+// shell.exec exists.
+//
+// IT USED TO BE REGISTERED BY NewExecutor, UNCONDITIONALLY, and that is what TOOL-011 changes. The
+// old comment said it "must still never run in the reference deployment: policy_bundle.yaml forbids
+// shell.* for every agent" — which was true, and was the problem rather than the reassurance. To
+// run a sandboxed container the gateway needs the host Docker socket mounted, and that grants it
+// ROOT-EQUIVALENT ACCESS TO THE HOST: anything that reaches the Docker API can start a privileged
+// container with the host filesystem bind-mounted. So every deployment carried the largest exposure
+// it has, by default, for a tool no shipped policy allows anyone to call.
+//
+// THE SAME RULE AS search.web AND repository.read, finally applied here too: registered only when
+// configured, so a deployment without the sandbox answers "unknown tool" instead of carrying a
+// capability nobody asked for. `shell.exec` was the one exception to TOOL-007's rule, and the reason
+// given for the exception — that a policy regression should be caught by observing a REAL sandboxed
+// execution — is a property of a TEST, and a test can register its own. Which is exactly what
+// TOOL-007 said about doubles: the double belongs in the test that relies on it, not in the binary.
+func RegisterShellExecTool(e *Executor) {
+	// The Docker connection is established lazily, on first call, so gateway startup never depends
+	// on Docker being reachable even when the sandbox is enabled.
 	var (
 		once      sync.Once
 		runner    *sandbox.Runner
@@ -167,7 +187,6 @@ func NewExecutor() *Executor {
 			"stderr":    result.Stderr,
 		}, nil
 	})
-	return e
 }
 
 // Knows reports whether this executor can run a tool by that name.
