@@ -149,7 +149,8 @@ func (h *OpenAICompatibleHandlers) chatCompletions(w http.ResponseWriter, r *htt
 	// /decide: checking afterwards records the spend and then refuses, which is a receipt and not a
 	// cap. Same method, so there is no second copy of the rule to fall behind.
 	if h.Governance != nil {
-		if refusal := h.Governance.overBudget(r, runID, agentRef); refusal != nil {
+		// OBS-020: through the shared helper, so the refusal is recorded here too.
+		if refusal := h.Governance.refuseIfOverBudget(r, "POST /v1/chat/completions", runID, agentRef); refusal != nil {
 			// 402 in OpenAI's error envelope, so a client that only understands that envelope still
 			// reads a message; the facts a budget stop carries (ceiling, spend, retryable: false) ride
 			// alongside under `aeon` rather than being flattened into the message string.
