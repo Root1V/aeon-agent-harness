@@ -164,10 +164,54 @@ func MarkOutcome(span trace.Span, outcome string) {
 // can emit truthfully. A modality refusal and a circuit-breaker trip are also denials and neither
 // creates a span, which is why there is no constant for them — the same reasoning that kept
 // constants for those two out of this file.
+// The value set is CLOSED and has exactly these three (argus_semconv 1.0.0a22). All three are ours
+// to emit and until OBS-020 only `policy` was: a budget ceiling and a human rejection are refusals
+// too, and neither appeared in a trace AT ALL — not as a denial, not as anything. So this was never
+// a missing attribute; it was two kinds of refusal with nowhere to be recorded, which is the
+// argument Argus made for publishing the attribute in the first place.
 const (
 	AttrArgusDeniedBy = "argus.denied_by"
 	DeniedByPolicy    = "policy"
+	// DeniedByBudget: a spend ceiling stopped it (MDL-017/MDL-018). Not a rate limit and never
+	// retryable, which is why the surfaces answer 402 rather than 429.
+	DeniedByBudget = "budget"
+	// DeniedByHuman: a person rejected a pending approval (INT-010). The only one of the three that
+	// is not the system refusing on its own.
+	DeniedByHuman = "human"
 )
+
+// AttrArgusRunID is Argus's published key for the run a span belongs to. The Python half has set it
+// since OBS-006b (via their `propagate.run`, which also puts it in baggage so it survives the HTTP
+// hop); Go had no constant for it because nothing on this side set it directly.
+//
+// AN ATTRIBUTE AND NOT A SPAN NAME, which is the distinction Argus drew in ARG-AEON-002: a run id is
+// unbounded, so it must never reach a grouping key like `span_name` — and it is exactly what a
+// published attribute is for. A refusal that does not say WHICH run was stopped is close to useless
+// to whoever has to act on it.
+const AttrArgusRunID = "argus.run.id"
+
+// MarkRun records which run a span belongs to, when there is one. Empty is left absent rather than
+// written as "": a span with no run is a real case here (a caller with no Aeon run behind it), and
+// an empty string would claim a run whose id is blank.
+func MarkRun(span trace.Span, runID string) {
+	if span == nil || runID == "" {
+		return
+	}
+	span.SetAttributes(attribute.String(AttrArgusRunID, runID))
+}
+
+// MarkDenied records a refusal: that it happened, and by what.
+//
+// THE TWO ATTRIBUTES ARE ONE FACT and this is the only place that writes them, which is the lesson
+// OBS-019 paid twelve days for — `argus.denied_by` went unemitted at the two sites that already set
+// the outcome, because attributing was a second call next to the first.
+func MarkDenied(span trace.Span, deniedBy string) {
+	if span == nil || deniedBy == "" {
+		return
+	}
+	MarkOutcome(span, OutcomeDenied)
+	span.SetAttributes(attribute.String(AttrArgusDeniedBy, deniedBy))
+}
 
 // MarkPolicyDecision records Argus's outcome for a Cedar disposition and, when that outcome is a
 // denial, attributes it.
@@ -182,10 +226,11 @@ const (
 // leave us in exactly the gap this closes while looking closed.
 func MarkPolicyDecision(span trace.Span, d policy.Disposition) string {
 	outcome := OutcomeForDisposition(d)
-	MarkOutcome(span, outcome)
-	if span != nil && outcome == OutcomeDenied {
-		span.SetAttributes(attribute.String(AttrArgusDeniedBy, DeniedByPolicy))
+	if outcome == OutcomeDenied {
+		MarkDenied(span, DeniedByPolicy)
+		return outcome
 	}
+	MarkOutcome(span, outcome)
 	return outcome
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/checkpoint"
 	"github.com/aeon-ai/aeon/go/internal/runcontroller"
 	"github.com/aeon-ai/aeon/go/internal/store"
+	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
 
 // runControllerTracer emits OBS-001's "invoke_agent" span (OTel GenAI semantic conventions) around
@@ -311,6 +312,27 @@ func (h *RunControllerHandlers) reject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	// OBS-020: a person rejecting an approval is a REFUSAL, and it was in the run's journal
+	// (INT-010) and nowhere in the trace. `argus.denied_by = human` is the only one of the three
+	// values that is not the system refusing on its own, and it was the one with no producer.
+	//
+	// AFTER the controller confirms it, never before: a span saying a person rejected something is
+	// a claim about what a person did, and recording it on an attempt that failed would put a
+	// decision in the trace that nobody made.
+	//
+	// ONLY ON THE REJECTION. This route creates no span otherwise, and a rejection is a rare,
+	// human-paced event — so this adds spans at the rate people decide things, not at the rate
+	// requests arrive.
+	//
+	// THE ROUTE TEMPLATE AND NOT THE PATH. `r.URL.Path` here contains the run id, so naming the span
+	// after it would mint one span name per run: the unbounded cardinality Argus asked us to avoid,
+	// in the one route of this pair that actually has an id in it.
+	_, span := runControllerTracer.Start(r.Context(), "POST /runs/{run_id}/reject", trace.WithSpanKind(trace.SpanKindServer))
+	tracing.MarkDenied(span, tracing.DeniedByHuman)
+	tracing.MarkRun(span, r.PathValue("run_id"))
+	span.End()
+
 	h.respondToApproval(w, r, caller, decision)
 }
 

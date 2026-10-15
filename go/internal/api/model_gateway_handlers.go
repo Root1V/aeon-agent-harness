@@ -7,10 +7,14 @@ import (
 	"net/http"
 	"strings"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/finops"
 	"github.com/aeon-ai/aeon/go/internal/modelgateway"
 	"github.com/aeon-ai/aeon/go/internal/store"
+	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
 
 // ModelGatewayHandlers exposes the Model Gateway's routing/fallback (MDL-001) over HTTP — the only
@@ -39,6 +43,12 @@ type ModelGatewayHandlers struct {
 // tenantOf resolves the caller's tenant, or reports that there is no caller. Nil-safe stores keep
 // their old meaning: a deployment without Postgres has no ledger and no ceiling, which is reported
 // at startup, and that is unchanged by tenancy.
+// modelGatewayTracer exists for ONE thing: recording a refusal that would otherwise be invisible
+// (OBS-020). This handler deliberately creates no span on the happy path — go/internal/modelgateway
+// makes one per candidate it actually tries, named `chat {model}` — so a request refused BEFORE
+// routing had nowhere to be recorded.
+var modelGatewayTracer = otel.Tracer("aeon-modelgw")
+
 func (h *ModelGatewayHandlers) tenantOf(r *http.Request) (string, bool) {
 	// THE TENANT OF THE RUN. This one line is the worst of the six surfaces Veritium's finding
 	// touched, and the only one with no symptom: `agentsFor` below reads the agent registry the COST
@@ -111,7 +121,19 @@ func (h *ModelGatewayHandlers) decide(w http.ResponseWriter, r *http.Request) {
 
 	// MDL-017: the ceiling, checked BEFORE the provider is called. After would record the spend and
 	// then refuse, which is a receipt rather than a cap.
-	if refusal := h.overBudget(r, body.RunID, body.AgentManifestRef); refusal != nil {
+	if refusal := h.refuseIfOverBudget(r, "POST /decide", body.RunID, body.AgentManifestRef); refusal != nil {
+		// OBS-020: a budget stop is a REFUSAL and had nowhere to be recorded. This handler creates no
+		// span on the happy path — the gateway makes one per candidate it actually tries — so a
+		// request stopped before routing left no trace of having been stopped. `argus.denied_by =
+		// budget` exists for exactly this and we were not emitting it.
+		//
+		// THE SPAN IS CREATED ONLY ON THE REFUSAL, which is the whole reason this needs no agreement
+		// about volume: a budget stop is a rare event, not a per-request span. The happy path is
+		// untouched.
+		//
+		// `{method} {route}` WITH THE ROUTE TEMPLATE, never an id — the bounded-cardinality rule
+		// Argus asked for in ARG-AEON-002, after three incidents this week from ids reaching a
+		// grouping key.
 		// 402 and not 429: a budget stop is not a rate limit and must not be retried. The worker maps
 		// 4xx to non-retryable (tool_activities' mapping, same reasoning), so a 5xx here would have the
 		// run keep trying a call that can never be allowed again.
@@ -352,6 +374,29 @@ func costModelName(pricing *finops.PricingTable, provider, model string) *string
 		return nil
 	}
 	return &rate.CostModel
+}
+
+// refuseIfOverBudget is overBudget plus the trace record of the refusal (OBS-020). Both surfaces
+// that enforce the ceiling go through it, so the refusal cannot be recorded on one and not the
+// other — which is the shape that left `argus.denied_by` unemitted for twelve days.
+//
+// THE ROUTE IS AN ARGUMENT AND NOT DERIVED FROM r.URL.Path, so a caller has to think about it. Both
+// of today's routes are fixed paths with no ids in them, but deriving the name from the live path
+// would quietly produce one span name per id the day this is called from a route that has one —
+// exactly the unbounded cardinality Argus asked us to avoid.
+func (h *ModelGatewayHandlers) refuseIfOverBudget(r *http.Request, route, runID, agentRef string) map[string]any {
+	refusal := h.overBudget(r, runID, agentRef)
+	if refusal == nil {
+		return nil
+	}
+	_, span := modelGatewayTracer.Start(r.Context(), route, trace.WithSpanKind(trace.SpanKindServer))
+	tracing.MarkDenied(span, tracing.DeniedByBudget)
+	// WHICH run was stopped. Without it the span says "somebody's ceiling was hit", which is not
+	// something an operator can act on — and the run id is an unbounded value that belongs in an
+	// attribute and never in the span name.
+	tracing.MarkRun(span, runID)
+	span.End()
+	return refusal
 }
 
 // overBudget returns a refusal body when this run has already spent what its agent's manifest allows,
