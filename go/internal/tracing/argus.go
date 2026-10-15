@@ -149,6 +149,46 @@ func MarkOutcome(span trace.Span, outcome string) {
 	span.SetAttributes(attribute.String(AttrArgusOutcome, outcome))
 }
 
+// AttrArgusDeniedBy attributes a denial (`argus.denied_by`), and DeniedByPolicy is the value a Cedar
+// refusal carries.
+//
+// ARGUS PUBLISHED THIS ON 2026-10-02 BECAUSE WE ASKED FOR IT, and we said "lo emitimos en cuanto
+// esté". They measured it on 2026-10-14 over the whole history: seven spans, all from their own
+// probes, nobody else. Twelve days of an attribute that existed because of us and that we did not
+// emit — the same defect we have reported to three teams this month, from the other side.
+//
+// THE ARGUMENT FOR IT WAS OURS TOO: once `argus.guardrail` stopped being set, nothing carried WHO
+// refused. `argus.outcome = denied` says it was refused; this says by what.
+//
+// ONLY `policy` IS DEFINED HERE. Both call sites are Cedar refusals, so that is the only value we
+// can emit truthfully. A modality refusal and a circuit-breaker trip are also denials and neither
+// creates a span, which is why there is no constant for them — the same reasoning that kept
+// constants for those two out of this file.
+const (
+	AttrArgusDeniedBy = "argus.denied_by"
+	DeniedByPolicy    = "policy"
+)
+
+// MarkPolicyDecision records Argus's outcome for a Cedar disposition and, when that outcome is a
+// denial, attributes it.
+//
+// ONE CALL AND NOT TWO, which is the point. Setting the outcome and attributing it are the same fact
+// in two attributes, and a second call next to the first is a second thing to forget — which is how
+// `argus.denied_by` went twelve days unemitted at exactly the sites that already set the outcome.
+// Here a denial cannot be recorded without saying who denied it.
+//
+// ON THE SPAN AND NOT ON AN EVENT, which Argus warned about in ARG-AEON-003: their alert for a
+// `denied` with no attribution reads SPAN attributes, so a denial attributed on a span event would
+// leave us in exactly the gap this closes while looking closed.
+func MarkPolicyDecision(span trace.Span, d policy.Disposition) string {
+	outcome := OutcomeForDisposition(d)
+	MarkOutcome(span, outcome)
+	if span != nil && outcome == OutcomeDenied {
+		span.SetAttributes(attribute.String(AttrArgusDeniedBy, DeniedByPolicy))
+	}
+	return outcome
+}
+
 // OutcomeForDisposition maps a policy disposition to Argus's outcome vocabulary.
 //
 // A denial is `denied` and NOT `ok`, and Argus is right about why — I had argued `ok`, reasoning that

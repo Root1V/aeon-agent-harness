@@ -975,6 +975,21 @@ fichero mal nombrado. Sin `down`, a propósito.
   una acción es lo que la inscribe en el test. Verificado añadiendo una acción sin comprobación: el
   test la caza sola.
 
+### Los otros dos valores de `argus.denied_by`: `budget` y `human`
+
+- **Descripción:** `OBS-019` emite `argus.denied_by = policy` en los dos sitios que deniegan por
+  Cedar. El conjunto publicado en `a22` es cerrado y tiene tres: `policy`, `budget`, `human`. Los
+  otros dos nos corresponden y hoy **no se pueden emitir, porque esos caminos no ponen desenlace
+  siquiera**: un techo de presupuesto (`MDL-018`, los budgets de tool-call) y el rechazo de una
+  aprobación por una persona (`/reject`) no crean ni `argus.outcome = denied`. Así que no es añadir
+  un atributo, es que esos dos rechazos no están en la traza como rechazos.
+- **Por qué no se hizo con `OBS-019`:** emitir `denied_by` sin `outcome` sería un atributo que
+  atribuye algo que la traza no dice que ocurrió, y las dos mitades son el mismo hecho.
+- **Criterio de entrada:** ninguno especial; es trabajo nuestro y está medido dónde falta.
+- **Coste:** S cada uno. El de presupuesto tiene además la gracia de que `MDL-018` existe porque la
+  inferencia local no se tarifica, así que un techo que corta y no se ve en la traza es justo el caso
+  que cuesta dinero.
+
 ### Dirección *request* en el corpus de normalización (propuesta de SYN en `VRT-SYN-004`)
 
 - **Descripción:** Synaptum propone añadir a `normalizacion/fixtures` un caso de dirección

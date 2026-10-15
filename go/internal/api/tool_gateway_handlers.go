@@ -283,7 +283,7 @@ func (h *ToolGatewayHandlers) execute(w http.ResponseWriter, r *http.Request) {
 		// Argus's hot path (2s) rather than the 30-60s cold one. The KIND comes from the disposition, because
 		// "a person must approve this" and "policy forbids this" need answering differently and within
 		// seconds of each other — see go/internal/tracing/argus.go.
-		tracing.MarkOutcome(span, tracing.OutcomeForDisposition(decision.Disposition))
+		tracing.MarkPolicyDecision(span, decision.Disposition)
 		span.SetAttributes(attribute.String("aeon.guardrail.reason", "denied by policy "+decision.PolicyID))
 
 		// Journalled BEFORE the response, on purpose: after it, a crash in this process between writing
