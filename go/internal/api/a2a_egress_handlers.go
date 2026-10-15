@@ -387,7 +387,7 @@ func (h *A2AEgressHandlers) denyWithDisposition(
 	// the class of bug that leaves a correct-looking attribute carrying the wrong value.
 	// The outcome is always set; the guardrail only when one was named. Their Step finaliser defaults
 	// argus.outcome to "ok", so a refusal that set nothing would be recorded as a successful step.
-	tracing.MarkOutcome(span, tracing.OutcomeForDisposition(disposition))
+	tracing.MarkPolicyDecision(span, disposition)
 	if guardrail != "" {
 		tracing.MarkGuardrail(span, guardrail, reason)
 	} else {

@@ -87,6 +87,7 @@ test-go-integration: ## Run Go tests against real Postgres + Temporal + a real w
 		-e AEON_TEST_TOOLGW_ADDR="toolgw:9403" \
 		-e AEON_CALLER_TOKEN="$(or $(AEON_CALLER_TOKEN),dev-test-token-not-a-secret)" \
 		-e AEON_TEST_OTEL_ENDPOINT="otel-collector:4318" \
+		-e ARGUS_NAMESPACE="aeon-ai" -e ARGUS_ENVIRONMENT="test" \
 		-e AEON_TEST_TEMPO_QUERY_URL="http://tempo:3200" \
 		-e AEON_TEST_SEARXNG_URL="http://searxng:8080" \
 		golang:1.25-alpine sh -c \
@@ -111,8 +112,9 @@ test-python-integration: ## Run Python tests against a real Tool Gateway + Postg
 		-e AEON_TEST_TOOLGW_ADDR="toolgw:9403" \
 		-e AEON_TEST_CONTROLPLANE_ADDR="controlplane:9401" \
 		-e AEON_TEST_OTEL_ENDPOINT="otel-collector:4318" \
+		-e ARGUS_NAMESPACE="aeon-ai" -e ARGUS_ENVIRONMENT="test" \
 		-e AEON_TEST_TEMPO_QUERY_URL="http://tempo:3200" \
-		-e AEON_TOOL_EXECUTION_MODE=local-ledger \
+		-e AEON_TOOL_EXECUTION_MODE=local-ledger -e ARGUS_NAMESPACE=aeon-ai -e ARGUS_ENVIRONMENT=test \
 		-e AEON_CALLER_TOKEN="$(or $(AEON_CALLER_TOKEN),dev-test-token-not-a-secret)" \
 		-e AEON_TEST_ARTIFACT_ROOT="/repo/.artifacts" \
 		python:3.13-slim sh -c \
@@ -120,6 +122,12 @@ test-python-integration: ## Run Python tests against a real Tool Gateway + Postg
 	$(COMPOSE) --profile core --profile obs stop postgres toolgw controlplane otel-collector tempo
 
 test-python: ## Run Python unit + integration tests in a throwaway container via uv
+	# ARGUS_NAMESPACE y ARGUS_ENVIRONMENT se pasan porque el compose los pone y los tests no lo
+	# hacían, así que corrían con una identidad distinta de la de producción. El SDK a22 lo avisa y
+	# dice lo que cuesta: sin namespace entras en su registro como PROVISIONAL —sin canales, o sea
+	# que tus incidentes no llegan a ningún humano— y la telemetría se exporta igual y sin error.
+	# "Los datos llegan y no sirven", con sus palabras. Aquí no era un hueco de producción (compose
+	# los pone), era que los tests no ejercitaban el camino configurado.
 	# Mounts the whole repo, not just python/: test_contracts.py and (from DR-001) the Deep
 	# Research profile's Planner load JSON Schemas from proto/schemas and fixtures from examples/,
 	# both outside python/. '.[dev]' pulls in pytest/pytest-asyncio/pyyaml/referencing — plain
@@ -129,7 +137,7 @@ test-python: ## Run Python unit + integration tests in a throwaway container via
 	# AEON_TOOL_EXECUTION_MODE is explicit (TOOL-004): the worker refuses to pick an execution
 	# backend on its own, because the wrong guess — the file ledger, which runs nothing — looks
 	# exactly like a working deployment. These tests want that ledger, and now they say so.
-	docker run --rm -v "$(PWD):/repo" -w /repo/python -e AEON_TOOL_EXECUTION_MODE=local-ledger python:3.13-slim sh -c \
+	docker run --rm -v "$(PWD):/repo" -w /repo/python -e AEON_TOOL_EXECUTION_MODE=local-ledger -e ARGUS_NAMESPACE=aeon-ai -e ARGUS_ENVIRONMENT=test python:3.13-slim sh -c \
 		"apt-get update -qq && apt-get install -y -qq --no-install-recommends nodejs npm >/dev/null && npm install -g @anthropic-ai/claude-code >/dev/null 2>&1 && pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q"
 
 test-mdl-015: ## Run the real-platform acceptance tests (real inference, real money): MDL-015 + OBS-003b
@@ -151,7 +159,7 @@ test-mdl-015: ## Run the real-platform acceptance tests (real inference, real mo
 	docker run --rm --network aeon_default -v "$(PWD):/repo" -w /repo/python \
 		-e AEON_TEST_MODELGW_ADDR="modelgw:9402" \
 		-e AEON_TEST_TOOLGW_ADDR="toolgw:9403" \
-		-e AEON_TOOL_EXECUTION_MODE=local-ledger \
+		-e AEON_TOOL_EXECUTION_MODE=local-ledger -e ARGUS_NAMESPACE=aeon-ai -e ARGUS_ENVIRONMENT=test \
 		-e AEON_CALLER_TOKEN="$(or $(AEON_CALLER_TOKEN),dev-worker-token-not-a-secret)" \
 		python:3.13-slim sh -c \
 		"pip install --no-cache-dir uv >/dev/null && uv run --with-editable '.[dev]' pytest -q -s tests/integration/test_deep_research_against_real_prometheus.py"
