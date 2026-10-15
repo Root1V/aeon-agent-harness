@@ -31,20 +31,31 @@ const deniedOutcomeAgent = "deep-research-general@0.1.0"
 // records is a Python loop, so a record only counts as journalled if it comes back out the way that
 // loop will fetch it. A test reading the Checkpointer directly would pass on a serialisation bug that
 // made the outcome unreadable to the only consumer that matters.
-func loadRunState(t *testing.T, srv *httptest.Server, runID string) *checkpoint.RunState {
+// loadRunState fetches ONE sub-run's journal over the wire. subRunID is a required argument and `""`
+// is the root run, mirroring the route since INT-009c — a helper that omitted it would let a test
+// assert over a mixture of sub-runs again, which is the defect the route had.
+func loadRunState(t *testing.T, srv *httptest.Server, runID, subRunID string) *checkpoint.RunState {
 	t.Helper()
-	resp := getAuthed(t, srv.URL+"/runs/"+runID+"/checkpoints")
+	url := srv.URL + "/runs/" + runID + "/checkpoints"
+	if subRunID != "" {
+		url += "?sub_run_id=" + subRunID
+	}
+	resp := getAuthed(t, url)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET journal for %s = %d, want 200", runID, resp.StatusCode)
+		t.Fatalf("GET journal for %s (sub-run %q) = %d, want 200", runID, subRunID, resp.StatusCode)
 	}
+	// next_seq is decoded and carried through rather than re-derived from the records, because it is
+	// RUN-WIDE and the records here are one sub-run's. Rebuilding the state from the records alone
+	// would make every caller of this helper read a sequence the server never sent (INT-009c).
 	var parsed struct {
 		Records []checkpoint.Record `json:"records"`
+		NextSeq int64               `json:"next_seq"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
 		t.Fatalf("decoding journal: %v", err)
 	}
-	return checkpoint.NewRunState(runID, parsed.Records)
+	return checkpoint.NewSubRunState(runID, subRunID, parsed.Records, parsed.NextSeq)
 }
 
 // newDeniedOutcomeGateway is a real Tool Gateway with a real Cedar engine over the checked-in policy
@@ -140,7 +151,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 		}
 
 		// The point of the whole feature: the step now HAS an outcome, where before it had nothing.
-		state := loadRunState(t, srv, runID)
+		state := loadRunState(t, srv, runID, "")
 		outcome, reason, ok := state.StepOutcome("", "n0")
 		if !ok {
 			t.Fatal("the denied step has no completed record — it is still indistinguishable from a step whose fate nobody knows, which is the exact bug INT-011 is about")
@@ -185,7 +196,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 			t.Fatalf("POST /execute = %d, want 403", status)
 		}
 
-		outcome, reason, ok := loadRunState(t, srv, runID).StepOutcome("", "n0")
+		outcome, reason, ok := loadRunState(t, srv, runID, "").StepOutcome("", "n0")
 		if !ok {
 			t.Fatal("a default-denied step has no record")
 		}
@@ -209,7 +220,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 			Args: map[string]any{}, RunID: runID, StepID: "n0",
 		})
 
-		rec, ok := loadRunState(t, srv, runID).Completed("", "n0")
+		rec, ok := loadRunState(t, srv, runID, "").Completed("", "n0")
 		if !ok {
 			t.Fatal("no completed record for the denied step")
 		}
@@ -243,7 +254,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 		if dup, _ := journal["duplicate"].(bool); !dup {
 			t.Errorf("the second denial did not report duplicate=true: %v", journal)
 		}
-		if records := loadRunState(t, srv, runID).Records(); len(records) != 1 {
+		if records := loadRunState(t, srv, runID, "").Records(); len(records) != 1 {
 			t.Errorf("the journal has %d records for one denied step, want 1", len(records))
 		}
 	})
@@ -319,7 +330,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 		// Keyed by the APPROVAL, which is the convention the three teams share — ApprovalStep rather than a
 		// hand-written prefix, so nobody derives it differently.
 		stepID := checkpoint.ApprovalStep(approvalID)
-		state := loadRunState(t, srv, runID)
+		state := loadRunState(t, srv, runID, "")
 		outcome, _, ok := state.StepOutcome("", stepID)
 		if !ok {
 			t.Fatalf("no record for %s — the person's decision left no trace, so a resuming loop cannot tell a rejected run from one still waiting", stepID)
@@ -375,7 +386,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 			t.Fatalf("POST /runs/%s/approve = %d, want 202", runID, resp.StatusCode)
 		}
 
-		outcome, _, ok := loadRunState(t, srv, runID).StepOutcome("", checkpoint.ApprovalStep(approvalID))
+		outcome, _, ok := loadRunState(t, srv, runID, "").StepOutcome("", checkpoint.ApprovalStep(approvalID))
 		if !ok {
 			t.Fatal("the granted approval was not journalled")
 		}
@@ -392,7 +403,7 @@ func TestDeniedStepIsJournalledAsKnownOutcome(t *testing.T) {
 		// run controller" — and nothing verified any of that: the endpoint was unauthenticated, so the
 		// only true statement was "something that could reach the port". An audit line asserting a
 		// person was involved, on the one step whose entire purpose is that a person was involved.
-		decidedBy, named := loadRunState(t, srv, runID).ApprovalActor("", checkpoint.ApprovalStep(approvalID))
+		decidedBy, named := loadRunState(t, srv, runID, "").ApprovalActor("", checkpoint.ApprovalStep(approvalID))
 		if !named {
 			t.Fatalf("the approval record names no decider, so the audit trail of an irreversible call " +
 				"says it was approved and cannot say by whom")

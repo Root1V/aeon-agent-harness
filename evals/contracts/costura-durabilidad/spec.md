@@ -89,11 +89,31 @@ número. Con nodos en paralelo hay `append` concurrentes de verdad, así que la 
 por run.
 
 Contiguo importa: es lo que hace que `next_seq` signifique «por dónde continúa el diario» y no
-«algún número mayor que el último».
+«algún número mayor que el último». Contiguo **por run**, no por sub-run: una lectura filtrada
+devuelve huecos en `seq`, y eso es correcto (ver `load`).
 
 ## `load`
 
-Devuelve el diario completo del run en orden de `seq`, más `next_seq`.
+Devuelve el diario **de un sub-run** en orden de `seq`, más `next_seq`.
+
+**`load` toma el `sub_run_id` y lo filtra, con la misma regla que `append`:** omitido es el run raíz
+y vacío explícito también. No es opcional en la firma de la implementación de referencia: es un
+argumento obligatorio, porque un llamante que no sabe que existe el ámbito es exactamente quien lee
+el diario de otra delegación sin notarlo.
+
+**Esto lo decía `0.2` a medias y es un defecto de este documento** (`INT-009c`, encontrado por
+Veritium): `0.2` metió `sub_run_id` en la identidad de la escritura y no dijo nada de la lectura. De
+ese silencio salió una implementación de referencia que escribía por sub-run y leía todo el run, y
+**ningún test del contrato lo veía** porque el schema de `run-state` no podía expresar un ámbito que
+el documento no mencionaba. Un sub-run que reanudaba adoptaba los pasos de sus hermanos como propios
+y se los saltaba.
+
+**`next_seq` sigue siendo del run entero, no del sub-run.** Es la única parte de la respuesta que no
+se filtra, y es deliberado: `seq` ordena el diario **entre** sub-runs (ver `seq`), así que derivarlo
+del subconjunto le daría a un sub-run que reanuda números que sus hermanos ya escribieron. Eso
+convierte un defecto de lectura en uno de orden, que es peor. Consecuencia directa, y es la parte que
+un cliente tiene que saber: **`next_seq` no es igual al número de entradas devueltas** cuando el run
+tiene delegación. Dentro de un sub-run los `seq` tampoco son contiguos; lo contiguo es el run.
 
 Un run **desconocido devuelve un diario vacío, no un error**. Un bucle que pregunta «¿dónde estaba?»
 antes de su primer checkpoint es la llamada normal, no un fallo; responder 404 obligaría a todos los
@@ -111,9 +131,13 @@ llamantes a tratar el camino feliz como caso especial.
 ## Superficie HTTP de referencia
 
 ```
-POST /runs/{run_id}/checkpoints    -> 201 entrada nueva · 200 duplicado · 400 entrada inválida
-GET  /runs/{run_id}/checkpoints    -> 200 siempre, incluso para un run desconocido
+POST /runs/{run_id}/checkpoints                     -> 201 entrada nueva · 200 duplicado · 400 inválida
+GET  /runs/{run_id}/checkpoints[?sub_run_id=<ruta>] -> 200 siempre, incluso para un run desconocido
 ```
+
+`sub_run_id` va en el query y **no** en el path: la ruta de delegación es opaca y lleva barras, así
+que un segmento de path la partiría en varios. Omitirlo es el run raíz, y `?sub_run_id=` vacío
+también — las dos formas caen en la raíz por igualdad simple, que es lo que la escritura guarda.
 
 Los dos códigos de éxito son ambos éxito: la distinción es informativa. Quien corre bajo
 *at-least-once* nunca debe necesitar distinguirlos para ser correcto.

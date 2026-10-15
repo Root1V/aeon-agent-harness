@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aeon-ai.dev/contracts/costura-durabilidad/0.2/run-state.schema.json",
   "title": "RunState",
-  "description": "El diario completo de un run. Un run desconocido devuelve esta misma forma con records vacio y next_seq 0.",
+  "description": "El diario de UN sub-run. Un run desconocido devuelve esta misma forma con records vacio y next_seq 0. 'Completo del run' era la descripcion hasta INT-009c, y describia una lectura sin filtrar que 0.2 nunca quiso: ver la seccion load del spec.",
   "type": "object",
   "required": [
     "run_id",
@@ -18,7 +18,7 @@
     "next_seq": {
       "type": "integer",
       "minimum": 0,
-      "description": "Por donde continua el diario. Igual al numero de entradas, porque seq es contiguo desde 0."
+      "description": "Por donde continua el diario, DEL RUN ENTERO y no del sub-run devuelto. NO es igual al numero de entradas cuando el run tiene delegacion: seq ordena el diario entre sub-runs, asi que derivarlo del subconjunto le daria a un sub-run que reanuda numeros que sus hermanos ya escribieron (INT-009c)."
     },
     "records": {
       "type": "array",
@@ -64,6 +64,10 @@
           }
         }
       }
+    },
+    "sub_run_id": {
+      "type": "string",
+      "description": "El sub-run que esta respuesta describe, '' para la raiz. Esta porque la respuesta tiene que poder decir a QUE pregunta contesta: sin el, un diario filtrado y uno sin filtrar son la misma forma, que es como un ambito ignorado paso 0.2 entera sin que nada lo notara. Ausente equivale a '' para una implementacion de 0.1."
     },
     "durability": {
       "type": "object",

@@ -89,7 +89,17 @@ func (c *Checkpointer) Append(ctx context.Context, entry checkpoint.Entry) (chec
 }
 
 // Load reads the run's whole journal and reconstructs the state.
-func (c *Checkpointer) Load(ctx context.Context, runID string) (*checkpoint.RunState, error) {
+// Load returns ONE sub-run's journal, with the run-wide next sequence (INT-009c).
+//
+// SUB-RUN IS A REQUIRED ARGUMENT AND NOT AN OPTION, which is the point of the signature. Veritium
+// found that this read ignored it entirely: the write has stored `sub_run_id` and keyed on it since
+// INT-009b, the contract schema declares it, and the read returned EVERY sub-run of the parent — so
+// a sub-run resuming would adopt its siblings' steps as its own. Making it a parameter means the one
+// caller had to decide, rather than inheriting a default that was wrong for anyone with sub-runs.
+//
+// EMPTY MEANS THE ROOT RUN, with no special case anywhere: the write stores `”` for a root step, so
+// filtering is plain equality and "the parameter was omitted" lands on the root rows by itself.
+func (c *Checkpointer) Load(ctx context.Context, runID, subRunID string) (*checkpoint.RunState, error) {
 	if runID == "" {
 		return nil, fmt.Errorf("store: run_id is required to load checkpoints")
 	}
@@ -103,7 +113,13 @@ func (c *Checkpointer) Load(ctx context.Context, runID string) (*checkpoint.RunS
 	}
 	defer rows.Close()
 
+	// EVERY ROW IS READ AND ONLY THE MATCHING ONES ARE KEPT, on purpose rather than filtering in SQL.
+	// `next_seq` has to stay RUN-WIDE (INT-009b): it orders the journal across sub-runs, so deriving
+	// it from one sub-run's rows would give a resuming sub-run numbers its siblings already used. One
+	// round trip answers both questions; a `WHERE sub_run_id = $3` would answer the wrong one
+	// correctly.
 	var records []checkpoint.Record
+	var runWideNextSeq int64
 	for rows.Next() {
 		var rec checkpoint.Record
 		var phase string
@@ -116,12 +132,18 @@ func (c *Checkpointer) Load(ctx context.Context, runID string) (*checkpoint.RunS
 		if payload != nil {
 			rec.Payload = json.RawMessage(payload)
 		}
+		if rec.Seq >= runWideNextSeq {
+			runWideNextSeq = rec.Seq + 1
+		}
+		if rec.SubRunID != subRunID {
+			continue
+		}
 		records = append(records, rec)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: reading checkpoints for run %s: %w", runID, err)
 	}
-	return checkpoint.NewRunState(runID, records), nil
+	return checkpoint.NewSubRunState(runID, subRunID, records, runWideNextSeq), nil
 }
 
 // payloadArg maps an absent payload to SQL NULL rather than to the JSON literal `null`. An
