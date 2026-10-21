@@ -1214,3 +1214,20 @@ fichero mal nombrado. Sin `down`, a propósito.
   marcador). Y los tres estados de siempre: coste medido, coste sin precio y **sin consumo
   reportado** —un error HTTP sin cuerpo no trae contadores— no son el mismo hecho.
 - **Coste:** S.
+
+### Cuatro adaptadores meten el cuerpo del upstream en el mensaje de error
+
+- **Descripción:** `openai_compatible`, `openai`, `anthropic` y `gemini` hacen
+  `fmt.Errorf("...: status %d: %s", status, string(body))` cuando el proveedor no contesta 200. Ese
+  cuerpo es texto del proveedor y **puede repetir la petición**: un 400 de validación suele citar el
+  mensaje que lo provocó. Por el camino del candidato fallido, ese error va a `span.RecordError` y a
+  `span.SetStatus`, o sea **al almacén de Argus** y al cuerpo del 502 del llamante. Es la misma forma
+  que `MDL-023` arregló para los argumentos de tool (`VRT-AEON-008`, punto de datos personales), en
+  cuatro sitios que ese cambio no tocó. No está medido que hoy filtre: lo que está medido es que el
+  mensaje es capaz de llevarlo.
+- **Fase objetivo:** antes de que una ruta gobernada con datos personales sea la ruta normal de un
+  consumidor. Para Veritium ya lo es.
+- **Criterio de entrada:** medir primero con qué cuerpo contesta cada proveedor un 400 provocado por
+  contenido, y recortar a lo accionable (status, largo, `error.type`/`error.code` cuando el proveedor
+  los dé) sin el texto libre. Un cuerpo recortado a ciegas puede quitar justo el dato que diagnostica.
+- **Coste:** S.
