@@ -827,40 +827,93 @@ func TestStreamStopsAtFirstSentinel(t *testing.T) {
 	}
 }
 
-// TestToolArgumentsThatDoNotParseAreAnError covers a contract rule the CORPUS DOES NOT COVER.
+// TestToolArgumentsThatDoNotParseNeverBecomeAnEmptyObject covers a contract rule the CORPUS DOES NOT
+// COVER.
 //
 // The spec is explicit: «Una cadena que no parsea no se convierte en objeto vacío. Es un error del
 // proveedor y se levanta como tal — un `{}` silencioso ejecutaría la herramienta sin argumentos.» Every
 // recorded body has well-formed arguments, so nothing in the shared corpus exercises it — and a mutation
-// that deleted the error check left all 14 cases green.
+// that deleted the check left all 14 cases green.
 //
 // That is the honest limit of a corpus built from recordings: it proves agreement on what the platform
 // actually sends, and says nothing about what happens when the platform misbehaves. This test is the other
 // half, and it belongs here rather than in the shared fixtures, which should keep describing reality.
-func TestToolArgumentsThatDoNotParseAreAnError(t *testing.T) {
+//
+// IT WAS CALLED ...AreAnError UNTIL MDL-023, and the rename is the point rather than tidying. The half of
+// the rule that matters is «no se convierte en objeto vacío», and it still holds: `arguments` comes out
+// NULL. What stopped being true is «se levanta como tal» at the transport, because raising it here failed
+// the candidate and the gateway answered 502 — so a turn the model had already produced, and been paid
+// for, was thrown away (VRT-AEON-008). The error now travels WITH the call. A test named after the
+// mechanism outlives the mechanism; this one is named after the property.
+func TestToolArgumentsThatDoNotParseNeverBecomeAnEmptyObject(t *testing.T) {
 	t.Run("non-streaming", func(t *testing.T) {
 		body := []byte(`{"model":"m","choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant",` +
 			`"content":"","tool_calls":[{"id":"c1","type":"function","function":{"name":"get_weather","arguments":"{not json"}}]}}]}`)
 		adapter := &Adapter{BaseURL: serveBody(t, body, false)}
 		out, err := adapter.Decide(context.Background(), map[string]any{"model": "m", "messages": []any{}})
-		if err == nil {
-			t.Fatalf("unparseable arguments produced a response instead of an error: %v — the tool would run with no arguments and the call would look successful", out)
+		if err != nil {
+			t.Fatalf("unparseable arguments failed the whole call: %v — that is the 502 of VRT-AEON-008", err)
 		}
-		if !strings.Contains(err.Error(), "get_weather") {
-			t.Errorf("error = %v, want it to name the tool whose arguments could not be read", err)
+		// The decoded view: arguments null, with the reason beside it.
+		choices, _ := out["choices"].([]any)
+		choice, _ := choices[0].(map[string]any)
+		msg, _ := choice["message"].(map[string]any)
+		parts, _ := msg["content_parts"].([]providers.ContentPart)
+		if len(parts) != 1 || parts[0].ToolCall == nil {
+			t.Fatalf("content_parts = %v, want exactly one tool_call part", parts)
+		}
+		call := parts[0].ToolCall
+		if call.Arguments != nil {
+			t.Errorf("arguments = %v, want null — an empty object would run the tool with no arguments and "+
+				"the call would look successful", call.Arguments)
+		}
+		if call.ArgumentsError == "" {
+			t.Error("the call carries no arguments_error, so `arguments: null` is indistinguishable from a " +
+				"tool call the model sent without arguments")
+		}
+		// And the wire string survives where the OpenAI dialect puts it, byte-identical — in that one
+		// field and not also in the decoded view, which is the single copy rule of VRT-58.
+		if call.RawArguments != "" {
+			t.Errorf("the decoded view carries raw_arguments %q: the string belongs in the OpenAI-shaped "+
+				"field, and a second copy is a second place a log can print personal data", call.RawArguments)
+		}
+		shaped, _ := msg["tool_calls"].([]any)
+		if len(shaped) != 1 {
+			t.Fatalf("tool_calls = %v, want one", shaped)
+		}
+		fn, _ := shaped[0].(map[string]any)["function"].(map[string]any)
+		if got, _ := fn["arguments"].(string); got != "{not json" {
+			t.Errorf("tool_calls[0].function.arguments = %q, want the string as it arrived", got)
 		}
 	})
 
 	t.Run("streaming", func(t *testing.T) {
 		// The streaming path parses ONCE, at the end, from the accumulated fragments — so this also pins
-		// that the single parse is checked. A version that parsed per fragment would fail on the happy path
-		// instead, which is the failure the contract warns about.
+		// that the single parse happens there. A version that parsed per fragment would fail on the happy
+		// path instead, which is the failure the contract warns about.
+		//
+		// And killing the stream here was worse than failing the non-streaming call, for a reason the
+		// contract itself gives: «los delta ya emitidos no se retiran», because they were produced and
+		// paid for. The last event discarded a turn whose text the caller already held.
 		body := []byte(`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"get_weather","arguments":"{not"}}]}}]}` + "\n\n" +
 			`data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":" json"}}]}}]}` + "\n\n" +
 			`data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
 			"data: [DONE]\n\n")
-		if _, err := projectStreaming(t, body); err == nil {
-			t.Fatal("unparseable streamed arguments produced no error")
+		p, err := projectStreaming(t, body)
+		if err != nil {
+			t.Fatalf("unparseable streamed arguments killed the stream: %v", err)
+		}
+		if len(p.toolCalls) != 1 {
+			t.Fatalf("the stream produced %d finished tool calls, want 1", len(p.toolCalls))
+		}
+		if p.toolCalls[0].Arguments != nil {
+			t.Errorf("arguments = %v, want null", p.toolCalls[0].Arguments)
+		}
+		if p.toolCalls[0].ArgumentsError == "" {
+			t.Error("the finished streamed call carries no arguments_error")
+		}
+		if p.toolCalls[0].RawArguments != "{not json" {
+			t.Errorf("raw_arguments = %q, want the accumulated fragments as they arrived", p.toolCalls[0].RawArguments)
 		}
 	})
 
