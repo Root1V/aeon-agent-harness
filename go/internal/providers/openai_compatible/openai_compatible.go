@@ -159,16 +159,13 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 
 	choice := parsed.Choices[0]
 
+	// Carried, not swallowed and not fatal (MDL-023). A provider that sent unparseable arguments produced
+	// a call nobody can execute correctly — so the call says so, in `arguments_error`, with `arguments`
+	// null and the wire string intact. Failing the candidate here is what turned a model outcome into a
+	// 502 and lost the turn (VRT-AEON-008); a silent empty object would be the other wrong answer.
 	toolCalls := make([]providers.ToolCall, 0, len(choice.Message.ToolCalls))
 	for _, tc := range choice.Message.ToolCalls {
-		args, err := providers.DecodeToolArguments(tc.Function.Arguments)
-		if err != nil {
-			// Surfaced, not swallowed. A provider that sent unparseable arguments produced a call nobody can
-			// execute correctly, and the contract says so explicitly: a silent empty object would run the
-			// tool with no arguments and report success.
-			return nil, fmt.Errorf("openai_compatible: tool call %q: %w", tc.Function.Name, err)
-		}
-		toolCalls = append(toolCalls, providers.ToolCall{ID: tc.ID, Name: tc.Function.Name, Arguments: args})
+		toolCalls = append(toolCalls, providers.ToolCallFromWire(tc.ID, tc.Function.Name, tc.Function.Arguments))
 	}
 
 	return providers.NormalizedChatResponseFrom(providers.ChatResult{

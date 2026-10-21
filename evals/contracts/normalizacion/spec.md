@@ -49,6 +49,15 @@ no debería tener que adivinar qué recibió.
 **Una cadena que no parsea no se convierte en objeto vacío.** Es un error del proveedor y se levanta
 como tal — un `{}` silencioso ejecutaría la herramienta sin argumentos.
 
+> **Divergencia de aeon, pendiente de acuerdo con Synaptum** (`MDL-023`, pedida por Veritium en
+> `VRT-AEON-008`). «Se levanta como tal» vale para un **bucle que va a ejecutar**; en un **transporte**
+> hace perder el turno. Levantarlo en el adaptador hacía fallar el candidato y `/v1/chat/completions`
+> contestaba 502, tirando una respuesta que el modelo ya había producido y cobrado. Aeon hoy mantiene la
+> mitad que importa —`arguments` sale **`null`**, nunca `{}`— y añade `arguments_error` con el motivo y
+> `raw_arguments` con la cadena tal cual, para que decida quien ejecuta. Son **tres estados**: objeto,
+> `{}` (la herramienta no toma argumentos) y `null` (no parseó). Propuesto para la `0.2`; hasta que
+> Synaptum lo acepte, esta es una divergencia declarada y no la especificación.
+
 ## `content` nulo con tool calls no es una respuesta vacía
 
 Cuando el modelo devuelve llamadas en vez de prosa, `content` es `null`. El mensaje unificado lleva

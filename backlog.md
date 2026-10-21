@@ -1195,3 +1195,22 @@ fichero mal nombrado. Sin `down`, a propósito.
   la API Messages de Anthropic, incluyendo bloques `tool_use`/`tool_result`, y decidir si vive en
   `aeon-modelgw` como una ruta nueva (`POST /v1/messages`) o en un servicio separado.
 - **Coste:** M.
+
+### Un candidato que falla después de que el modelo respondió no deja fila en el ledger
+
+- **Descripción:** `Gateway.Decide` descarta un candidato de dos maneras: `provider.Decide` devuelve
+  error, o la respuesta es inutilizable (`emptyAnswer`, `MDL-015`). En las dos, el handler contesta
+  502 **sin escribir nada en `model_gateway_costs`** — y en el segundo caso el modelo **sí corrió**:
+  hubo tokens de entrada y de salida, reportados en la respuesta que tiramos. Esos tokens se pagan y
+  no los ve nadie: ni la tabla de FinOps, ni `SpendForRun`, ni por tanto el techo de presupuesto, que
+  puede dejar pasar llamadas porque la cuenta que lee está incompleta. Encontrado mirando el camino
+  del 502 de `VRT-AEON-008` (`MDL-023` lo quitó para el caso de los argumentos roto, que ahora se
+  entrega y se cobra; los otros dos caminos siguen igual).
+- **Fase objetivo:** antes de que el techo de presupuesto se use como control de gasto real y no como
+  aviso. Hoy su error es optimista, que es la dirección mala.
+- **Criterio de entrada:** decidir qué fila escribe un intento descartado. No es «la misma fila»: un
+  intento que no es la respuesta devuelta no debe contarse como una llamada servida en el dashboard,
+  así que hace falta distinguirlo (una columna de intento descartado, o `provider_request_id` con un
+  marcador). Y los tres estados de siempre: coste medido, coste sin precio y **sin consumo
+  reportado** —un error HTTP sin cuerpo no trae contadores— no son el mismo hecho.
+- **Coste:** S.

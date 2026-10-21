@@ -133,21 +133,19 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 
 	choice := parsed.Choices[0]
 
-	// Arguments are decoded HERE, once, and a string that does not parse fails the call (FND-004).
-	// The alternative — passing the raw string up for the loop to parse — moves the decision about
-	// what to do with malformed arguments to a caller that has no way to tell a model's bad JSON from
-	// a transport problem, and the usual outcome is `{}`: the tool runs with no arguments at all.
+	// Arguments are decoded HERE, once, and the raw string travels with them (FND-004 + MDL-023).
+	// Decoding here is still right: a caller cannot tell a model's bad JSON from a transport problem,
+	// and the usual outcome of guessing is `{}` — the tool runs with no arguments at all.
+	//
+	// WHAT CHANGED IS THE FAILURE. This loop used to return an error, which made the candidate fail,
+	// which made the gateway answer 502 — so a turn the model had already produced and been paid for
+	// was thrown away. That is the defect Veritium hit in production (VRT-AEON-008): gpt-oss looped on
+	// newlines until the token ceiling, the arguments came back truncated, and the whole response
+	// disappeared behind "all candidates failed". Now the call carries its own error and the turn
+	// arrives with its finish_reason, which is what lets the caller retry the way it already knows how.
 	var toolCalls []providers.ToolCall
-	for i, tc := range choice.Message.ToolCalls {
-		args, err := providers.DecodeToolArguments(tc.Function.Arguments)
-		if err != nil {
-			return nil, fmt.Errorf("prometheus_inference: tool call %d (%s): %w", i, tc.Function.Name, err)
-		}
-		toolCalls = append(toolCalls, providers.ToolCall{
-			ID:        tc.ID,
-			Name:      tc.Function.Name,
-			Arguments: args,
-		})
+	for _, tc := range choice.Message.ToolCalls {
+		toolCalls = append(toolCalls, providers.ToolCallFromWire(tc.ID, tc.Function.Name, tc.Function.Arguments))
 	}
 
 	return providers.NormalizedChatResponseFrom(providers.ChatResult{

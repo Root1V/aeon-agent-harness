@@ -167,25 +167,48 @@ func NormalizedChatResponseFrom(r ChatResult) map[string]any {
 	return response
 }
 
-// openAIShapedToolCalls re-encodes decoded arguments for the OpenAI-compatible surface.
+// openAIShapedToolCalls projects the calls onto the OpenAI-compatible surface, PREFERRING THE WIRE
+// STRING when the provider sent one.
 //
-// Re-encoding rather than keeping the original string: the original may never have existed (a provider
-// with a different wire shape), so carrying it would make this field available only for some providers.
-// The decoded map is the single source, and this is a projection of it.
+// It re-encoded from the decoded map until MDL-023, with the reasoning that "the original may never have
+// existed (a provider with a different wire shape)". That reasoning holds for the fallback and was wrong
+// as the rule: for a string that did not parse there is nothing to re-encode, and re-encoding one that
+// did reorders keys and normalises numbers in a field whose whole purpose is to be handed to an executor
+// verbatim. On this wire `arguments` is a string so that the executor decides — including deciding that
+// it is broken, which is what Veritium's loop does with `finish_reason: length` (VRT-AEON-008).
 func openAIShapedToolCalls(calls []ToolCall) []any {
 	out := make([]any, 0, len(calls))
 	for i, tc := range calls {
-		raw, err := json.Marshal(tc.Arguments)
-		if err != nil {
-			// Cannot happen for a map decoded from JSON, and if it somehow does, an empty object here would
-			// be the silent `{}` this package refuses elsewhere. Skipped instead, so the call is absent
-			// rather than wrong.
+		var args string
+		switch {
+		case tc.RawArguments != "":
+			args = tc.RawArguments
+		case tc.Arguments != nil:
+			raw, err := json.Marshal(tc.Arguments)
+			if err != nil {
+				// Cannot happen for a map decoded from JSON, and if it somehow does, an empty object here
+				// would be the silent `{}` this package refuses elsewhere.
+				continue
+			}
+			args = string(raw)
+		default:
+			// Neither form: no adapter produces this (one that has a string sets RawArguments, one that
+			// has an object sets Arguments, even when empty). Skipped rather than invented, because the
+			// two things that could be invented here are `{}` and `null`, and both would be read as
+			// arguments the model never sent.
 			continue
 		}
-		out = append(out, map[string]any{
+		call := map[string]any{
 			"index": i, "id": tc.ID, "type": "function",
-			"function": map[string]any{"name": tc.Name, "arguments": string(raw)},
-		})
+			"function": map[string]any{"name": tc.Name, "arguments": args},
+		}
+		if tc.ArgumentsError != "" {
+			// Aeon's own key on a response that is otherwise OpenAI's shape, and it is additive: a strict
+			// client reading `function.arguments` gets the string it expects, and one that wants to know
+			// WHY it will not parse does not have to re-parse it to find out.
+			call["aeon_arguments_error"] = tc.ArgumentsError
+		}
+		out = append(out, call)
 	}
 	return out
 }

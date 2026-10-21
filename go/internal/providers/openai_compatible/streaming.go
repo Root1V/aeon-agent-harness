@@ -113,8 +113,13 @@ func (ph *streamPhases) closeReasoning(yield func(providers.Chunk) error) error 
 // closeToolCall parses the accumulated arguments ONCE and emits the end event carrying the finished call.
 //
 // Once, here, is the whole point: the fragments are not valid JSON until now, so an adapter parsing each
-// delta would produce errors on the happy path. A fragment sequence that never becomes valid JSON is an
-// error rather than an empty object, the same rule the non-streaming path follows.
+// delta would produce errors on the happy path. A fragment sequence that never becomes valid JSON is
+// neither an empty object nor a dead stream: it ends with the call carrying `arguments_error`, the same
+// rule the non-streaming path follows (MDL-023).
+//
+// Returning an error here was worse than in the non-streaming path, and for a reason the contract
+// already states: the deltas are not withdrawn, because they were produced and paid for. Killing the
+// stream at the very last event discarded a turn whose text the caller had already received.
 func (ph *streamPhases) closeToolCall(yield func(providers.Chunk) error) error {
 	if ph.openToolCall < 0 {
 		return nil
@@ -126,14 +131,11 @@ func (ph *streamPhases) closeToolCall(yield func(providers.Chunk) error) error {
 	if b, ok := ph.toolArgs[idx]; ok {
 		raw = b.String()
 	}
-	args, err := providers.DecodeToolArguments(raw)
-	if err != nil {
-		return fmt.Errorf("openai_compatible: tool call %q (stream index %d): %w", ph.toolNames[idx], idx, err)
-	}
+	call := providers.ToolCallFromWire(ph.toolIDs[idx], ph.toolNames[idx], raw)
 	return yield(providers.Chunk{
 		Event:         providers.EventToolCallEnd,
 		ToolCallIndex: idx,
-		ToolCall:      &providers.ToolCall{ID: ph.toolIDs[idx], Name: ph.toolNames[idx], Arguments: args},
+		ToolCall:      &call,
 	})
 }
 
