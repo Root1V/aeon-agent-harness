@@ -170,6 +170,11 @@ func (h *OpenAICompatibleHandlers) chatCompletions(w http.ResponseWriter, r *htt
 
 	result, err := h.Gateway.Decide(r.Context(), candidates, body, dataSensitivity)
 	if err != nil {
+		// FIN-003: a 502 does not mean nothing was spent. Every candidate may have answered and had
+		// its answer discarded, and those generations were billed.
+		if h.Governance != nil {
+			h.Governance.recordDiscardedAttemptsFromError(r, err, runID, agentRef)
+		}
 		writeOpenAIError(w, http.StatusBadGateway, "aeon_routing_error", err.Error())
 		return
 	}

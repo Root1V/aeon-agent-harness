@@ -46,6 +46,15 @@ type CostEntry struct {
 	// ServedByInstance is which deployment answered (OBS-005). The question an incident starts from,
 	// and recorded nowhere before this.
 	ServedByInstance string
+	// DiscardedReason is why this attempt's answer was NOT the one returned to the caller (FIN-003),
+	// empty for the call that served. The model still ran and the tokens were still spent, which is
+	// the whole reason the row exists: before this, a discarded attempt left nothing, so paid-for
+	// tokens were invisible to the dashboard, to SpendForRun and therefore to the budget ceiling.
+	//
+	// A reason and not a boolean, for the same reason `disposition` is one in migration 0005:
+	// "discarded because the provider failed" and "discarded because the answer was unusable" are
+	// different facts, and an audit that confuses them cannot say why a run paid twice.
+	DiscardedReason string
 }
 
 // ModelTotal is one row of TotalsByModel's real SQL aggregation.
@@ -53,12 +62,18 @@ type ModelTotal struct {
 	Provider  string  `json:"provider"`
 	Model     string  `json:"model"`
 	CostModel *string `json:"cost_model"`
-	CallCount int64   `json:"call_count"`
+	// CallCount IS SERVED CALLS ONLY (FIN-003). A discarded attempt is not a call: adding it here
+	// would make "calls" mean "attempts", and anyone dividing cost by calls would get the average of
+	// something that did not happen. The cost sums below DO include discarded attempts, because that
+	// money was spent — so the two columns answer different questions on purpose, and DiscardedCalls
+	// is what lets a reader see it.
+	CallCount      int64 `json:"call_count"`
+	DiscardedCalls int64 `json:"discarded_calls"`
 	// TotalCostUSD is the sum over the calls in this group that HAVE a cost, and nil when none of
 	// them does. Nil is the case OBS-008 exists for: every prometheus_inference call used to land
 	// here as $0.00, which reads as "this was free" rather than "this was never priced".
 	TotalCostUSD *float64 `json:"total_cost_usd"`
-	// UnpricedCalls is how many of CallCount contributed nothing to TotalCostUSD. Without it a
+	// UnpricedCalls is how many SERVED calls contributed nothing to TotalCostUSD. Without it a
 	// partially-priced group returns a lower bound wearing the shape of an exact figure — the same
 	// mistake as the zero, one aggregation up.
 	UnpricedCalls         int64 `json:"unpriced_calls"`
@@ -103,11 +118,11 @@ func (l *FinOpsLedger) Record(ctx context.Context, entry CostEntry) error {
 		replayOf = &entry.IdempotentReplayOf
 	}
 	_, err := l.pool.Exec(ctx,
-		`INSERT INTO model_gateway_costs (provider, model, cost_model, prompt_tokens, completion_tokens, cost_usd, run_id, agent_manifest_ref, cache_read_tokens, cache_write_tokens, reasoning_tokens, provider_request_id, idempotent_replay_of, served_model, served_by_instance, tenant_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		`INSERT INTO model_gateway_costs (provider, model, cost_model, prompt_tokens, completion_tokens, cost_usd, run_id, agent_manifest_ref, cache_read_tokens, cache_write_tokens, reasoning_tokens, provider_request_id, idempotent_replay_of, served_model, served_by_instance, tenant_id, discarded_reason)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
 		entry.Provider, entry.Model, entry.CostModel, entry.PromptTokens, entry.CompletionTokens, entry.CostUSD, runID, agentRef,
 		entry.CacheReadTokens, entry.CacheWriteTokens, entry.ReasoningTokens, requestID, replayOf, nullable(entry.ServedModel), nullable(entry.ServedByInstance),
-		l.tenant,
+		l.tenant, nullable(entry.DiscardedReason),
 	)
 	if err != nil {
 		return fmt.Errorf("store: recording model gateway cost: %w", err)
@@ -120,7 +135,14 @@ func (l *FinOpsLedger) Record(ctx context.Context, entry CostEntry) error {
 // is carried through unaggregated per group since it's constant per model.
 func (l *FinOpsLedger) TotalsByModel(ctx context.Context) ([]ModelTotal, error) {
 	rows, err := l.pool.Query(ctx,
-		`SELECT provider, model, cost_model, count(*), sum(cost_usd), count(*) FILTER (WHERE cost_usd IS NULL),
+		// The sums are over EVERY row and the counts separate served from discarded (FIN-003): the
+		// money and the tokens are real whichever attempt spent them, and "how many calls" is a
+		// different question from "how much did this cost".
+		`SELECT provider, model, cost_model,
+		        count(*) FILTER (WHERE discarded_reason IS NULL),
+		        count(*) FILTER (WHERE discarded_reason IS NOT NULL),
+		        sum(cost_usd),
+		        count(*) FILTER (WHERE cost_usd IS NULL AND discarded_reason IS NULL),
 		        coalesce(sum(prompt_tokens), 0), coalesce(sum(completion_tokens), 0),
 		        coalesce(sum(cache_read_tokens), 0), coalesce(sum(cache_write_tokens), 0),
 		        coalesce(sum(reasoning_tokens), 0)
@@ -137,7 +159,8 @@ func (l *FinOpsLedger) TotalsByModel(ctx context.Context) ([]ModelTotal, error) 
 	var out []ModelTotal
 	for rows.Next() {
 		var t ModelTotal
-		if err := rows.Scan(&t.Provider, &t.Model, &t.CostModel, &t.CallCount, &t.TotalCostUSD, &t.UnpricedCalls,
+		if err := rows.Scan(&t.Provider, &t.Model, &t.CostModel, &t.CallCount, &t.DiscardedCalls,
+			&t.TotalCostUSD, &t.UnpricedCalls,
 			&t.TotalPromptTokens, &t.TotalCompletionTokens,
 			&t.TotalCacheReadTokens, &t.TotalCacheWriteTokens, &t.TotalReasoningTokens); err != nil {
 			return nil, fmt.Errorf("store: scanning model gateway cost total: %w", err)
@@ -163,10 +186,13 @@ type AttributionTotal struct {
 	// eval — so those rows exist and their cost is real. Dropping them would make this page's total
 	// silently smaller than TotalsByModel's over the same ledger, with nothing on either page saying
 	// why, and the reader would conclude the cheaper number is the true one.
-	Key           *string  `json:"key"`
-	CallCount     int64    `json:"call_count"`
-	TotalCostUSD  *float64 `json:"total_cost_usd"`
-	UnpricedCalls int64    `json:"unpriced_calls"`
+	Key *string `json:"key"`
+	// CallCount is SERVED calls; DiscardedCalls is attempts whose answer was thrown away after the
+	// model had already run (FIN-003). TotalCostUSD covers both, because both were paid for.
+	CallCount      int64    `json:"call_count"`
+	DiscardedCalls int64    `json:"discarded_calls"`
+	TotalCostUSD   *float64 `json:"total_cost_usd"`
+	UnpricedCalls  int64    `json:"unpriced_calls"`
 	// DistinctModels is how many (provider, model) pairs this run or agent used. A run that fell back
 	// to a second provider mid-flight is a different thing from one that used a single model, and
 	// without this the cost is a number with no shape.
@@ -179,7 +205,11 @@ type AttributionTotal struct {
 // identifier chosen by the two callers below, never anything a request supplies.
 func (l *FinOpsLedger) totalsByAttribution(ctx context.Context, column string) ([]AttributionTotal, error) {
 	rows, err := l.pool.Query(ctx,
-		`SELECT `+column+`, count(*), sum(cost_usd), count(*) FILTER (WHERE cost_usd IS NULL),
+		`SELECT `+column+`,
+		        count(*) FILTER (WHERE discarded_reason IS NULL),
+		        count(*) FILTER (WHERE discarded_reason IS NOT NULL),
+		        sum(cost_usd),
+		        count(*) FILTER (WHERE cost_usd IS NULL AND discarded_reason IS NULL),
 		        count(DISTINCT (provider, model)),
 		        coalesce(sum(prompt_tokens), 0), coalesce(sum(completion_tokens), 0)
 		 FROM model_gateway_costs
@@ -197,7 +227,7 @@ func (l *FinOpsLedger) totalsByAttribution(ctx context.Context, column string) (
 	var out []AttributionTotal
 	for rows.Next() {
 		var t AttributionTotal
-		if err := rows.Scan(&t.Key, &t.CallCount, &t.TotalCostUSD, &t.UnpricedCalls, &t.DistinctModels,
+		if err := rows.Scan(&t.Key, &t.CallCount, &t.DiscardedCalls, &t.TotalCostUSD, &t.UnpricedCalls, &t.DistinctModels,
 			&t.TotalPromptTokens, &t.TotalCompletionTokens); err != nil {
 			return nil, fmt.Errorf("store: scanning cost total by %s: %w", column, err)
 		}
@@ -314,11 +344,27 @@ func nullable(v string) *string {
 // the gateway could not price has a cost that is a LOWER BOUND, and a single float cannot say so.
 // `UnpricedCalls` is what makes "you are at $4.90 of $5.00" distinguishable from "you are at $4.90 of
 // $5.00 plus twelve calls nobody could price".
+// RunSpend is what one run has spent, and it is the number the budget ceiling enforces.
+//
+// EVERY MONEY AND TOKEN FIELD HERE INCLUDES DISCARDED ATTEMPTS (FIN-003), and that is deliberate
+// rather than convenient: this type's job is "how much has this run spent", and an attempt whose
+// answer we threw away was still generated and still billed. Leaving it out is what made the ceiling
+// wrong in the DIRECTION THAT DOES NOT COMPLAIN — a ceiling that counts low lets calls through that
+// should have been refused, and nobody notices a limit that fails to fire.
+//
+// The counts stay separate: ModelCalls is served calls, DiscardedCalls is attempts paid for and
+// thrown away. So PricedCalls + UnpricedCalls = ModelCalls, while CostUSD and the token counters
+// cover ModelCalls + DiscardedCalls.
 type RunSpend struct {
 	CostUSD       float64 `json:"cost_usd"`
 	PricedCalls   int64   `json:"priced_calls"`
 	UnpricedCalls int64   `json:"unpriced_calls"`
 	ModelCalls    int64   `json:"model_calls"`
+	// DiscardedCalls is how many attempts were paid for and not used, and DiscardedCostUSD how much
+	// of CostUSD they account for. Reported so a consumer can say "of which X was wasted" instead of
+	// having to choose between hiding it and double-counting it.
+	DiscardedCalls   int64   `json:"discarded_calls"`
+	DiscardedCostUSD float64 `json:"discarded_cost_usd"`
 	// Tokens is prompt + completion across the run (MDL-018). Summed from the same rows as the cost,
 	// so a token ceiling and a cost ceiling cannot disagree about what a run did.
 	//
@@ -348,15 +394,21 @@ func (l *FinOpsLedger) SpendForRun(ctx context.Context, runID string) (RunSpend,
 	var s RunSpend
 	var sum *float64
 	err := l.pool.QueryRow(ctx,
-		`SELECT coalesce(sum(cost_usd), 0), count(*) FILTER (WHERE cost_usd IS NOT NULL),
-		        count(*) FILTER (WHERE cost_usd IS NULL), count(*),
+		`SELECT coalesce(sum(cost_usd), 0),
+		        count(*) FILTER (WHERE cost_usd IS NOT NULL AND discarded_reason IS NULL),
+		        count(*) FILTER (WHERE cost_usd IS NULL AND discarded_reason IS NULL),
+		        count(*) FILTER (WHERE discarded_reason IS NULL),
 		        coalesce(sum(coalesce(prompt_tokens, 0) + coalesce(completion_tokens, 0)), 0),
-		        count(*) FILTER (WHERE prompt_tokens IS NULL AND completion_tokens IS NULL),
+		        count(*) FILTER (WHERE prompt_tokens IS NULL AND completion_tokens IS NULL
+		                           AND discarded_reason IS NULL),
 		        coalesce(sum(prompt_tokens), 0), coalesce(sum(completion_tokens), 0),
-		        count(DISTINCT (provider, model))
+		        count(DISTINCT (provider, model)),
+		        count(*) FILTER (WHERE discarded_reason IS NOT NULL),
+		        coalesce(sum(cost_usd) FILTER (WHERE discarded_reason IS NOT NULL), 0)
 		 FROM model_gateway_costs WHERE tenant_id = $2 AND run_id = $1`, runID, l.tenant,
 	).Scan(&sum, &s.PricedCalls, &s.UnpricedCalls, &s.ModelCalls, &s.Tokens, &s.UnreportedUsageCalls,
-		&s.PromptTokens, &s.CompletionTokens, &s.DistinctModels)
+		&s.PromptTokens, &s.CompletionTokens, &s.DistinctModels,
+		&s.DiscardedCalls, &s.DiscardedCostUSD)
 	if err != nil {
 		return RunSpend{}, fmt.Errorf("store: summing spend for run %s: %w", runID, err)
 	}

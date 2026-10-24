@@ -43,6 +43,14 @@ type runCostResponse struct {
 	// run's cost is a LOWER BOUND, and a consumer showing it as a figure should be able to say so.
 	PricedCalls   int64 `json:"priced_calls"`
 	UnpricedCalls int64 `json:"unpriced_calls"`
+	// DiscardedCalls and DiscardedCostUSD are attempts this gateway paid for and threw away — an
+	// answer the model produced and that was unusable, so another candidate served instead (FIN-003).
+	//
+	// CostUSD AND THE TOKEN COUNTERS INCLUDE THEM, because the money left; ModelCalls does not,
+	// because they are not calls anyone was served. So a consumer can say "this case cost X, of which
+	// Y was wasted" — the alternative was hiding the waste or counting it as work.
+	DiscardedCalls   int64   `json:"discarded_calls"`
+	DiscardedCostUSD float64 `json:"discarded_cost_usd"`
 	// PromptTokens and CompletionTokens are lower bounds too: a provider that reports no usage leaves
 	// nulls, which sum to nothing rather than to a guess. UnreportedUsageCalls is how many did that.
 	PromptTokens         int64 `json:"prompt_tokens"`
@@ -89,7 +97,10 @@ func (h *FinOpsHandlers) showRunCost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	if spend.ModelCalls == 0 {
+	// ModelCalls AND DiscardedCalls, because a run whose only trace is an attempt we paid for and
+	// threw away is a run that exists and spent money (FIN-003) — asking the journal about it would
+	// be asking the wrong witness.
+	if spend.ModelCalls == 0 && spend.DiscardedCalls == 0 {
 		known, err := h.Ledger.CheckpointerFor(caller.Tenant).KnownRun(r.Context(), runID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -107,13 +118,16 @@ func (h *FinOpsHandlers) showRunCost(w http.ResponseWriter, r *http.Request) {
 	response := runCostResponse{
 		RunID: runID, ModelCalls: spend.ModelCalls,
 		PricedCalls: spend.PricedCalls, UnpricedCalls: spend.UnpricedCalls,
+		DiscardedCalls: spend.DiscardedCalls, DiscardedCostUSD: spend.DiscardedCostUSD,
 		PromptTokens: spend.PromptTokens, CompletionTokens: spend.CompletionTokens,
 		Tokens: spend.Tokens, UnreportedUsageCalls: spend.UnreportedUsageCalls,
 		DistinctModels: spend.DistinctModels,
 	}
 	// The pointer is left nil when NOTHING was priced, which covers both the run with no calls and the
 	// run whose every call is compute_based. `0` is reserved for a run that was really priced at zero.
-	if spend.PricedCalls > 0 {
+	// Priced OR discarded-and-priced: a run whose only cost came from a discarded attempt still has a
+	// real figure, and leaving it nil would say "no price" about money that was charged.
+	if spend.PricedCalls > 0 || spend.DiscardedCostUSD != 0 {
 		cost := spend.CostUSD
 		response.CostUSD = &cost
 	}
@@ -162,16 +176,18 @@ func (h *FinOpsHandlers) showCosts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var grandTotalUSD float64
-	var unpricedCalls int64
-	fmt.Fprint(w, "<table><tr><th>provider</th><th>model</th><th>cost_model</th><th>calls</th><th>total cost (USD)</th><th>unpriced calls</th><th>prompt tokens</th><th>completion tokens</th></tr>\n")
+	var unpricedCalls, discardedCalls int64
+	fmt.Fprint(w, "<table><tr><th>provider</th><th>model</th><th>cost_model</th><th>calls</th><th>total cost (USD)</th><th>unpriced calls</th><th>prompt tokens</th><th>completion tokens</th><th>discarded attempts</th></tr>\n")
 	for _, t := range totals {
 		if t.TotalCostUSD != nil {
 			grandTotalUSD += *t.TotalCostUSD
 		}
 		unpricedCalls += t.UnpricedCalls
-		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%s</td><td>%d</td><td>%s</td><td>%d</td><td>%d</td><td>%d</td></tr>\n",
+		discardedCalls += t.DiscardedCalls
+		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%s</td><td>%d</td><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td></tr>\n",
 			html.EscapeString(t.Provider), html.EscapeString(t.Model), html.EscapeString(orUnknown(t.CostModel)),
-			t.CallCount, costCell(t.TotalCostUSD), t.UnpricedCalls, t.TotalPromptTokens, t.TotalCompletionTokens)
+			t.CallCount, costCell(t.TotalCostUSD), t.UnpricedCalls, t.TotalPromptTokens, t.TotalCompletionTokens,
+			t.DiscardedCalls)
 	}
 	fmt.Fprint(w, "</table>\n")
 
@@ -183,6 +199,14 @@ func (h *FinOpsHandlers) showCosts(w http.ResponseWriter, r *http.Request) {
 			grandTotalUSD, unpricedCalls)
 	} else {
 		fmt.Fprintf(w, "<p>Total: $%.4f</p>\n", grandTotalUSD)
+	}
+	// FIN-003: said in a sentence rather than left to a column nobody adds up. This figure is inside
+	// the total above — it is money that was spent on answers nobody received, and before this change
+	// it was not in the total OR in the table, because the row did not exist.
+	if discardedCalls > 0 {
+		fmt.Fprintf(w, "<p>Of that, %d attempt(s) were generated, billed and discarded: their answer "+
+			"was unusable and another candidate served instead. The tokens are real and are included above.</p>\n",
+			discardedCalls)
 	}
 
 	// OBS-003b: the two attributions the spec's own title for OBS-003 asked for and that had no data
@@ -219,12 +243,15 @@ func writeAttribution(w http.ResponseWriter, heading, keyLabel string, totals []
 	if len(named) == 0 {
 		fmt.Fprintf(w, "<p>no call has named a %s yet</p>\n", html.EscapeString(keyLabel))
 	} else {
-		fmt.Fprintf(w, "<table><tr><th>%s</th><th>calls</th><th>models</th><th>total cost (USD)</th><th>unpriced calls</th><th>prompt tokens</th><th>completion tokens</th></tr>\n",
+		// `discarded` is its own column and not folded into `calls` (FIN-003): the cost column covers
+		// both because the money is real, and a reader who cannot see the split would compute an
+		// average per call over attempts that served nobody.
+		fmt.Fprintf(w, "<table><tr><th>%s</th><th>calls</th><th>models</th><th>total cost (USD)</th><th>unpriced calls</th><th>prompt tokens</th><th>completion tokens</th><th>discarded attempts</th></tr>\n",
 			html.EscapeString(keyLabel))
 		for _, t := range named {
-			fmt.Fprintf(w, "<tr><td>%s</td><td>%d</td><td>%d</td><td>%s</td><td>%d</td><td>%d</td><td>%d</td></tr>\n",
+			fmt.Fprintf(w, "<tr><td>%s</td><td>%d</td><td>%d</td><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td></tr>\n",
 				html.EscapeString(*t.Key), t.CallCount, t.DistinctModels, costCell(t.TotalCostUSD),
-				t.UnpricedCalls, t.TotalPromptTokens, t.TotalCompletionTokens)
+				t.UnpricedCalls, t.TotalPromptTokens, t.TotalCompletionTokens, t.DiscardedCalls)
 		}
 		fmt.Fprint(w, "</table>\n")
 	}

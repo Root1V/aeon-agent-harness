@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -148,6 +149,9 @@ func (h *ModelGatewayHandlers) decide(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.Gateway.Decide(r.Context(), candidates, body.RenderedContext, body.DataSensitivity)
 	if err != nil {
+		// FIN-003: before answering, record what was already paid for. A 502 here does not mean nothing
+		// happened — every candidate may have answered and had its answer thrown away.
+		h.recordDiscardedAttemptsFromError(r, err, body.RunID, body.AgentManifestRef)
 		// A gateway routing failure (every candidate failed, or a restricted call had none) is not
 		// this handler's fault or the caller's malformed input — 502 Bad Gateway, not 400/500.
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
@@ -295,6 +299,86 @@ func (h *ModelGatewayHandlers) recordCost(r *http.Request, result *modelgateway.
 	if err := ledger.Record(r.Context(), entry); err != nil {
 		log.Printf("aeon-modelgw: recording FinOps cost event: %v", err)
 	}
+	// FIN-003: the attempts this gateway paid for and threw away, recorded from INSIDE recordCost so
+	// that a surface which records the served call cannot record only that one. Both surfaces already
+	// call this function; neither has to remember a second step.
+	h.recordDiscardedAttempts(r, result.Attempts, runID, agentManifestRef)
+}
+
+// recordDiscardedAttempts writes a ledger row for each attempt whose answer was generated, billed and
+// not used (FIN-003).
+//
+// WHY A ROW AT ALL, when the caller never saw that answer: because the money left. `Gateway.Decide`
+// discards a candidate in two ways — the provider errored, or the answer was unusable (MDL-015: a 200
+// with no content and no tool calls). In the second the model RAN, and its usage block is right there
+// in the response we dropped. Before this, that attempt left nothing: the dashboard, `SpendForRun` and
+// therefore the budget ceiling all saw a run that had spent less than it had. The ceiling's error was
+// in the direction that does not complain.
+//
+// AND ONLY WHEN THE PROVIDER REPORTED USAGE, which is the line between this and inventing rows: an
+// attempt that never reached a model cost nothing, and a cost ledger is not an attempt log. That
+// failure is already on its span, where it belongs. The criterion is measurable rather than
+// argued — there is a usage block, or there is not.
+func (h *ModelGatewayHandlers) recordDiscardedAttempts(r *http.Request, attempts []modelgateway.AttemptRecord, runID, agentManifestRef string) {
+	discarded := modelgateway.DiscardedAttempts(attempts)
+	if len(discarded) == 0 {
+		return
+	}
+	ledger := h.ledgerFor(r)
+	if ledger == nil {
+		return
+	}
+	for _, attempt := range discarded {
+		promptTokens, completionTokens := usageTokens(attempt.DiscardedOutput)
+		if promptTokens == nil && completionTokens == nil {
+			continue
+		}
+		var costModel *string
+		var costUSD *float64
+		if h.Pricing != nil {
+			if rate, ok := h.Pricing.Rate(attempt.Provider, attempt.Model); ok {
+				costModel = &rate.CostModel
+				if usd, priced := h.Pricing.CostUSD(attempt.Provider, attempt.Model,
+					tokensOrZero(promptTokens), tokensOrZero(completionTokens)); priced &&
+					promptTokens != nil && completionTokens != nil {
+					costUSD = &usd
+				}
+			}
+		}
+		cacheRead, cacheWrite := usageCacheTokens(attempt.DiscardedOutput)
+		entry := store.CostEntry{
+			Provider: attempt.Provider, Model: attempt.Model, CostModel: costModel,
+			PromptTokens: promptTokens, CompletionTokens: completionTokens, CostUSD: costUSD,
+			RunID: runID, AgentManifestRef: agentManifestRef,
+			CacheReadTokens:  cacheRead,
+			CacheWriteTokens: cacheWrite,
+			ReasoningTokens:  optionalInt(usageBlock(attempt.DiscardedOutput)["reasoning_tokens"]),
+			// The discarded attempt's own provider request id, not the served call's: the whole point
+			// of OBS-007's join key is that it identifies ONE generation, and these are two.
+			ProviderRequestID: stringField(attempt.DiscardedOutput, "provider_request_id"),
+			ServedModel:       stringField(attempt.DiscardedOutput, "model"),
+			ServedByInstance:  stringField(attempt.DiscardedOutput, "served_by_instance"),
+			// The reason as the gateway stated it, verbatim. "discarded" alone would record that we
+			// threw something away without recording why, and the why is what tells an operator
+			// whether to change a candidate order or a prompt.
+			DiscardedReason: attempt.Err,
+		}
+		if err := ledger.Record(r.Context(), entry); err != nil {
+			log.Printf("aeon-modelgw: recording FinOps cost event for a discarded attempt: %v", err)
+		}
+	}
+}
+
+// recordDiscardedAttemptsFromError is the same write on the path where NOTHING served (FIN-003).
+//
+// This is the worst version of the hole and the reason the error is typed: every candidate answered,
+// every answer was unusable, every generation was billed, and the run's recorded spend was zero.
+func (h *ModelGatewayHandlers) recordDiscardedAttemptsFromError(r *http.Request, err error, runID, agentManifestRef string) {
+	var failed *modelgateway.AllCandidatesFailedError
+	if !errors.As(err, &failed) {
+		return
+	}
+	h.recordDiscardedAttempts(r, failed.Attempts, runID, agentManifestRef)
 }
 
 // usageTokens pulls prompt/completion token counts out of a NormalizedChatResponse's usage block,
@@ -457,8 +541,13 @@ func (h *ModelGatewayHandlers) overBudget(r *http.Request, runID, agentRef strin
 		exceeded = fmt.Sprintf("cost: $%.4f recorded, ceiling $%.4f", spend.CostUSD, *ceiling.CostUSD)
 	} else if ceiling.Tokens != nil && spend.Tokens >= int64(*ceiling.Tokens) {
 		exceeded = fmt.Sprintf("tokens: %d recorded, ceiling %d", spend.Tokens, *ceiling.Tokens)
-	} else if ceiling.ModelCalls != nil && spend.ModelCalls >= int64(*ceiling.ModelCalls) {
-		exceeded = fmt.Sprintf("model calls: %d recorded, ceiling %d", spend.ModelCalls, *ceiling.ModelCalls)
+		// SERVED PLUS DISCARDED (FIN-003). The cost and token ceilings get this for free, because
+		// RunSpend's money and token fields cover every row; this one has to add it explicitly, because
+		// ModelCalls deliberately means "calls somebody was served". A ceiling on calls exists to bound
+		// how hard a run hammers the models, and an attempt whose answer we threw away hit the provider
+		// exactly as hard as one we kept.
+	} else if attempts := spend.ModelCalls + spend.DiscardedCalls; ceiling.ModelCalls != nil && attempts >= int64(*ceiling.ModelCalls) {
+		exceeded = fmt.Sprintf("model calls: %d recorded, ceiling %d", attempts, *ceiling.ModelCalls)
 	}
 	if exceeded == "" {
 		return nil
