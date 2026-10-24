@@ -99,6 +99,33 @@ func (c *Checkpointer) Append(ctx context.Context, entry checkpoint.Entry) (chec
 //
 // EMPTY MEANS THE ROOT RUN, with no special case anywhere: the write stores `”` for a root step, so
 // filtering is plain equality and "the parameter was omitted" lands on the root rows by itself.
+// KnownRun reports whether this tenant's journal holds ANY entry for the run, in any sub-run.
+//
+// FIN-002, and it exists to keep two facts apart that a cost query cannot tell apart on its own: a run
+// that spent nothing and a run id that does not exist. The ledger has no row for either, and there is
+// no `runs` table — a run's existence lives in Temporal, not here. The journal is the next best
+// witness and it is in the same database: a run that did anything durable left an entry.
+//
+// Asking Temporal instead would be more accurate and worse: a cost read would then fail whenever
+// Temporal is unreachable, which is the moment someone most wants to know what a run already spent.
+//
+// A run refused before its first model call is the case that makes this worth a query. Reporting it
+// as 404 would make a governed-and-refused run indistinguishable from a typo, and the refusal is
+// precisely the thing an operator is looking for.
+func (c *Checkpointer) KnownRun(ctx context.Context, runID string) (bool, error) {
+	if runID == "" {
+		return false, fmt.Errorf("store: run_id is required")
+	}
+	var known bool
+	if err := c.pool.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM run_checkpoints WHERE tenant_id = $2 AND run_id = $1)`,
+		runID, c.tenant,
+	).Scan(&known); err != nil {
+		return false, fmt.Errorf("store: checking whether run %s is known: %w", runID, err)
+	}
+	return known, nil
+}
+
 func (c *Checkpointer) Load(ctx context.Context, runID, subRunID string) (*checkpoint.RunState, error) {
 	if runID == "" {
 		return nil, fmt.Errorf("store: run_id is required to load checkpoints")
