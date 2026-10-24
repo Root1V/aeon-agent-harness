@@ -1231,3 +1231,28 @@ fichero mal nombrado. Sin `down`, a propósito.
   contenido, y recortar a lo accionable (status, largo, `error.type`/`error.code` cuando el proveedor
   los dé) sin el texto libre. Un cuerpo recortado a ciegas puede quitar justo el dato que diagnostica.
 - **Coste:** S.
+
+### Un límite de tasa del proveedor llega al llamante como 502 sin cuánto esperar
+
+- **Descripción:** el SDK de axonium nos entrega un `*axonium.APIError` **tipado**: `Status`,
+  `TypeSuffix` (`rate-limit-exceeded-requests`), `RetryAfter`, un `RateLimitSnapshot` con los
+  contadores de la ventana, y `Retryable()`. El SDK ya reintenta eso hasta 3 veces honrando el
+  `Retry-After`; cuando se rinde, el error llega a nuestro adaptador y **tiramos toda la
+  clasificación**: `fmt.Errorf("...: %w")`, el candidato cuenta como fallido, y la fachada contesta
+  **502 «all candidates failed»**. El llamante recibe un fallo permanente para una condición
+  transitoria, sin `Retry-After` y sin forma de distinguirla de un proveedor caído — así que
+  reintenta ya, con la misma petición. Es la misma forma que `MDL-023` (un resultado del proveedor
+  aplanado en «todos los candidatos fallaron»), un nivel más arriba. Encontrado leyendo el cierre de
+  `VRT-PRM-007`, donde Veritium mide el límite de tokens por minuto; su caso es de PRM, este es
+  nuestro y se mantiene **incluso si PRM lo arregla a 429**.
+- **Fase objetivo:** antes de que un consumidor con tráfico real (Veritium indexando) comparta
+  ventana de límites con su extracción. Hoy se le cae la extracción sin decirle que espere.
+- **Criterio de entrada:** un tipo de error **agnóstico de proveedor** en `providers` (el adaptador
+  traduce el del SDK, el gateway no importa el SDK de nadie); 429 con `Retry-After` en las dos
+  superficies sólo si **todos** los candidatos fueron rechazados por espera —con un candidato caído
+  por otro motivo sigue siendo 502—, y la espera es el **mínimo** de las esperas. Y hay que tocar
+  `model_activities.py` en el mismo cambio: hoy marca retryable sólo `code >= 500`, así que un 429
+  nuevo se anotaría como no reintentable. **Lo que no se va a hacer: parsear prosa.** El límite de
+  **tokens** por minuto llega hoy como `400` con el motivo en texto libre y el SDK no lo tipa; eso se
+  arregla en prometheus (ya pedido por Veritium), no leyendo inglés aquí.
+- **Coste:** M.
