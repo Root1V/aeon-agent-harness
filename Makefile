@@ -251,6 +251,10 @@ lint: ## Lint proto/schemas, the shared contract schemas, the compose ports, Go 
 	# en un test de Go porque es una propiedad del fuente: una puerta nueva que ejecute y no registre
 	# rechazos pasaría todos los tests existentes, que son verdes para las puertas que ya existen.
 	python3 scripts/tool_audit_sites_check.py
+	# FIN-003: una superficie que enruta tiene que cobrar lo que se generó antes de fallar. En el
+	# camino feliz lo hace recordCost, que las tres ya llaman; el que se olvida es el del 502, y una
+	# superficie nueva lo olvidaría sin poner rojo ningún test existente.
+	python3 scripts/routing_failure_billing_check.py
 	# TOOL-011: el compose de referencia no monta el socket de Docker. Un comentario explicando el
 	# riesgo ya estaba ahí y no lo quitó; esto sí. Aquí y no en un test porque es una propiedad del
 	# fichero, y un montaje de más levanta perfectamente.

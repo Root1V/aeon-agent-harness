@@ -2,7 +2,6 @@ package modelgateway
 
 import (
 	"context"
-	"fmt"
 	"sort"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -190,7 +189,7 @@ func (g *Gateway) DecideStream(
 		}, nil
 	}
 
-	return nil, fmt.Errorf("%w: %+v", ErrAllCandidatesFailed, attempts)
+	return nil, &AllCandidatesFailedError{Attempts: attempts}
 }
 
 // decideAsSingleChunk serves a streaming request from a non-streaming adapter: one call, one chunk,

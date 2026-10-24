@@ -112,6 +112,11 @@ func (h *OpenAICompatibleHandlers) streamChatCompletions(
 		}
 	})
 	if err != nil {
+		// FIN-003, and on this surface it applies whether or not the headers went out: a discarded
+		// attempt was paid for either way.
+		if h.Governance != nil {
+			h.Governance.recordDiscardedAttemptsFromError(r, err, runID, agentRef)
+		}
 		if !headersSent {
 			writeOpenAIError(w, http.StatusBadGateway, "aeon_routing_error", err.Error())
 			return

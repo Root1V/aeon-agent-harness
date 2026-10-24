@@ -62,6 +62,46 @@ type AttemptRecord struct {
 	Provider string
 	Model    string
 	Err      string // empty means this attempt succeeded
+	// DiscardedOutput is the normalized response of an attempt THE MODEL ANSWERED and this gateway
+	// threw away — today only the MDL-015 case, a 200 with no usable content. Nil for a candidate
+	// that failed before producing anything, and nil for the attempt that served.
+	//
+	// It is here because of what it carries: the usage block. Those tokens were generated and billed,
+	// and until FIN-003 they left no ledger row at all, so a run's recorded spend was lower than its
+	// real spend and the budget ceiling under-counted. json:"-" because this is the gateway's internal
+	// hand-off to the recorder: the attempt log is serialized into API responses, and a whole provider
+	// response inside it would be both enormous and a second copy of content we already deliver once.
+	DiscardedOutput map[string]any `json:"-"`
+}
+
+// AllCandidatesFailedError carries the attempt log out of a failed Decide.
+//
+// A TYPED ERROR AND NOT JUST A FORMATTED ONE (FIN-003), because the attempts are the only place the
+// usage of a discarded answer exists. On the 502 path the handler used to get a string and write
+// nothing to the ledger — which is the worst version of this hole: every candidate answered, every
+// answer was unusable, every generation was billed, and the ledger showed the run as having spent
+// nothing. errors.Is(err, ErrAllCandidatesFailed) keeps working, so no existing check changes.
+type AllCandidatesFailedError struct {
+	Attempts []AttemptRecord
+}
+
+func (e *AllCandidatesFailedError) Error() string {
+	return fmt.Sprintf("%s: %+v", ErrAllCandidatesFailed, e.Attempts)
+}
+
+func (e *AllCandidatesFailedError) Unwrap() error { return ErrAllCandidatesFailed }
+
+// DiscardedAttempts are the attempts whose answer was produced, paid for and not used. The one
+// accessor both surfaces call, so "which attempts owe a ledger row" is decided here rather than by
+// each caller re-deriving it from Err and a nil check.
+func DiscardedAttempts(attempts []AttemptRecord) []AttemptRecord {
+	var out []AttemptRecord
+	for _, a := range attempts {
+		if a.DiscardedOutput != nil {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // DecisionResult is what a caller gets back: which provider/model actually served the call, its
@@ -191,7 +231,12 @@ func (g *Gateway) Decide(
 		if unusable := emptyAnswer(output); unusable != "" {
 			span.SetStatus(codes.Error, unusable)
 			span.End()
-			attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model, Err: unusable})
+			// The OUTPUT travels with the attempt (FIN-003). This is the branch where the model ran: we
+			// are discarding an answer that has a usage block, so the tokens exist and were billed, and
+			// the recorder needs them to write the row this used to skip.
+			attempts = append(attempts, AttemptRecord{
+				Provider: c.Provider, Model: c.Model, Err: unusable, DiscardedOutput: output,
+			})
 			continue
 		}
 		recordResponseModel(span, responseModelOf(output))
@@ -210,7 +255,7 @@ func (g *Gateway) Decide(
 		}, nil
 	}
 
-	return nil, fmt.Errorf("%w: %+v", ErrAllCandidatesFailed, attempts)
+	return nil, &AllCandidatesFailedError{Attempts: attempts}
 }
 
 // restrictPool narrows the candidates to those the profile declares in-network when the call is

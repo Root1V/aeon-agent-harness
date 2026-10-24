@@ -1196,7 +1196,7 @@ fichero mal nombrado. Sin `down`, a propósito.
   `aeon-modelgw` como una ruta nueva (`POST /v1/messages`) o en un servicio separado.
 - **Coste:** M.
 
-### Un candidato que falla después de que el modelo respondió no deja fila en el ledger
+### ~~Un candidato que falla después de que el modelo respondió no deja fila en el ledger~~ — HECHA (`FIN-003`)
 
 - **Descripción:** `Gateway.Decide` descarta un candidato de dos maneras: `provider.Decide` devuelve
   error, o la respuesta es inutilizable (`emptyAnswer`, `MDL-015`). En las dos, el handler contesta
