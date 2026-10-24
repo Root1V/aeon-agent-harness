@@ -25,6 +25,33 @@ type FinOpsHandlers struct {
 	Ledger *store.Store
 }
 
+// runCostResponse is FIN-002: one run's spend as DATA (`VRT-AEON-007`, point 2).
+//
+// Veritium's argument for it, and it is the one that decides against their own alternative of leaving
+// the HTML as the only view: their `HttpModel` discards the `aeon` block of each response — correctly,
+// because it belongs to one specific harness — so a consumer that wants to show "this case cost X" was
+// left reading an HTML page or our database. `GET /finops/costs` is a dashboard and was never an API:
+// anything consuming it is parsing a screen.
+type runCostResponse struct {
+	RunID string `json:"run_id"`
+	// CostUSD IS A POINTER, and this is the whole three-state rule of this ledger restated at the
+	// response boundary: a number means priced, and NULL means "every call we recorded has no price",
+	// which is a different fact from free. The HTML prints "—" for it; JSON has a word for it.
+	CostUSD    *float64 `json:"cost_usd"`
+	ModelCalls int64    `json:"model_calls"`
+	// PricedCalls plus UnpricedCalls equals ModelCalls. Both are reported because a partially-priced
+	// run's cost is a LOWER BOUND, and a consumer showing it as a figure should be able to say so.
+	PricedCalls   int64 `json:"priced_calls"`
+	UnpricedCalls int64 `json:"unpriced_calls"`
+	// PromptTokens and CompletionTokens are lower bounds too: a provider that reports no usage leaves
+	// nulls, which sum to nothing rather than to a guess. UnreportedUsageCalls is how many did that.
+	PromptTokens         int64 `json:"prompt_tokens"`
+	CompletionTokens     int64 `json:"completion_tokens"`
+	Tokens               int64 `json:"tokens"`
+	UnreportedUsageCalls int64 `json:"unreported_usage_calls"`
+	DistinctModels       int64 `json:"distinct_models"`
+}
+
 // AttributionTotalView is store.AttributionTotal under the name this page uses. Aliased rather than
 // redeclared: a parallel struct here would be one more place for the nil-key convention to be
 // forgotten, and the nil key is the part of this data that must not be dropped.
@@ -33,6 +60,64 @@ type AttributionTotalView = store.AttributionTotal
 // Register mounts the FinOps routes on mux.
 func (h *FinOpsHandlers) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /finops/costs", h.showCosts)
+	mux.HandleFunc("GET /finops/runs/{run_id}", h.showRunCost)
+}
+
+// showRunCost answers one run's spend as JSON, scoped to the caller's tenant (FIN-002).
+//
+// 404 AND 200-WITH-ZEROS ARE DIFFERENT ANSWERS, and separating them is the only part of this that is
+// not a sum. The ledger holds no row for a run that never called a model, and no row for a run id
+// that does not exist — the same silence for two different facts. A run refused by policy or by its
+// budget before its first model call is exactly the second case, and reporting it as "no such run"
+// would make a governed-and-refused run indistinguishable from a typo, which is the opposite of what
+// an operator is looking at this page for. So the journal is asked whether the run is known at all.
+//
+// Veritium's T-7 holds either way: both the ledger and the journal are scoped to the caller's tenant,
+// so another tenant's run is 404 because to this caller it does not exist — and that answer carries
+// no information about whether it exists elsewhere.
+func (h *FinOpsHandlers) showRunCost(w http.ResponseWriter, r *http.Request) {
+	caller, ok := auth.CallerFrom(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{
+			"error": "unauthenticated: a run's cost is scoped to the caller's tenant (VRT-AEON-005)",
+		})
+		return
+	}
+	runID := r.PathValue("run_id")
+	spend, err := h.Ledger.FinOpsLedgerFor(caller.Tenant).SpendForRun(r.Context(), runID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if spend.ModelCalls == 0 {
+		known, err := h.Ledger.CheckpointerFor(caller.Tenant).KnownRun(r.Context(), runID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if !known {
+			writeJSON(w, http.StatusNotFound, map[string]any{
+				"error":  "no such run for this tenant",
+				"run_id": runID,
+			})
+			return
+		}
+	}
+
+	response := runCostResponse{
+		RunID: runID, ModelCalls: spend.ModelCalls,
+		PricedCalls: spend.PricedCalls, UnpricedCalls: spend.UnpricedCalls,
+		PromptTokens: spend.PromptTokens, CompletionTokens: spend.CompletionTokens,
+		Tokens: spend.Tokens, UnreportedUsageCalls: spend.UnreportedUsageCalls,
+		DistinctModels: spend.DistinctModels,
+	}
+	// The pointer is left nil when NOTHING was priced, which covers both the run with no calls and the
+	// run whose every call is compute_based. `0` is reserved for a run that was really priced at zero.
+	if spend.PricedCalls > 0 {
+		cost := spend.CostUSD
+		response.CostUSD = &cost
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *FinOpsHandlers) showCosts(w http.ResponseWriter, r *http.Request) {

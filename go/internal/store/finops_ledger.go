@@ -326,6 +326,16 @@ type RunSpend struct {
 	// nulls, which sum to nothing rather than to a guess. UnreportedUsageCalls is how many.
 	Tokens               int64 `json:"tokens"`
 	UnreportedUsageCalls int64 `json:"unreported_usage_calls"`
+	// PromptTokens and CompletionTokens are the same sum split in two (FIN-002, asked for by Veritium
+	// in VRT-AEON-007). Kept BESIDE Tokens rather than replacing it: the ceiling in MDL-017 compares
+	// against the combined figure, and a consumer showing "this case cost X" wants the two separately
+	// because they are priced differently. Both are lower bounds for the same reason Tokens is.
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	// DistinctModels is how many (provider, model) pairs the run used. A run that fell back to a
+	// second provider mid-flight is a different thing from one that used a single model, and without
+	// this the cost is a number with no shape — the same reason AttributionTotal carries it.
+	DistinctModels int64 `json:"distinct_models"`
 }
 
 // SpendForRun sums one run's recorded cost (MDL-017).
@@ -341,9 +351,12 @@ func (l *FinOpsLedger) SpendForRun(ctx context.Context, runID string) (RunSpend,
 		`SELECT coalesce(sum(cost_usd), 0), count(*) FILTER (WHERE cost_usd IS NOT NULL),
 		        count(*) FILTER (WHERE cost_usd IS NULL), count(*),
 		        coalesce(sum(coalesce(prompt_tokens, 0) + coalesce(completion_tokens, 0)), 0),
-		        count(*) FILTER (WHERE prompt_tokens IS NULL AND completion_tokens IS NULL)
+		        count(*) FILTER (WHERE prompt_tokens IS NULL AND completion_tokens IS NULL),
+		        coalesce(sum(prompt_tokens), 0), coalesce(sum(completion_tokens), 0),
+		        count(DISTINCT (provider, model))
 		 FROM model_gateway_costs WHERE tenant_id = $2 AND run_id = $1`, runID, l.tenant,
-	).Scan(&sum, &s.PricedCalls, &s.UnpricedCalls, &s.ModelCalls, &s.Tokens, &s.UnreportedUsageCalls)
+	).Scan(&sum, &s.PricedCalls, &s.UnpricedCalls, &s.ModelCalls, &s.Tokens, &s.UnreportedUsageCalls,
+		&s.PromptTokens, &s.CompletionTokens, &s.DistinctModels)
 	if err != nil {
 		return RunSpend{}, fmt.Errorf("store: summing spend for run %s: %w", runID, err)
 	}
