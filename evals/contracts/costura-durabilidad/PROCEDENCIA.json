@@ -1,0 +1,18 @@
+{
+  "$comment": "INT-012c. ESTE CONTRATO LO ESCRIBIMOS NOSOTROS, asi que la direccion es la contraria a la de normalizacion: el canonico es ESTE repositorio y la carpeta compartida es la copia publicada. EXISTE POR UN DEFECTO NUESTRO Y PEOR QUE EL DE normalizacion: la copia compartida se quedo en 0.1-draft del 27 de septiembre, asi que `sub_run_id` en la identidad (INT-009b, 7 de octubre), el bloque `durability` (INT-011) y el filtro de lectura (INT-009c, 15 de octubre) NUNCA llegaron a la carpeta que leen los demas. Veritium y Synaptum implementan contra este documento: su HttpCheckpointer y su cliente de diario se escribieron contra una version que no menciona los sub-runs. Es exactamente la forma de la que AVISAMOS NOSOTROS -- 'son dos copias, y ya sabemos como acaba' -- en el contrato que nos toca mantener.",
+  "direction": "we_own_it: canonical = this repo, published copy = the shared folder",
+  "published_path": "~/Documents/Victor/coordinacion_project/contratos/costura-durabilidad",
+  "published_path_declared_by": "SYN, canal 2026-10-14 (donde escriben todos)",
+  "published_at": "2026-10-25",
+  "spec_version": "0.2-draft",
+  "files": {
+    "spec.md": "fa234871863e7d9160ad9b59efd7a9bf61d6c6eb4d9cb4f3e3efec1565ebb08b",
+    "schema/append-request.schema.json": "bc445465c54e5d0844cc960953a804a1abd4da3741964a93bc618825bc95271b",
+    "schema/append-result.schema.json": "e4b565e52c280629f0ef61c6ed03db877ae5854b4291f8936010c4e118f35eae",
+    "schema/run-state.schema.json": "c89416dbd811188c45cc388a5e1298a377dcf52114c5f2fc01f33053cb5101d8",
+    "fixtures/dedup-por-identidad.json": "72d89457c96d49b7fd65289d48facc6a15b0d975ef034581e6c0932e14e91151",
+    "fixtures/README.md": "e0f67446c6c9a7a01caa9a715b3c8a29dda4a03734136aa1e1d504e6cb93dd7a",
+    "fixtures/grabacion-sub-run.json": "bfdca90d5d3b4e2ed032af18a54070b00c8099ce4e49c58b793ac3f174d84c9c"
+  },
+  "$grabacion": "fixtures/grabacion-sub-run.json la produce y la verifica TestTheCheckpointRouteRecordingMatchesWhatWeServe contra la ruta real: no puede quedarse rancia sin que ese test lo diga. Pedida por Synaptum el 2026-10-24, porque su doble de test filtraba por sub_run_id y nuestro servidor no -- su suite estaba verde midiendo el doble."
+}

@@ -1,6 +1,9 @@
 {
   "contract": "normalizacion",
   "version": "0.2-draft",
+  "$canonical": "La copia canonica de este contrato es la carpeta compartida coordinacion_project/contratos. Una copia vendorizada dentro de un repositorio es un espejo de solo lectura. Dos copias que se editan no es el problema; el problema es una copia que no puede notar que esta rancia, y para eso hay dos mecanismos segun lo que alcances: si puedes leer esta carpeta, hashea su spec.md y comparalo con spec_sha256; si NO puedes —aeon midio que desde su maquina no es alcanzable— el unico que funciona es el canal, y es protocolo: quien cambie spec.md publica alli la version y la huella. Ya paso dos veces sin ninguno de los dos: la copia vendorizada del spec se quedo atras contradiciendo a las fixtures que la acompanan, y la cabecera de esta mantuvo bloqueada dieciocho dias una fila de otro equipo.",
+  "spec_sha256": "566ede3922b84901c671b1e6af22ad70c2d35edb7a3fd20d0f771769ee3c0f30",
+  "$spec_sha256": "sha256 de spec.md en la copia canonica, al 2026-10-24. Si tu copia del spec hashea distinto, la tuya o esta estan atrasadas: compara antes de implementar, no despues de que un caso pase por el motivo equivocado. Quien edite spec.md actualiza esto en el mismo cambio.",
   "dialect": "openai-compatible",
   "$comment": "Cada caso toma un cuerpo del cable y declara la proyeccion unificada que cualquier implementacion correcta debe producir. Los cuerpos no se duplican aqui: se referencian.",
   "$v02": "La regrabacion del manifest v8 rompio cinco casos de la v0.1 sin que ninguna implementacion hubiera cambiado. La causa era nuestra: el corpus fijaba CIFRAS (137 tokens de salida, cache_read 14, un id de replica como modelo) que pertenecen a una grabacion concreta y no a la especificacion. Un caso dorado que se cae al regrabar no estaba comprobando conformidad, estaba comprobando que nadie tocara el fixture. Desde la v0.2 un contador solo se fija cuando el valor ES la afirmacion -- null o cero, que son las que distinguen los tres estados de Usage -- y el resto se expresa como estado medido/sin-medir y como relaciones entre contadores.",
@@ -272,26 +275,56 @@
       }
     },
     {
-      "name": "request: el razonamiento vuelve, y un turno que solo razona no viaja",
-      "why": "Las dos direcciones no son independientes: la response PRODUCE la parte que la request no sabe mandar, y por eso el corpus no podia ver el defecto en ninguno de los dos lenguajes. Este caso fija las dos mitades a la vez: el razonamiento que acompana a un content SI viaja (sin eso, un modelo de razonamiento continua desde su propio turno sin su canal de analisis), y un turno que SOLO razona NO viaja (medido contra la plataforma real: llega 400). ESCRITO POR AEON a la espera del caso publicado por SYN: su declaracion del campo llego por el canal porque nosotros vendorizamos el spec y su edicion de la copia compartida es invisible desde aqui. Cuando publiquen el suyo, este se reemplaza.",
+      "name": "un turno del asistente sin nada enviable no deja un sobre vacio",
       "direction": "request",
       "authored": true,
-      "body_file": "request_turno_que_solo_razona.json",
+      "why": "VRT-SYN-004, medido en los dos lenguajes contra el mismo servidor, y el 2026-10-14 tambien por Prometheus contra el servidor que emite el 400 — tres testigos, y el tercero es el que lo rechaza. El razonamiento no vuelve al proveedor, asi que un turno del asistente cuya unica parte es 'thinking' no tiene nada que mandar — y el sobre vacio, {\"role\": \"assistant\", \"content\": null}, lo rechaza el servidor con un 400 NO REINTENTABLE: se pierde el run entero, en el turno siguiente al que razono y solo cuando el modelo razona sin hablar. El turno no se descarta del historial del agente ni del diario; lo que no viaja es el envoltorio. Las dos implementaciones eligieron descartarlo en vez de mandar content vacio: ese string lo acepta el servidor, pero afirma que el asistente dijo la cadena vacia, y no la dijo.",
+      "body_file": "request_asistente_solo_razonamiento.json",
+      "expect": {
+        "wire_roles": [
+          "user",
+          "user"
+        ],
+        "assistant_messages_sendable": true
+      }
+    },
+    {
+      "name": "un turno del asistente que dijo la cadena vacia si viaja, con content vacio",
+      "direction": "request",
+      "authored": true,
+      "why": "El otro lado de la regla de arriba, y la razon de que la regla mire si hay PARTE de texto y no si el texto esta vacio. Medido por Aeon contra el servidor real: content con la cadena vacia devuelve 200, y ausente o nulo sin tool_calls devuelve 400. Colapsar los dos casos rompe peticiones que hoy funcionan, asi que 'no hay nada que mandar' y 'dijo la cadena vacia' se distinguen en el cuerpo. Un adaptador que escriba `content = text or null` las colapsa sin enterarse, que es como estaba escrito el nuestro.",
+      "body_file": "request_asistente_cadena_vacia.json",
       "expect": {
         "wire_roles": [
           "user",
           "assistant",
-          "user",
           "user"
         ],
         "wire_assistant_contents": [
-          "hola"
+          ""
+        ],
+        "assistant_messages_sendable": true
+      }
+    },
+    {
+      "name": "el razonamiento del asistente vuelve al proveedor",
+      "direction": "request",
+      "authored": true,
+      "why": "PRM-VRT-003. El gateway de inferencia borraba `reasoning_content` de todos los mensajes —su modelo de mensaje no lo nombraba— y al arreglarlo preguntaron a los frameworks si el campo sobrevivia a su serializacion. En Synaptum no sobrevivia, y estaba escrito que no con la palabra 'a proposito' al lado. El proposito estaba mal: medido en llama.cpp#27720, un modelo de razonamiento al que se le pide continuar DESDE SU PROPIA tool call sin su canal de analisis emite cabeceras Harmony mal formadas y el turno se pierde con un 500 del parser — 7 de 120 turnos sin devolverlo, 0 de 120 devolviendolo. El issue esta cerrado como no arreglable en el parser: lo arregla el cliente o no se arregla. Y es el caso que ningun corpus miraba: los 14 casos de la direccion response comprueban que el razonamiento LLEGA, y ninguno que vuelva. Un campo que entra y no sale no rompe nada visible.",
+      "body_file": "request_razonamiento_vuelve.json",
+      "expect": {
+        "wire_roles": [
+          "user",
+          "assistant",
+          "tool",
+          "user"
         ],
         "wire_assistant_reasoning": [
-          "El usuario pide un saludo breve."
+          "Necesito leer el documento antes de responder."
         ],
         "assistant_messages_sendable": true
       }
     }
-  ]
+  ],
+  "$direction": "Un caso sin 'direction' es de direccion RESPONSE, que es lo que el contrato trataba hasta la 0.2: el 'body_file' es un cuerpo del cable y el 'expect' describe la proyeccion unificada. Con \"direction\": \"request\" se invierte: el 'body_file' es el Request del vocabulario compartido y el 'expect' describe el CUERPO que el adaptador debe poner en el cable. La direccion request existe desde VRT-SYN-004, que fallo precisamente ahi: la spec decia que esa direccion 'no se normaliza' porque hay un solo esquema, y las dos direcciones no son independientes — la response PRODUCE la parte (thinking) que la request no sabe mandar, asi que ningun caso del corpus podia verlo en ninguno de los dos lenguajes. Las claves de expectativa son nuevas a proposito: un runner que solo conozca la direccion response las vera como claves que no sabe comprobar y debe fallar a gritos, no saltarselas. La clave `wire_assistant_reasoning` lista el `reasoning_content` de cada mensaje del asistente, en orden, con null donde no haya: el razonamiento vuelve al proveedor, y no sustituye a `content` ni a `tool_calls` — mandarlo solo da el mismo 400 del sobre vacio."
 }

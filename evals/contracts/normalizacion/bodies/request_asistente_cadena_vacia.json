@@ -1,0 +1,10 @@
+{
+  "$authored": "NO es una grabacion, por lo mismo que el otro cuerpo de direccion request. Escrito a mano por Synaptum el 2026-10-10 para fijar la distincion que Aeon midio contra el servidor real al arreglar su mitad de VRT-SYN-004: 'content' ausente o nulo sin tool_calls devuelve 400, y 'content' con la cadena vacia devuelve 200. Son dos casos distintos y colapsarlos cambia el cuerpo de peticiones que hoy funcionan, asi que el corpus los separa.",
+  "$direction": "request — el cuerpo esta en el vocabulario compartido, no en el cable",
+  "model": "gpt-oss-20b-mxfp4",
+  "messages": [
+    {"role": "user", "content": [{"kind": "text", "text": "di algo"}]},
+    {"role": "assistant", "content": [{"kind": "text", "text": ""}]},
+    {"role": "user", "content": [{"kind": "text", "text": "sigue"}]}
+  ]
+}

@@ -1,0 +1,149 @@
+{
+  "$comment": "Grabación del camino real de GET/POST /runs/{run_id}/checkpoints contra Postgres real, producida y verificada por TestTheCheckpointRouteRecordingMatchesWhatWeServe. Pedida por Synaptum el 2026-10-24: su doble de test filtraba por sub_run_id y nuestro servidor no, así que su suite estaba verde midiendo el doble. Esto es la evidencia conjunta que faltaba.",
+  "$volatiles": "run_id, los ids opacos y recorded_at se sustituyen por marcadores: lo que el corpus fija es la FORMA y los valores que son la afirmación (sub_run_id, seq, next_seq, duplicate), no el reloj ni un uuid.",
+  "contract": "costura-durabilidad",
+  "exchanges": [
+    {
+      "why": "el run raíz escribe un paso, sin mandar sub_run_id en absoluto",
+      "method": "POST",
+      "path": "/runs/{run_id}/checkpoints",
+      "request": {
+        "payload": {
+          "total": 120
+        },
+        "phase": "completed",
+        "step_id": "s1"
+      },
+      "status": 201,
+      "response": {
+        "seq": 0,
+        "duplicate": false,
+        "payload_diverged": false
+      }
+    },
+    {
+      "why": "un sub-run escribe un paso CON EL MISMO step_id: no es un duplicado",
+      "method": "POST",
+      "path": "/runs/{run_id}/checkpoints",
+      "request": {
+        "payload": {
+          "total": 340
+        },
+        "phase": "completed",
+        "step_id": "s1",
+        "sub_run_id": "child-a"
+      },
+      "status": 201,
+      "response": {
+        "seq": 1,
+        "duplicate": false,
+        "payload_diverged": false
+      }
+    },
+    {
+      "why": "y el mismo paso del mismo sub-run otra vez SÍ es un duplicado",
+      "method": "POST",
+      "path": "/runs/{run_id}/checkpoints",
+      "request": {
+        "payload": {
+          "total": 340
+        },
+        "phase": "completed",
+        "step_id": "s1",
+        "sub_run_id": "child-a"
+      },
+      "status": 200,
+      "response": {
+        "seq": 1,
+        "duplicate": true,
+        "payload_diverged": false
+      }
+    },
+    {
+      "why": "la lectura sin parámetro devuelve SOLO la raíz, y next_seq es del run entero",
+      "method": "GET",
+      "path": "/runs/{run_id}/checkpoints",
+      "status": 200,
+      "response": {
+        "run_id": "{run_id}",
+        "sub_run_id": "",
+        "next_seq": 2,
+        "durability": {
+          "level": "per_activity",
+          "steps": 1,
+          "steps_with_intent": 0
+        },
+        "records": [
+          {
+            "run_id": "{run_id}",
+            "step_id": "s1",
+            "phase": "completed",
+            "payload": {
+              "total": 120
+            },
+            "seq": 0,
+            "recorded_at": "{timestamp}"
+          }
+        ]
+      }
+    },
+    {
+      "why": "la lectura del sub-run devuelve SOLO lo suyo, con el mismo next_seq",
+      "method": "GET",
+      "path": "/runs/{run_id}/checkpoints?sub_run_id=child-a",
+      "status": 200,
+      "response": {
+        "run_id": "{run_id}",
+        "sub_run_id": "child-a",
+        "next_seq": 2,
+        "durability": {
+          "level": "per_activity",
+          "steps": 1,
+          "steps_with_intent": 0
+        },
+        "records": [
+          {
+            "run_id": "{run_id}",
+            "sub_run_id": "child-a",
+            "step_id": "s1",
+            "phase": "completed",
+            "payload": {
+              "total": 340
+            },
+            "seq": 1,
+            "recorded_at": "{timestamp}"
+          }
+        ]
+      }
+    },
+    {
+      "why": "vacío explícito es la raíz, igual que omitido",
+      "method": "GET",
+      "path": "/runs/{run_id}/checkpoints?sub_run_id=",
+      "status": 200,
+      "response": {
+        "run_id": "{run_id}",
+        "sub_run_id": "",
+        "next_seq": 2,
+        "durability": {
+          "level": "per_activity",
+          "steps": 1,
+          "steps_with_intent": 0
+        },
+        "records": [
+          {
+            "run_id": "{run_id}",
+            "step_id": "s1",
+            "phase": "completed",
+            "payload": {
+              "total": 120
+            },
+            "seq": 0,
+            "recorded_at": "{timestamp}"
+          }
+        ]
+      }
+    }
+  ],
+  "version": "0.2-draft"
+}

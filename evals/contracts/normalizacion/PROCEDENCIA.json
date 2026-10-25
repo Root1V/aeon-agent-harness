@@ -1,0 +1,16 @@
+{
+  "$comment": "INT-012c. La procedencia de la copia vendorizada del contrato, con la huella de cada fichero canonico. EXISTE PORQUE PUBLICAMOS UNA MEDICION FALSA: el 2026-10-15 dijimos en el canal que la carpeta compartida 'no es alcanzable desde esta maquina', y Synaptum cambio su protocolo por eso -- se comprometieron a publicar version y huella en el canal porque supuestamente no podiamos traer el fichero. SI podemos: la ruta que ellos declararon el 2026-10-14 existe y su spec.md hashea exactamente lo que publicaron. Lo que medimos mal fue DONDE mirar.",
+  "$por_que_las_dos_mitades": "La huella fijada sirve siempre: una copia vendorizada que cambie sin querer se detecta aunque la carpeta no este montada. La comparacion contra el canonico sirve cuando SI esta: detecta que ellos lo editaron, que es lo que ninguna huella propia puede ver.",
+  "canonical_path": "~/Documents/Victor/coordinacion_project/contratos/normalizacion",
+  "canonical_path_declared_by": "SYN, canal 2026-10-14",
+  "vendored_at": "2026-10-25",
+  "spec_version": "0.2-draft",
+  "spec_sha256_published_by_syn": "566ede3922b84901c671b1e6af22ad70c2d35edb7a3fd20d0f771769ee3c0f30",
+  "files": {
+    "spec.md": "566ede3922b84901c671b1e6af22ad70c2d35edb7a3fd20d0f771769ee3c0f30",
+    "fixtures/openai-compatible.json": "2ab6984fed363a85f4c387d7c4a4eff3a7b70f2ef7e2d972ec82f47866cac093",
+    "bodies/request_asistente_cadena_vacia.json": "eac9a380f1a214357f354b7cbf64bf386fc57f19e50e814b28cd2ff87b8852e2",
+    "bodies/request_asistente_solo_razonamiento.json": "d9486ca8fe03ed67eefda62aa69f332614b872dd166ea62f0843489e8e63e1bf",
+    "bodies/request_razonamiento_vuelve.json": "2ed0e0c8e75ac16371ff6035ca7f1ed14884b06beca5044a00d0e92eec2335f7"
+  }
+}

@@ -179,3 +179,61 @@ func showPtrs(ps []*string) string {
 	}
 	return out + "]"
 }
+
+// TestTheRequestDirectionOnTheShapeThisLayerRECEIVES is INT-012c's half of the request direction.
+//
+// WHY THIS TEST EXISTS AT ALL, and it is the finding rather than the test: the three published cases
+// of the request direction are written in the SHARED VOCABULARY — `content` as a list of typed parts
+// — and nothing in our stack converts that to a wire body. Our gateway is an OpenAI-compatible façade:
+// its callers are frameworks that build the wire body themselves, and we forward it. So the corpus
+// reports those three as gaps, with their reason, and they stay gaps until someone decides our
+// gateway should also accept the vocabulary.
+//
+// What our layer CAN be held to is what it does to a body already in the dialect, and that is three
+// properties, not zero:
+//
+//   - it DROPS an assistant turn with neither content nor tool_calls (MDL-022's rule, which is the
+//     spec's first request rule applied one layer out);
+//   - it PRESERVES `content: ""`, which is the same rule's other half — the string is sendable and
+//     says the assistant said nothing, which is a different claim from having nothing to send;
+//   - it PRESERVES `reasoning_content`, which is the spec's third rule; we never construct it, and a
+//     transport that dropped it would reproduce PRM-VRT-003's defect one hop later.
+//
+// Asserted on THE BODY THAT LEAVES THE PROCESS, captured by a recording upstream through the real
+// gateway and the real adapter — because the drop happens in the gateway and the serialization in the
+// adapter, so looking at either alone describes half the path.
+func TestTheRequestDirectionOnTheShapeThisLayerRECEIVES(t *testing.T) {
+	body := []byte(`{
+	  "model": "wire-probe",
+	  "messages": [
+	    {"role": "user", "content": "extrae el total"},
+	    {"role": "assistant", "content": null},
+	    {"role": "assistant", "content": "", "reasoning_content": "no dije nada, y lo pensé"},
+	    {"role": "user", "content": "sigue"}
+	  ]
+	}`)
+	onTheWire := projectRequest(t, body)
+
+	messages, _ := onTheWire["messages"].([]any)
+	var roles []string
+	for _, m := range messages {
+		msg, _ := m.(map[string]any)
+		role, _ := msg["role"].(string)
+		roles = append(roles, role)
+	}
+	if want := []string{"user", "assistant", "user"}; !equalStrings(roles, want) {
+		t.Fatalf("roles on the wire = %v, want %v — the turn with neither content nor tool_calls must "+
+			"not leave the process, and the one that said the empty string must", roles, want)
+	}
+
+	assistant, _ := messages[1].(map[string]any)
+	content, isString := assistant["content"].(string)
+	if !isString || content != "" {
+		t.Errorf("the surviving assistant content = %#v, want the empty STRING: null and \"\" are "+
+			"different claims and the server answers 400 to one of them", assistant["content"])
+	}
+	if got, _ := assistant["reasoning_content"].(string); got != "no dije nada, y lo pensé" {
+		t.Errorf("reasoning_content on the wire = %q, want it preserved — 7 of 120 turns failed without "+
+			"it (llama.cpp#27720), and a transport that drops it reproduces that defect one hop later", got)
+	}
+}

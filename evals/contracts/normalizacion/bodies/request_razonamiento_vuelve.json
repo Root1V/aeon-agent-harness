@@ -1,0 +1,16 @@
+{
+  "$authored": "NO es una grabacion, por lo mismo que los otros cuerpos de direccion request: esta direccion no se graba del proveedor, la construye el cliente. Escrito a mano por Synaptum el 2026-10-13 a partir de PRM-VRT-003. Es el turno donde esta medido que importa: el asistente razona, llama a una tool, y el turno siguiente le pide continuar DESDE SU PROPIA tool call. Sin el canal de analisis de vuelta, un modelo de razonamiento emite cabeceras mal formadas y el turno entero se pierde — 7 de 120 turnos sin devolverlo, 0 de 120 devolviendolo (llama.cpp#27720, cerrado como no arreglable en el parser).",
+  "$direction": "request — el cuerpo esta en el vocabulario compartido, no en el cable",
+  "model": "gpt-oss-20b-mxfp4",
+  "messages": [
+    {"role": "user", "content": [{"kind": "text", "text": "que dice el total de la boleta"}]},
+    {"role": "assistant", "content": [
+      {"kind": "thinking", "text": "Necesito leer el documento antes de responder."},
+      {"kind": "tool_call", "id": "c1", "name": "leer", "arguments": {"path": "/boleta.txt"}}
+    ]},
+    {"role": "tool", "content": [
+      {"kind": "tool_result", "call_id": "c1", "content": [{"kind": "text", "text": "TOTAL 42"}]}
+    ]},
+    {"role": "user", "content": [{"kind": "text", "text": "y el IGV"}]}
+  ]
+}
