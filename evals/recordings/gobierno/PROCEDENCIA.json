@@ -1,0 +1,9 @@
+{
+  "$comment": "GOV-002. Grabaciones publicadas en coordinacion_project/grabaciones-aeon, que NO son contratos: ninguna costura gana compromiso de estabilidad por tener grabacion. Entran en el guard por el mismo motivo que los contratos -- Synaptum escribe un cliente contra este fichero, asi que una copia publicada que se queda atras es el defecto de INT-012c otra vez, con menos excusa porque ya lo sabemos.",
+  "direction": "we_own_it: canonical = this repo, published copy = the shared folder",
+  "published_path": "~/Documents/Victor/coordinacion_project/grabaciones-aeon/gobierno",
+  "published_at": "2026-10-25",
+  "files": {
+    "rechazo-por-techo.json": "c954020dc30e8d21a2ecb82d65218d2629167e3a5af14bbf5f2bb02e2c283660"
+  }
+}

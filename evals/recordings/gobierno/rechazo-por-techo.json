@@ -1,0 +1,77 @@
+{
+  "$comment": "Grabación de un rechazo por techo de presupuesto, producida y verificada por TestTheBudgetRefusalRecordingMatchesWhatWeServe contra Postgres real y el registro de agentes real. Pedida por Synaptum en SYN-AEON-002.",
+  "$no_es_un_contrato": "ESTA COSTURA NO TIENE CONTRATO. Ninguno de los cuatro de la carpeta compartida es el de gobierno, y esto no lo inventa: es evidencia de la forma que servimos hoy, para que un cliente no se escriba contra una forma supuesta. Si de aquí sale un contrato, se acuerda aparte.",
+  "$volatiles": "run_id, el ref del agente y el modelo se sustituyen por marcadores. Los números del techo y del gasto NO: son la afirmación.",
+  "exchanges": [
+    {
+      "why": "el techo ya está gastado: la segunda llamada se rechaza. OpenAI-compatible, así que el motivo viaja en el sobre de error de OpenAI y los hechos en el bloque `aeon`",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "headers": {
+        "X-Aeon-Agent-Manifest-Ref": "{agent}@0.1.0",
+        "X-Aeon-Run-Id": "{run_id}"
+      },
+      "request": {
+        "messages": [
+          {
+            "content": "hi",
+            "role": "user"
+          }
+        ],
+        "model": "governed-test"
+      },
+      "status": 402,
+      "response": {
+        "aeon": {
+          "agent_manifest_ref": "{agent}@0.1.0",
+          "ceiling": "tokens=1500",
+          "denied_by": "budget",
+          "disposition": "terminate_run",
+          "error": "budget exceeded: tokens: 1500 recorded, ceiling 1500",
+          "model_calls": 1,
+          "retryable": false,
+          "run_id": "{run_id}",
+          "spent_usd": 0.025,
+          "tokens": 1500
+        },
+        "error": {
+          "message": "budget exceeded: tokens: 1500 recorded, ceiling 1500",
+          "type": "aeon_budget_exceeded"
+        }
+      }
+    },
+    {
+      "why": "el mismo rechazo por /decide, que es la superficie por la que preguntaron. Aquí el cuerpo NO lleva sobre de OpenAI: el rechazo es la respuesta entera",
+      "method": "POST",
+      "path": "/decide",
+      "headers": null,
+      "request": {
+        "candidates": [
+          {
+            "provider": "fake-compute",
+            "model": "{model}",
+            "priority": 0
+          }
+        ],
+        "rendered_context": {
+          "messages": []
+        },
+        "run_id": "{run_id}",
+        "agent_manifest_ref": "{agent}@0.1.0"
+      },
+      "status": 402,
+      "response": {
+        "agent_manifest_ref": "{agent}@0.1.0",
+        "ceiling": "tokens=1500",
+        "denied_by": "budget",
+        "disposition": "terminate_run",
+        "error": "budget exceeded: tokens: 1500 recorded, ceiling 1500",
+        "model_calls": 1,
+        "retryable": false,
+        "run_id": "{run_id}",
+        "spent_usd": 0.025,
+        "tokens": 1500
+      }
+    }
+  ]
+}

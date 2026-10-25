@@ -33,14 +33,17 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # El mismo guard sirve para las dos porque la comprobación es la misma: los bytes de los dos lados
 # tienen que coincidir con la huella fijada. Lo que cambia es a quién hay que avisar cuando no.
 CONTRACTS = ["normalizacion", "costura-durabilidad"]
+# Las grabaciones no son contratos y entran en el mismo guard, porque el defecto que detecta es el
+# mismo: otro equipo escribe un cliente contra un fichero publicado, y una copia atrasada no avisa.
+RECORDINGS = ["gobierno"]
 
 
 def sha256(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def check(contract: str, failures: list[str]) -> tuple[int, str]:
-    vendored = ROOT / "evals" / "contracts" / contract
+def check(contract: str, failures: list[str], base: str = "contracts") -> tuple[int, str]:
+    vendored = ROOT / "evals" / base / contract
     provenance = vendored / "PROCEDENCIA.json"
     if not provenance.is_file():
         failures.append(f"{contract}: falta {provenance.relative_to(ROOT)}")
@@ -114,6 +117,9 @@ def main() -> int:
     for contract in CONTRACTS:
         count, where = check(contract, failures)
         lines.append(f"{contract}: {count} fichero(s), {where}")
+    for recording in RECORDINGS:
+        count, where = check(recording, failures, base="recordings")
+        lines.append(f"grabaciones/{recording}: {count} fichero(s), {where}")
 
     if failures:
         print(f"contract-vendoring: {len(failures)} problema(s):", file=sys.stderr)

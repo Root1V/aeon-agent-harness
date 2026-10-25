@@ -14,6 +14,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/auth"
 	"github.com/aeon-ai/aeon/go/internal/finops"
 	"github.com/aeon-ai/aeon/go/internal/modelgateway"
+	"github.com/aeon-ai/aeon/go/internal/policy"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
@@ -562,6 +563,22 @@ func (h *ModelGatewayHandlers) overBudget(r *http.Request, runID, agentRef strin
 		"tokens":             spend.Tokens,
 		"model_calls":        spend.ModelCalls,
 		"retryable":          false,
+		// GOV-002, measured and reported by Synaptum (SYN-AEON-002): A DENIAL OF OURS DID NOT ARRIVE
+		// AS A DENIAL. Their transport saw a non-2xx and raised `ProviderError(status=…)`, so the run
+		// stopped as a provider failure — no disposition, and no way to tell a governance decision
+		// from a backend having a bad day. Every fact needed to act was in the body and none of it was
+		// in a form anything could branch on: `error` was prose and `retryable` is the error taxonomy's
+		// word, not the policy vocabulary's.
+		//
+		// `denied_by` is the same value this refusal already puts on its span (OBS-020), so a trace and
+		// a response cannot disagree about who stopped the run.
+		"denied_by": string(tracing.DeniedByBudget),
+		// terminate_run AND NOT deny_step, and the distinction is Synaptum's own: deny_step means the
+		// loop MAY TRY SOMETHING ELSE, and there is nothing else to try — the ceiling is for the whole
+		// run and the next call is refused for the same reason. This is the same conclusion the 402
+		// already encoded ("must not be retried"), said in the vocabulary that the loop acts on instead
+		// of in a status code it has to interpret.
+		"disposition": string(policy.DispositionTerminateRun),
 	}
 	if spend.UnreportedUsageCalls > 0 {
 		// The token equivalent of the unpriced note, and it needs its own: a provider can report a cost
