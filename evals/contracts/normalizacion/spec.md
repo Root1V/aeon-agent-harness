@@ -1,11 +1,23 @@
 # Normalización entre proveedores
 
-**Versión:** `0.1` · **Estado:** **implementada y ejecutada por los dos lados.**
+**Versión:** `0.2-draft` · **Estado:** **la dirección response, implementada y ejecutada por los dos
+lados; la dirección request, especificada aquí y ejecutada solo por uno.**
 
 | | |
 |---|---|
-| Synaptum (Python) | `SYN-18` cerrado el 2026-09-11 · adaptador `openai-compatible`, 14 casos del corpus, todos menos uno grabaciones reales (`A-25`) |
-| Aeon (Go) | corrida contra el gateway el 2026-09-11 · 1 pasa, 8 chocan con un hueco de alcance, 3 divergencias — dos arregladas, la tercera es `MDL-014` (`A-41`) |
+| Synaptum (Python) | `SYN-18` cerrado el 2026-09-11 · adaptador `openai-compatible`. Las **dos** direcciones corren: 14 casos de response y 3 de request, añadidos el 2026-10-10 y el 2026-10-13 (`SYN-93`, `SYN-94`) |
+| Aeon (Go) | response corrida contra el gateway el 2026-09-11 · 1 pasa, 8 chocan con un hueco de alcance, 3 divergencias — dos arregladas, la tercera es `MDL-014` (`A-41`). **La dirección request no la ejecuta su runner todavía**: anotada con coste S el 2026-10-13, esperando esta declaración |
+
+> **La versión la subió Synaptum a `0.2-draft` el 2026-10-14 para que coincida con lo que ya decía
+> `fixtures/openai-compatible.json`**, que llevaba `"version": "0.2-draft"` mientras esta cabecera
+> decía `0.1`. Dos sitios que dicen la versión y uno se quedó atrás: si no era la intención, decidlo
+> y se baja.
+>
+> **Y cómo se entera una copia vendorizada, que es el caso real.** Aeon midió que esta carpeta **no
+> es alcanzable desde su máquina**, así que la huella `spec_sha256` del fixture no les sirve: no
+> pueden traer el fichero para compararlo. Lo que sí funciona lo pidieron ellos y queda como
+> protocolo: **quien cambie este fichero publica en el canal la versión y la huella**. Un número que
+> los dos ven basta para saber que hay que resincronizar, sin alcanzar nada.
 
 > **Esta cabecera dijo durante dieciocho días «sin implementación que la corra todavía por el lado de
 > Synaptum», y dejó de ser cierto dos días después de escribirla.** Se quedó atrás y mantuvo una fila
@@ -26,8 +38,13 @@ vive el conocimiento de ese proveedor. Nadie normaliza lo de otro.
 | Local — todo Prometheus | Axonium, en cada uno de sus tres sabores |
 | Cloud — Anthropic, OpenAI, Gemini | adaptadores del gateway (Go) y adaptadores dev de Synaptum (Python) |
 
-La dirección **request** no se normaliza: hay un solo esquema, el del vocabulario compartido, y todos
-lo consumen. Este documento trata la dirección **response**.
+La dirección **request** tiene un solo esquema de entrada —el del vocabulario compartido— y durante
+la `0.1` este documento dedujo de eso que no había nada que especificar. **Era falso, y costó un run
+perdido por turno en un consumidor** (`VRT-SYN-004`): el esquema de entrada es uno, pero el **cuerpo
+que sale al cable** lo construye cada adaptador, y las dos direcciones no son independientes — la
+response **produce** la parte (`thinking`) que la request tiene que saber mandar, o no mandar. Ningún
+caso del corpus podía ver eso, en ninguno de los dos lenguajes. La dirección request está
+especificada abajo.
 
 ## El mensaje de sistema no es un mensaje
 
@@ -46,17 +63,30 @@ El cable los entrega como **cadena JSON**:
 El adaptador la parsea. `ToolCall.arguments` es siempre un objeto, nunca su serialización: el bucle
 no debería tener que adivinar qué recibió.
 
-**Una cadena que no parsea no se convierte en objeto vacío.** Es un error del proveedor y se levanta
-como tal — un `{}` silencioso ejecutaría la herramienta sin argumentos.
+**Una cadena que no parsea no se convierte en objeto vacío.** Un `{}` silencioso ejecutaría la
+herramienta sin argumentos, y entonces el modelo recibe un resultado donde debería recibir su error.
+Eso no ha cambiado y es lo que esta sección fija.
 
-> **Divergencia de aeon, pendiente de acuerdo con Synaptum** (`MDL-023`, pedida por Veritium en
-> `VRT-AEON-008`). «Se levanta como tal» vale para un **bucle que va a ejecutar**; en un **transporte**
-> hace perder el turno. Levantarlo en el adaptador hacía fallar el candidato y `/v1/chat/completions`
-> contestaba 502, tirando una respuesta que el modelo ya había producido y cobrado. Aeon hoy mantiene la
-> mitad que importa —`arguments` sale **`null`**, nunca `{}`— y añade `arguments_error` con el motivo y
-> `raw_arguments` con la cadena tal cual, para que decida quien ejecuta. Son **tres estados**: objeto,
-> `{}` (la herramienta no toma argumentos) y `null` (no parseó). Propuesto para la `0.2`; hasta que
-> Synaptum lo acepte, esta es una divergencia declarada y no la especificación.
+**Lo que decía la `0.1` y era falso: «es un error del proveedor y se levanta como tal».** Lo escribió
+Synaptum y lo cumplió su propio adaptador hasta la `1.0.0rc6`, y costó un run entero por turno en un
+consumidor (`VRT-SYN-005`) — el modelo escribe un JSON cortado, que es una muestra mala, y el run
+muere por un argumento mal escrito. Aeon midió la otra mitad del mismo error en su transporte, donde
+levantarlo convertía la respuesta en un `502` y el turno se perdía antes de llegar a nadie
+(`VRT-AEON-008`). La regla no estaba equivocada en el qué: **no decía dónde aplica**, y es la
+propuesta que Aeon dejó declarada como divergencia en su copia en vez de reescribir este fichero.
+
+**La regla, por capas.** El adaptador **no levanta nada**: deja los argumentos sin leer donde quien
+decide pueda verlos —el texto crudo en la llamada, `arguments` vacío— y no ejecuta nada con ellos.
+Quién decide depende de la capa, y las dos decisiones son correctas en su sitio:
+
+| Capa | Qué hace con una cadena que no parsea |
+|---|---|
+| Adaptador / normalización | la conserva tal cual junto a la llamada; `arguments` queda vacío. **No levanta** |
+| Transporte o gateway | la **pasa tal cual** con `200`. Levantarla pierde el turno de quien ni lo ha visto |
+| Bucle de agente | la devuelve **al modelo** como resultado de error de esa llamada, con el texto dentro. Cuesta un turno, no un run |
+
+Y el nombre del test que la cubre dice la propiedad y no el mecanismo, porque la propiedad sobrevive:
+*nunca se convierte en un objeto vacío*.
 
 ## `content` nulo con tool calls no es una respuesta vacía
 
@@ -153,14 +183,94 @@ turno no terminó.
 No hay evento de cancelación y no lo habrá. Cerrar el canal *es* la señal; un evento que viaja por el
 mismo canal que intenta detener llega tarde por construcción.
 
+## La dirección request
+
+Lo que esta dirección fija no es el esquema de entrada: es **el cuerpo que sale al cable** a partir de
+un `Request` del vocabulario compartido. Tres reglas, las tres medidas contra el mismo servidor por
+dos implementaciones distintas.
+
+### Un turno del asistente sin nada enviable no se envuelve
+
+Medido (Aeon contra su despliegue, 2026-10-10; Synaptum contra el mismo dialecto):
+
+```
+content: "texto"                        -> 200
+content: ""                             -> 200    un string vacío explícito SÍ es enviable
+sin content, con tool_calls             -> 200    el turno normal de tool calling
+content: null y sin tool_calls          -> 400    "Assistant message must contain either
+                                                   'content' or 'tool_calls'"
+el turno quitado del todo               -> 200
+```
+
+Así que un turno del asistente cuyo contenido no produce ni `content` ni `tool_calls` —el caso real
+es el que solo lleva `thinking`— **se omite del cuerpo**. No se manda `content: ""` en su lugar: ese
+string es enviable, pero afirma que el asistente dijo la cadena vacía, y no la dijo.
+
+**Y `content: ""` no se colapsa con la ausencia de contenido.** Son dos afirmaciones distintas y el
+servidor las distingue; un adaptador que escriba `content = texto || null` las colapsa sin enterarse.
+Las dos implementaciones lo escribieron así y las dos lo arreglaron.
+
+### El razonamiento del asistente vuelve al proveedor
+
+En `reasoning_content`, en todos los turnos del asistente que viajan. Medido en
+[`llama.cpp#27720`](https://github.com/ggml-org/llama.cpp/issues/27720): un modelo de razonamiento al
+que se le pide continuar **desde su propia tool call** sin su canal de análisis emite cabeceras mal
+formadas y el turno entero se pierde — **7 turnos fallidos de 120** sin devolverlo, **0 de 120**
+devolviéndolo. Cerrado como no arreglable en el parser.
+
+Dos precisiones que son parte de la regla:
+
+- **La clave se omite cuando no hubo razonamiento.** Nunca `""`: ausente y vacío son afirmaciones
+  distintas, igual que en los contadores de consumo.
+- **El razonamiento no sustituye a `content` ni a `tool_calls`.** Mandarlo solo da el mismo 400 de
+  arriba, así que la primera regla manda sobre esta: un turno que solo razona sigue sin viajar.
+
+El razonamiento **cifrado** no tiene campo en este dialecto. No se descarta en silencio: se rechaza.
+
+### Cómo se declara un caso de esta dirección
+
+Formato acordado el 2026-10-14, a petición de Aeon.
+
+| Campo | Qué es |
+|---|---|
+| `direction` | `"request"`. **Ausente significa `"response"`**, así que ningún caso existente cambia |
+| `body_file` | un **`Request` del vocabulario compartido**, no un cuerpo del cable. Lleva `authored: true` por obligación: esta dirección no se graba de un proveedor, la construye el cliente |
+| `expect` | describe el **cuerpo que sale al cable** |
+
+Las claves de `expect`:
+
+| Clave | Qué afirma |
+|---|---|
+| `wire_roles` | la lista de `role` de `messages`, en orden. Es lo que delata un sobre que ya no está |
+| `wire_assistant_contents` | el `content` de cada mensaje del asistente, en orden. `""` y `null` son valores distintos y comparan distinto |
+| `wire_assistant_reasoning` | el `reasoning_content` de cada mensaje del asistente, en orden, con `null` donde la clave no esté |
+| `assistant_messages_sendable` | `true`: para **cada** mensaje del asistente, `content` es una cadena —vacía vale— **o** hay `tool_calls`. Es la regla de arriba escrita como invariante, y se comprueba sobre el cuerpo entero y no sobre el mensaje del caso: el 400 lo provoca cualquier mensaje que salga sin ninguna de las dos claves, y el turno culpable ya pasó |
+
+**Las claves son nuevas a propósito.** Un runner que solo conozca la dirección response las verá como
+claves que no sabe comprobar, y el guard de «el corpus afirma algo que este código no lee» debe
+saltar. No hacen falta cambios para que **falle a gritos**; hacen falta para que **pase**.
+
+**Y un caso sin `expect` no es un caso.** Pasa siempre y no es evidencia de nada. Aeon lo encontró en
+su runner —vuelve temprano y no comprueba nada— y Synaptum tenía lo mismo por `KeyError`, que es
+fallar por suerte. Las dos implementaciones lo comprueban ahora como regla.
+
 ## Conformidad
 
 Los casos de `fixtures/` referencian los cuerpos de `../gateway-prometheus/fixtures`, que Axonium
 publicó y aquí no se duplican. Cada caso describe la **proyección unificada observable** de un cuerpo
 concreto.
 
-**Aviso que acota lo que un verde significa:** esos cuerpos están escritos a partir de la guía, **no
-grabados de un despliegue real**. Un caso que pasa demuestra que las implementaciones coinciden entre
-sí, no que Prometheus se comporte así. Eso llega con `AXO-47`.
+**Aviso que acota lo que un verde significa, y hay dos clases de cuerpo.** Los de
+`../gateway-prometheus/fixtures` **sí son grabaciones** desde el manifest v8 de Axonium. Los de
+`bodies/` están escritos a mano y cada uno dice en su propio `$authored` por qué no puede ser una
+grabación — y ninguna de esas razones es «me venía bien»: o la propiedad ya no se puede grabar (un
+consumo sin medir, que desde el v8 no ocurre) o la dirección no se graba de un proveedor (todos los
+de `request`, que los construye el cliente).
+
+Un caso que pasa demuestra que las implementaciones coinciden entre sí sobre ese cuerpo. Que el
+cuerpo sea representativo lo dice de dónde salió, y por eso cada uno lo dice.
+
+> Esta sección afirmó hasta el 2026-10-14 que **ninguno** de los cuerpos era una grabación, mientras
+> la cabecera decía que casi todos lo eran. Las dos frases llevaban un mes conviviendo.
 
 El runner lo trae cada proyecto. Aquí no entra implementación.

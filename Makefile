@@ -255,6 +255,10 @@ lint: ## Lint proto/schemas, the shared contract schemas, the compose ports, Go 
 	# camino feliz lo hace recordCost, que las tres ya llaman; el que se olvida es el del 502, y una
 	# superficie nueva lo olvidaría sin poner rojo ningún test existente.
 	python3 scripts/routing_failure_billing_check.py
+	# INT-012c: la copia vendorizada del contrato compartido, en sus dos mitades — la huella fijada
+	# (detecta un cambio nuestro, y funciona sin la carpeta compartida) y el canónico cuando se
+	# alcanza (detecta que lo editaron ellos, que es lo que ninguna huella propia puede ver).
+	python3 scripts/contract_vendoring_check.py
 	# TOOL-011: el compose de referencia no monta el socket de Docker. Un comentario explicando el
 	# riesgo ya estaba ahí y no lo quitó; esto sí. Aquí y no en un test porque es una propiedad del
 	# fichero, y un montaje de más levanta perfectamente.

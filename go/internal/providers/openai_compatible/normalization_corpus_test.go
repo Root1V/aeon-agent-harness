@@ -647,8 +647,26 @@ func TestNormalizationCorpusAgainstThisAdapter(t *testing.T) {
 					t.Fatalf("a request-direction case must set \"authored\": true — this direction is " +
 						"built by the client, never recorded")
 				}
+				// INT-012c: a case written in the SHARED VOCABULARY is a gap and not a failure, because
+				// this layer has nothing to compare. Our gateway's input is already the wire dialect —
+				// its callers are frameworks that build the body themselves — so the conversion these
+				// three cases describe (typed parts in, a wire body out) is not implemented here and is
+				// not implemented anywhere on our side. Reported with its reason rather than skipped:
+				// a case that silently passes is the thing the whole expect-key guard exists against.
+				if parts := sharedVocabularyMessages(body); parts != "" {
+					t.Logf("GAP: %s — this runner drives the gateway and the adapter, whose input is "+
+						"already the wire dialect. %s", tc.Name, parts)
+					gapped++
+					return
+				}
 				assertWireExpectation(t, tc.Name, tc.Expect, projectRequest(t, body))
-				passed++
+				// t.Failed() and not an unconditional increment. assertWireExpectation reports with
+				// Errorf, so this said `passed++` while the subtest was red — the summary printed
+				// "17/17 pasan, 0 divergencias" under three failing cases. My own line from INT-012b,
+				// and the same shape it keeps finding: a count computed by not looking.
+				if !t.Failed() {
+					passed++
+				}
 				return
 			}
 			// `""` and an explicit "response" are the same thing. The declaration only says absent
@@ -746,6 +764,33 @@ func TestNormalizationCorpusAgainstThisAdapter(t *testing.T) {
 	for field, reason := range pendingKnown {
 		t.Errorf("knownDivergences still lists %q (%q) but this adapter no longer diverges there — remove the entry", field, reason)
 	}
+}
+
+// sharedVocabularyMessages reports, when a request body is written in the shared vocabulary rather
+// than in the wire dialect, which message gives it away — and "" when the body is already wire-shaped.
+//
+// The discriminator is `content`: the wire dialect carries a string (or absent, with tool_calls), the
+// shared vocabulary carries a list of typed parts. Named by what it looks at rather than by a flag in
+// the case, because the case does not declare its own shape and guessing from the file name would be
+// the kind of assumption this function exists to replace.
+func sharedVocabularyMessages(body []byte) string {
+	var parsed struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return ""
+	}
+	for i, m := range parsed.Messages {
+		trimmed := strings.TrimSpace(string(m.Content))
+		if strings.HasPrefix(trimmed, "[") {
+			return fmt.Sprintf("message %d (%s) carries `content` as a list of typed parts, which is "+
+				"the shared vocabulary; nothing in our stack converts it to a wire body", i, m.Role)
+		}
+	}
+	return ""
 }
 
 // assertBodiesMatchCorpus refuses to run expectations against a body corpus they were not written

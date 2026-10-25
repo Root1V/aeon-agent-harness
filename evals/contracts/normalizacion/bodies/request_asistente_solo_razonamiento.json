@@ -1,0 +1,10 @@
+{
+  "$authored": "NO es una grabacion, y no puede serlo: un cuerpo de la direccion REQUEST no se graba del proveedor, lo construye el cliente. Escrito a mano por Synaptum el 2026-10-10 a partir del caso real de VRT-SYN-004: el modelo contesta solo con reasoning_content, la respuesta se normaliza a un turno del asistente cuya unica parte es 'thinking', y ese turno se reenvia en el historial del turno siguiente. Esto es el Request unificado que entra al adaptador; lo que el caso fija es el cuerpo que debe salir.",
+  "$direction": "request — el cuerpo esta en el vocabulario compartido, no en el cable",
+  "model": "gpt-oss-20b-mxfp4",
+  "messages": [
+    {"role": "user", "content": [{"kind": "text", "text": "extrae el total de la boleta"}]},
+    {"role": "assistant", "content": [{"kind": "thinking", "text": "El usuario quiere el total. Deberia leer el documento primero."}]},
+    {"role": "user", "content": [{"kind": "text", "text": "sigue"}]}
+  ]
+}
