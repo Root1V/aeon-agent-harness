@@ -1232,7 +1232,7 @@ fichero mal nombrado. Sin `down`, a propósito.
   los dé) sin el texto libre. Un cuerpo recortado a ciegas puede quitar justo el dato que diagnostica.
 - **Coste:** S.
 
-### Un límite de tasa del proveedor llega al llamante como 502 sin cuánto esperar
+### ~~Un límite de tasa del proveedor llega al llamante como 502 sin cuánto esperar~~ — HECHA (`MDL-024`)
 
 - **Descripción:** el SDK de axonium nos entrega un `*axonium.APIError` **tipado**: `Status`,
   `TypeSuffix` (`rate-limit-exceeded-requests`), `RetryAfter`, un `RateLimitSnapshot` con los

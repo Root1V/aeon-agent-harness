@@ -62,6 +62,14 @@ type AttemptRecord struct {
 	Provider string
 	Model    string
 	Err      string // empty means this attempt succeeded
+	// Cause is the attempt's error as the provider typed it, kept beside the rendered Err string.
+	//
+	// MDL-024: `Err` is text, and text is where a classification goes to die — a rate limit and a dead
+	// backend read identically once both are `%v`. The surfaces need to ask "was EVERY candidate merely
+	// asking us to wait?", and that question cannot be answered from a string. json:"-" for the same
+	// reason as DiscardedOutput: the attempt log is serialized into API responses and this is an
+	// in-process hand-off.
+	Cause error `json:"-"`
 	// DiscardedOutput is the normalized response of an attempt THE MODEL ANSWERED and this gateway
 	// threw away — today only the MDL-015 case, a 200 with no usable content. Nil for a candidate
 	// that failed before producing anything, and nil for the attempt that served.
@@ -90,6 +98,17 @@ func (e *AllCandidatesFailedError) Error() string {
 }
 
 func (e *AllCandidatesFailedError) Unwrap() error { return ErrAllCandidatesFailed }
+
+// Causes are the typed errors of the attempts that failed, in order. The input to SoonestRetry.
+func Causes(attempts []AttemptRecord) []error {
+	var out []error
+	for _, a := range attempts {
+		if a.Cause != nil {
+			out = append(out, a.Cause)
+		}
+	}
+	return out
+}
 
 // DiscardedAttempts are the attempts whose answer was produced, paid for and not used. The one
 // accessor both surfaces call, so "which attempts owe a ledger row" is decided here rather than by
@@ -212,7 +231,9 @@ func (g *Gateway) Decide(
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 			span.End()
-			attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model, Err: err.Error()})
+			attempts = append(attempts, AttemptRecord{
+				Provider: c.Provider, Model: c.Model, Err: err.Error(), Cause: err,
+			})
 			continue
 		}
 		// A 200 is not the same as an answer (MDL-015). A response with no content and no tool calls

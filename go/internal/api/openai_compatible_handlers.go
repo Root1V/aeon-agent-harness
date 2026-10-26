@@ -3,7 +3,9 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -174,6 +176,20 @@ func (h *OpenAICompatibleHandlers) chatCompletions(w http.ResponseWriter, r *htt
 		// its answer discarded, and those generations were billed.
 		if h.Governance != nil {
 			h.Governance.recordDiscardedAttemptsFromError(r, err, runID, agentRef)
+		}
+		// MDL-024: `rate_limit_error` is OpenAI's OWN error type for this, so an existing client's
+		// retry logic fires without learning anything of ours — which is the entire point of this
+		// surface. The facts ride under `aeon` for the same reason the budget stop's do.
+		if throttle := throttleRefusal(err); throttle != nil {
+			if wait, ok := throttle["retry_after"].(float64); ok {
+				w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait))))
+			}
+			message, _ := throttle["error"].(string)
+			writeJSON(w, http.StatusTooManyRequests, map[string]any{
+				"error": map[string]any{"message": message, "type": "rate_limit_error"},
+				"aeon":  throttle,
+			})
+			return
 		}
 		writeOpenAIError(w, http.StatusBadGateway, "aeon_routing_error", err.Error())
 		return
