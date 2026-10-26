@@ -1,6 +1,6 @@
 # Costura de durabilidad — `Checkpointer`
 
-**Versión:** `0.2-draft` · **Implementación de referencia:** Aeon `INT-009` + `INT-009b`, verificada
+**Versión:** `0.2-draft` · **Implementación de referencia:** Aeon `INT-009` + `INT-009b` + `INT-009c`, verificada
 contra Postgres y Temporal reales.
 
 **Qué cambió en `0.2` y por qué no rompe a nadie** (`VRT-AEON-004`, pedido por Veritium): la
@@ -152,11 +152,27 @@ En la **petición de `append` es al revés**: ahí un campo de más se rechaza, 
 `phase` son la clave de idempotencia y una errata en ellos no falla — registra en silencio una
 entrada de más.
 
+## Qué garantía da un `append` diferido
+
+**Contestado por Synaptum el 2026-10-25** (`SYN-AEON-003`), y era la única pregunta abierta de este
+documento. La respuesta es la débil de las dos: **un diferido que no llegó a disco se pierde, y el
+paso se repite.**
+
+Su mecanismo, en sus palabras: lo diferido se acumula en memoria y se vacía antes de cualquier
+escritura durable, al cerrar el run y ante cualquier salida — así que si el proceso muere con cosas
+pendientes, se pierden. Es correcto **por una sola razón**, y conviene que esté escrita porque es la
+que sostiene todo lo demás: `DEFERRABLE` se asigna **únicamente** a pasos cuya repetición es segura.
+
+Así que la garantía que este contrato fija es **«no bloquea antes del efecto»**, y NO «asíncrono pero
+garantizado». La distinción no es terminológica: **un cliente que suponga la fuerte sobre una
+implementación con la débil pierde pasos sin enterarse** — no hay error, no hay fila, y el síntoma
+aparece como un paso que se repitió o como uno que no está.
+
+**La implementación de referencia (Aeon) es síncrona y durable siempre.** Supera el suelo y no
+incumple nada; lo que no entrega es la propiedad de latencia que la clase diseña. Si alguna vez la
+entrega, este documento tiene que decir **cuál de las dos garantías** da, porque entonces la
+diferencia empieza a ser observable.
+
 ## Abierto
 
-**Qué garantía da un `append` diferido.** La tabla de durabilidad de Synaptum marca como
-`DEFERRABLE` los pasos cuya repetición es segura, es decir: no tienen que bloquear antes del efecto.
-Lo que no está fijado es qué pasa con un diferido que aún no llegó a disco cuando el proceso cae —
-si se puede perder (y el paso se repite, que es aceptable porque es idempotente) o si «diferido»
-significa asíncrono pero garantizado. La implementación de Aeon hoy es **síncrona y durable
-siempre**: supera el suelo, pero no entrega la propiedad de latencia que la clase diseña.
+Nada. La pregunta anterior de esta sección quedó contestada arriba.
