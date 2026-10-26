@@ -13,11 +13,19 @@ lados; la dirección request, especificada aquí y ejecutada solo por uno.**
 > decía `0.1`. Dos sitios que dicen la versión y uno se quedó atrás: si no era la intención, decidlo
 > y se baja.
 >
-> **Y cómo se entera una copia vendorizada, que es el caso real.** Aeon midió que esta carpeta **no
-> es alcanzable desde su máquina**, así que la huella `spec_sha256` del fixture no les sirve: no
-> pueden traer el fichero para compararlo. Lo que sí funciona lo pidieron ellos y queda como
-> protocolo: **quien cambie este fichero publica en el canal la versión y la huella**. Un número que
-> los dos ven basta para saber que hay que resincronizar, sin alcanzar nada.
+> **Y cómo se entera una copia vendorizada, que es el caso real.** Hay dos mecanismos y los dos
+> valen, por motivos distintos:
+>
+> 1. **La huella del fixture** (`spec_sha256`): quien pueda leer esta carpeta hashea este fichero y
+>    compara. Tres líneas.
+> 2. **La huella publicada en el canal**: protocolo desde el 2026-10-24 — **quien cambie este
+>    fichero publica allí la versión y la huella**. Sirve donde la carpeta no está montada, que es el
+>    caso de un CI, y es lo único que los dos lados leen sin copia de por medio.
+>
+> El segundo se adoptó porque Aeon midió que esta carpeta **no era alcanzable** desde su máquina, y
+> el 2026-10-25 corrigieron esa medición: sí lo era, y su copia hashea igual que ésta. El protocolo
+> se queda —la razón de arriba es mejor que la que lo motivó— pero la cronología queda escrita, que
+> es lo que impide que dentro de un mes alguien lo justifique con algo falso.
 
 > **Esta cabecera dijo durante dieciocho días «sin implementación que la corra todavía por el lado de
 > Synaptum», y dejó de ser cierto dos días después de escribirla.** Se quedó atrás y mantuvo una fila
@@ -249,6 +257,27 @@ Las claves de `expect`:
 **Las claves son nuevas a propósito.** Un runner que solo conozca la dirección response las verá como
 claves que no sabe comprobar, y el guard de «el corpus afirma algo que este código no lee» debe
 saltar. No hacen falta cambios para que **falle a gritos**; hacen falta para que **pase**.
+
+### Dónde aplica esta dirección, y dónde no
+
+Misma lección que la sección de los argumentos: una regla correcta en la capa equivocada hace daño.
+Esta dirección describe lo que hace quien **construye** el cuerpo del cable a partir del vocabulario
+compartido — un adaptador de framework, un SDK. Una implementación que **recibe un cuerpo ya
+construido** —un transporte, un gateway con fachada OpenAI-compatible— nunca ve partes tipadas, así
+que no puede ejecutar estos casos y **no es un defecto suyo**: es alcance.
+
+Lo que a esa capa le toca no es construir sino **conservar**, y eso sí son afirmaciones:
+
+| Regla | Qué le toca a un transporte |
+|---|---|
+| un turno sin `content` ni `tool_calls` no se envuelve | **tirarlo**: mandarlo da 400 y pierde el turno de quien ni lo ha visto |
+| `content: ""` no se colapsa con la ausencia | **conservarlo** como cadena vacía |
+| el razonamiento vuelve al proveedor | **conservar** `reasoning_content` |
+
+Las tres las mide Aeon sobre el cuerpo que sale de su proceso, y la tercera tiene precedente: un
+transporte que tirara `reasoning_content` reproduciría `PRM-VRT-003` un salto más tarde. Un caso de
+esta dirección declarado como **hueco** en una implementación que no construye cuerpos es la lectura
+correcta del alcance, no una divergencia.
 
 **Y un caso sin `expect` no es un caso.** Pasa siempre y no es evidencia de nada. Aeon lo encontró en
 su runner —vuelve temprano y no comprueba nada— y Synaptum tenía lo mismo por `KeyError`, que es

@@ -5,12 +5,13 @@
   "canonical_path_declared_by": "SYN, canal 2026-10-14",
   "vendored_at": "2026-10-25",
   "spec_version": "0.2-draft",
-  "spec_sha256_published_by_syn": "566ede3922b84901c671b1e6af22ad70c2d35edb7a3fd20d0f771769ee3c0f30",
+  "spec_sha256_published_by_syn": "f5253f8fdf18e41e4496d8ff4f5f0c9e9d548a094ac7f0fe4fa6f19d7ebbf505",
   "files": {
-    "spec.md": "566ede3922b84901c671b1e6af22ad70c2d35edb7a3fd20d0f771769ee3c0f30",
-    "fixtures/openai-compatible.json": "2ab6984fed363a85f4c387d7c4a4eff3a7b70f2ef7e2d972ec82f47866cac093",
+    "spec.md": "f5253f8fdf18e41e4496d8ff4f5f0c9e9d548a094ac7f0fe4fa6f19d7ebbf505",
+    "fixtures/openai-compatible.json": "1e4148d144c742a604bd7a75c5f6270d4532c7286cf3e7b89eb9925deef2dd0a",
     "bodies/request_asistente_cadena_vacia.json": "eac9a380f1a214357f354b7cbf64bf386fc57f19e50e814b28cd2ff87b8852e2",
     "bodies/request_asistente_solo_razonamiento.json": "d9486ca8fe03ed67eefda62aa69f332614b872dd166ea62f0843489e8e63e1bf",
     "bodies/request_razonamiento_vuelve.json": "2ed0e0c8e75ac16371ff6035ca7f1ed14884b06beca5044a00d0e92eec2335f7"
-  }
+  },
+  "$resync": "Re-vendorizado el 2026-10-25 tras SYN-AEON-003: el guard detecto la deriva en spec.md y en el fixture a la PRIMERA oportunidad real que tuvo, y nombro los dos ficheros. La edicion suya anade la seccion de alcance de la direccion request -- nuestra decision, escrita en el contrato -- y quita de la cabecera del fixture la afirmacion falsa de que no alcanzabamos la carpeta."
 }
