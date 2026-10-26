@@ -146,7 +146,7 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 		return nil, fmt.Errorf("openai_compatible: reading response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("openai_compatible: status %d: %s", resp.StatusCode, string(body))
+		return nil, providers.UpstreamError("openai_compatible", resp.StatusCode, body)
 	}
 
 	var parsed openAICompatibleResponse
