@@ -144,7 +144,7 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 		if apiErr.Error.Message != "" {
 			return nil, fmt.Errorf("gemini: status %d: %s: %s", resp.StatusCode, apiErr.Error.Status, apiErr.Error.Message)
 		}
-		return nil, fmt.Errorf("gemini: status %d: %s", resp.StatusCode, string(body))
+		return nil, providers.UpstreamError("gemini", resp.StatusCode, body)
 	}
 
 	var parsed geminiResponse

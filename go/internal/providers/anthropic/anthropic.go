@@ -155,7 +155,7 @@ func (a *Adapter) Decide(ctx context.Context, renderedContext map[string]any) (m
 		if apiErr.Error.Message != "" {
 			return nil, fmt.Errorf("anthropic: status %d: %s: %s", resp.StatusCode, apiErr.Error.Type, apiErr.Error.Message)
 		}
-		return nil, fmt.Errorf("anthropic: status %d: %s", resp.StatusCode, string(body))
+		return nil, providers.UpstreamError("anthropic", resp.StatusCode, body)
 	}
 
 	var parsed anthropicResponse

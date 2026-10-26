@@ -1215,7 +1215,7 @@ fichero mal nombrado. Sin `down`, a propósito.
   reportado** —un error HTTP sin cuerpo no trae contadores— no son el mismo hecho.
 - **Coste:** S.
 
-### Cuatro adaptadores meten el cuerpo del upstream en el mensaje de error
+### ~~Cuatro adaptadores meten el cuerpo del upstream en el mensaje de error~~ — HECHA (`SEC-007`)
 
 - **Descripción:** `openai_compatible`, `openai`, `anthropic` y `gemini` hacen
   `fmt.Errorf("...: status %d: %s", status, string(body))` cuando el proveedor no contesta 200. Ese

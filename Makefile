@@ -259,6 +259,10 @@ lint: ## Lint proto/schemas, the shared contract schemas, the compose ports, Go 
 	# (detecta un cambio nuestro, y funciona sin la carpeta compartida) y el canónico cuando se
 	# alcanza (detecta que lo editaron ellos, que es lo que ninguna huella propia puede ver).
 	python3 scripts/contract_vendoring_check.py
+	# SEC-007: ningún adaptador mete el cuerpo del proveedor en un error. Aquí y no en un test porque
+	# es una propiedad del fuente: el adaptador número cinco lo escribiría igual y los tests que hay
+	# son verdes para los cuatro que ya existen.
+	python3 scripts/upstream_body_check.py
 	# TOOL-011: el compose de referencia no monta el socket de Docker. Un comentario explicando el
 	# riesgo ya estaba ahí y no lo quitó; esto sí. Aquí y no en un test porque es una propiedad del
 	# fichero, y un montaje de más levanta perfectamente.
