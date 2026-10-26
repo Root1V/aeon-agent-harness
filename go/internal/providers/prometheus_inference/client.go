@@ -2,9 +2,12 @@ package prometheusinference
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/Root1V/axonium-sdk/go/axonium"
+
+	"github.com/aeon-ai/aeon/go/internal/providers"
 )
 
 // Client is Aeon's seam onto the Prometheus platform. Since MDL-009 the transport underneath it is
@@ -71,6 +74,56 @@ func (c *Client) Close() error {
 	return c.sdk.Close()
 }
 
+// translateError turns the SDK's typed refusals into this repository's provider-agnostic ones, and
+// wraps everything else as before (MDL-024).
+//
+// THE ONE PLACE WHERE THE PLATFORM'S VOCABULARY BECOMES OURS. The SDK hands us a fully typed
+// `*axonium.APIError` — status, problem-details type, a resolved Retry-After, the window's counters —
+// and until now this function did not exist: the error was wrapped with `%w` and the gateway, which
+// cannot import anyone's SDK, saw only a string. So a rate limit arrived at the caller as 502 «all
+// candidates failed», with no wait and indistinguishable from a provider being down.
+//
+// ONLY the rate limit is translated, deliberately. The SDK marks several other errors retryable
+// (`backend-unavailable`, `upstream-error`) and those are 5xx that already produce a 502 the caller's
+// worker retries — a status that is already right. What was wrong was the one case where the platform
+// told us HOW LONG and we dropped it.
+//
+// The SDK has already slept and retried this up to three times honouring the Retry-After by the time
+// it reaches here (its own policy), so arriving here means it gave up — which is exactly when the
+// caller needs to be told to wait rather than to try again now.
+func translateError(model string, err error) error {
+	var apiErr *axonium.APIError
+	if errors.As(err, &apiErr) && apiErr.TypeSuffix == rateLimitRequestsSuffix {
+		throttled := &providers.Throttled{
+			Provider: Name, Model: model, RetryAfterSeconds: apiErr.RetryAfter, Err: err,
+		}
+		if apiErr.RateLimit != nil {
+			// Which window, when the platform says. Empty on a deployment that predates per-endpoint
+			// budgets, and that absence is reported rather than guessed: a wait learned from the chat
+			// budget says nothing about the embeddings one.
+			throttled.Scope = apiErr.RateLimit.Scope
+		}
+		return throttled
+	}
+	return fmt.Errorf("prometheus_inference: chat completion: %w", err)
+}
+
+// rateLimitRequestsSuffix is the platform's problem-details type for the request-rate limit. Matched
+// on the SUFFIX and not on status 429, because the SDK's own retry policy keys off this value too —
+// and because a 429 from something else on the path (a proxy, say) is not a statement about our budget.
+//
+// The TOKEN-per-minute limit has no suffix of its own: Veritium measured it arriving as a plain `400`
+// with the reason in free text (`VRT-PRM-007`). That one is NOT handled here and will not be: reading
+// English prose to decide retryability would make our behaviour depend on a message nobody promised to
+// keep. It is fixed where they already asked for it.
+const rateLimitRequestsSuffix = "rate-limit-exceeded-requests"
+
+// modelOf reads the model out of the rendered context for error reporting only.
+func (c *Client) modelOf(requestBody map[string]any) string {
+	model, _ := requestBody["model"].(string)
+	return model
+}
+
 // IdempotencyKeyField is the request-map key a caller uses to ask for an idempotent call (OBS-006).
 // It is lifted out of the body and handed to the SDK, which sends it as a header — left in the body
 // the gateway would discard it in silence, and a caller would believe it had asked for idempotency
@@ -118,7 +171,7 @@ func (c *Client) ChatCompletionWithMeta(ctx context.Context, requestBody map[str
 
 	completion, err := sdk.Chat.Create(ctx, req)
 	if err != nil {
-		return nil, CallMeta{}, fmt.Errorf("prometheus_inference: chat completion: %w", err)
+		return nil, CallMeta{}, translateError(c.modelOf(requestBody), err)
 	}
 
 	meta := CallMeta{

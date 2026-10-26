@@ -170,7 +170,9 @@ func (g *Gateway) DecideStream(
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
 			span.End()
-			attempts = append(attempts, AttemptRecord{Provider: c.Provider, Model: c.Model, Err: err.Error()})
+			attempts = append(attempts, AttemptRecord{
+				Provider: c.Provider, Model: c.Model, Err: err.Error(), Cause: err,
+			})
 			if delivered {
 				// Already streaming to the caller: no other candidate can take over cleanly.
 				return &StreamResult{ProviderUsed: c.Provider, Model: c.Model, Streamed: streamable, Attempts: attempts}, err

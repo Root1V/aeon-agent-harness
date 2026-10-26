@@ -120,7 +120,13 @@ async def call_model_gateway(inp: DecideInput) -> DecideOutput:
             # Their error() carries the retryability, which is the part a consumer acts on. A 5xx from the
             # gateway is worth retrying and a 4xx is not, and that distinction is invisible in a recorded
             # exception.
-            span.error("model_gateway_http_error", retryable=exc.code >= 500)
+            #
+            # 429 IS THE EXCEPTION AND IT HAD TO MOVE WITH THE GATEWAY (MDL-024). The gateway now answers
+            # 429 when every candidate is merely rate limited, and `code >= 500` alone would have marked
+            # the one transitory 4xx we emit as non-retryable — recording the opposite of the fact the
+            # same change exists to deliver. A new status on one side and an untouched mapping on the
+            # other is how a fix lands as a regression.
+            span.error("model_gateway_http_error", retryable=exc.code >= 500 or exc.code == 429)
             raise ModelGatewayError(f"model gateway at {DEFAULT_MODELGW_ADDR} returned {exc.code}: {detail}") from exc
         except urllib.error.URLError as exc:
             span.error("model_gateway_unreachable", retryable=True)

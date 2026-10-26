@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"go.opentelemetry.io/otel"
@@ -15,6 +17,7 @@ import (
 	"github.com/aeon-ai/aeon/go/internal/finops"
 	"github.com/aeon-ai/aeon/go/internal/modelgateway"
 	"github.com/aeon-ai/aeon/go/internal/policy"
+	"github.com/aeon-ai/aeon/go/internal/providers"
 	"github.com/aeon-ai/aeon/go/internal/store"
 	"github.com/aeon-ai/aeon/go/internal/tracing"
 )
@@ -153,6 +156,11 @@ func (h *ModelGatewayHandlers) decide(w http.ResponseWriter, r *http.Request) {
 		// FIN-003: before answering, record what was already paid for. A 502 here does not mean nothing
 		// happened — every candidate may have answered and had its answer thrown away.
 		h.recordDiscardedAttemptsFromError(r, err, body.RunID, body.AgentManifestRef)
+		// MDL-024: a pool that only asked us to wait is not a pool that failed.
+		if throttle := throttleRefusal(err); throttle != nil {
+			writeThrottled(w, throttle)
+			return
+		}
 		// A gateway routing failure (every candidate failed, or a restricted call had none) is not
 		// this handler's fault or the caller's malformed input — 502 Bad Gateway, not 400/500.
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
@@ -368,6 +376,65 @@ func (h *ModelGatewayHandlers) recordDiscardedAttempts(r *http.Request, attempts
 			log.Printf("aeon-modelgw: recording FinOps cost event for a discarded attempt: %v", err)
 		}
 	}
+}
+
+// throttleRefusal builds the body for "every candidate asked us to wait", or nil when at least one
+// failed for a reason a wait will not fix (MDL-024).
+//
+// EVERY candidate, and the condition is the whole correctness of this: with one candidate down for
+// another reason the call failed for a reason retrying will not fix, and answering 429 there would
+// send the caller back into a cascade that is still broken. The wait is the MINIMUM of the waits —
+// the soonest moment at which anything in the pool could work.
+//
+// `retryable: true` and `retry_after`, NOT a `disposition`. That is deliberate and the argument is
+// Synaptum's, recorded in policy/disposition.go: retryability travels in the ERROR TAXONOMY and not
+// in a policy decision, because "you may not do this" is firm and "not right now" is transitory.
+// A budget stop is the opposite case and carries `disposition: terminate_run` (GOV-003); putting both
+// facts in one field would make a loop ask the same question in two places.
+func throttleRefusal(err error) map[string]any {
+	var failed *modelgateway.AllCandidatesFailedError
+	if !errors.As(err, &failed) {
+		return nil
+	}
+	causes := modelgateway.Causes(failed.Attempts)
+	wait, all := providers.SoonestRetry(causes)
+	if !all || len(causes) == 0 {
+		return nil
+	}
+	refusal := map[string]any{
+		"error":     "every candidate is rate limited: " + err.Error(),
+		"retryable": true,
+	}
+	if wait != nil {
+		refusal["retry_after"] = *wait
+	}
+	// WHICH candidate and WHICH window, when the platform said. Without it the caller is told to wait
+	// without being told what it is waiting for — and the endpoints hold separate budgets, so a wait
+	// learned from one says nothing about another.
+	var throttles []map[string]any
+	for _, cause := range causes {
+		if t, ok := providers.ThrottleOf(cause); ok {
+			entry := map[string]any{"provider": t.Provider, "model": t.Model}
+			if t.Scope != "" {
+				entry["scope"] = t.Scope
+			}
+			if t.RetryAfterSeconds != nil {
+				entry["retry_after"] = *t.RetryAfterSeconds
+			}
+			throttles = append(throttles, entry)
+		}
+	}
+	refusal["rate_limited"] = throttles
+	return refusal
+}
+
+// writeThrottled answers 429 with the header too, because a client's retry logic reads the header and
+// not our body. Both have to say the same thing and this is the only place that writes either.
+func writeThrottled(w http.ResponseWriter, refusal map[string]any) {
+	if wait, ok := refusal["retry_after"].(float64); ok {
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait))))
+	}
+	writeJSON(w, http.StatusTooManyRequests, refusal)
 }
 
 // recordDiscardedAttemptsFromError is the same write on the path where NOTHING served (FIN-003).
